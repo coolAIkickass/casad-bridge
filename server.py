@@ -29,6 +29,7 @@ def webhook():
         return 'Forbidden', 403
 
     msg = parse_payload(request.json)   # extract type, phone, content, media_id
+	 print(f"MSG RECEIVED: {msg}")  
 
     if msg['type'] == 'audio':
         audio = download_media(msg['media_id'])

@@ -38,6 +38,10 @@ def webhook():
     if msg_id:
         processed_ids.add(msg_id)
 
+    if msg['type'] == 'unsupported':
+        print(f"UNSUPPORTED TYPE SKIPPED")
+        return 'OK', 200
+
     if msg['type'] == 'audio':
         audio = download_media(msg['media_id'])
         msg['content'] = transcribe_audio(audio)
@@ -47,7 +51,7 @@ def webhook():
 
     store_message(msg)
 
-    if 'done' in msg.get('content', '').lower():
+    if 'done' in (msg.get('content') or '').lower():
         session = get_session(msg['phone'])
         report_json = parse_inspection(session)
         docx_path   = build_docx(report_json)

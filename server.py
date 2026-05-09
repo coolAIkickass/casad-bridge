@@ -59,7 +59,7 @@ def webhook():
             send_document(
                 msg['phone'],
                 docx_path,
-                caption=f"CASAD Bridge Inspection Report — {report_json.get('river_name', '')} / {report_json.get('road_name', '')}",
+                caption=f"CASAD Bridge Inspection Report - {report_json.get('river_name', '')} / {report_json.get('road_name', '')}",
             )
             mark_done(msg['phone'])
         except Exception as e:

@@ -106,12 +106,15 @@ def send_document(phone: str, file_path: str, caption: str = '') -> None:
         'document': {
             'id':       media_id,
             'filename': filename,
-            'caption':  caption,
         },
     }
+    if caption:
+        payload['document']['caption'] = caption
     r = requests.post(
         f'{BASE_URL}/messages',
         json=payload,
         headers={**headers, 'Content-Type': 'application/json'},
     )
+    if not r.ok:
+        print(f"WHATSAPP SEND ERROR {r.status_code}: {r.text}")
     r.raise_for_status()

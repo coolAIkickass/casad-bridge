@@ -52,15 +52,20 @@ def webhook():
     store_message(msg)
 
     if 'done' in (msg.get('content') or '').lower():
-        session = get_session(msg['phone'])
-        report_json = parse_inspection(session)
-        docx_path   = build_docx(report_json)
-        drive_link  = upload_and_share(docx_path)
-        send_message(
-            msg['phone'],
-            f"Your report for {session['bridge']} is ready!\n{drive_link}"
-        )
-        mark_done(msg['phone'])
+        try:
+            session = get_session(msg['phone'])
+            report_json = parse_inspection(session)
+            docx_path   = build_docx(report_json)
+            drive_link  = upload_and_share(docx_path)
+            send_message(
+                msg['phone'],
+                f"Your report for {session['bridge']} is ready!\n{drive_link}"
+            )
+            mark_done(msg['phone'])
+        except Exception as e:
+            print(f"REPORT ERROR: {e}")
+            import traceback; traceback.print_exc()
+            send_message(msg['phone'], f"Sorry, report generation failed: {e}")
 
     return 'OK', 200
 

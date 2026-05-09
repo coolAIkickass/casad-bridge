@@ -156,6 +156,9 @@ def parse_inspection(session: dict) -> dict:
         if m.get('media_path')
     ]
 
+    print(f"PARSE: {len(session.get('messages', []))} messages, text length={len(messages_text)}, photos={len(photo_paths)}")
+    print(f"FIELD NOTES:\n{messages_text}")
+
     user_content = (
         f"Schema:\n{json.dumps(SCHEMA, indent=2)}\n\n"
         f"Field notes:\n{messages_text}\n\n"
@@ -169,4 +172,17 @@ def parse_inspection(session: dict) -> dict:
         messages=[{'role': 'user', 'content': user_content}]
     )
     raw = response.content[0].text.strip()
+    print(f"CLAUDE RAW RESPONSE (first 200 chars): {raw[:200]}")
+
+    # Strip markdown code fences if Claude wrapped the JSON
+    if raw.startswith('```'):
+        raw = raw.split('```')[1]
+        if raw.startswith('json'):
+            raw = raw[4:]
+        raw = raw.strip()
+
+    if not raw:
+        print("ERROR: Claude returned empty response")
+        raise ValueError("Claude returned empty response — check field notes content")
+
     return json.loads(raw)

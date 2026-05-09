@@ -46,8 +46,14 @@ def webhook():
         audio = download_media(msg['media_id'])
         msg['content'] = transcribe_audio(audio)
     elif msg['type'] == 'image':
-        img_path = download_media(msg['media_id'], save=True)
+        img_bytes = download_media(msg['media_id'])
+        media_dir = os.getenv('MEDIA_DIR', 'media')
+        os.makedirs(media_dir, exist_ok=True)
+        img_path = os.path.join(media_dir, f"{msg['media_id']}.jpg")
+        with open(img_path, 'wb') as f:
+            f.write(img_bytes)
         msg['media_path'] = img_path
+        msg['image_data'] = img_bytes
 
     store_message(msg)
 

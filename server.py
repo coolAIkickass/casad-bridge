@@ -3,7 +3,7 @@ import os
 from flask import Flask, request
 from dotenv import load_dotenv
 from db import init_db, store_message, get_session, mark_done
-from whatsapp import parse_payload, download_media, send_message
+from whatsapp import parse_payload, download_media, send_message, send_document
 from transcribe import transcribe_audio
 from ai_parse import parse_inspection
 from report_gen import build_docx
@@ -56,10 +56,10 @@ def webhook():
             session = get_session(msg['phone'])
             report_json = parse_inspection(session)
             docx_path   = build_docx(report_json)
-            drive_link  = upload_and_share(docx_path)
-            send_message(
+            send_document(
                 msg['phone'],
-                f"Your report for {session['bridge']} is ready!\n{drive_link}"
+                docx_path,
+                caption=f"CASAD Bridge Inspection Report — {report_json.get('river_name', '')} / {report_json.get('road_name', '')}",
             )
             mark_done(msg['phone'])
         except Exception as e:

@@ -80,3 +80,38 @@ def send_message(phone: str, text: str) -> None:
     }
     r = requests.post(f'{BASE_URL}/messages', json=payload, headers=headers)
     r.raise_for_status()
+
+
+def send_document(phone: str, file_path: str, caption: str = '') -> None:
+    """Upload a file to WhatsApp media and send it as a document."""
+    headers = {'Authorization': f'Bearer {TOKEN}'}
+    filename = os.path.basename(file_path)
+
+    # Step 1: upload to Meta media endpoint
+    with open(file_path, 'rb') as f:
+        upload_resp = requests.post(
+            f'{BASE_URL}/media',
+            headers=headers,
+            data={'messaging_product': 'whatsapp'},
+            files={'file': (filename, f, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')},
+        )
+    upload_resp.raise_for_status()
+    media_id = upload_resp.json()['id']
+
+    # Step 2: send as document message
+    payload = {
+        'messaging_product': 'whatsapp',
+        'to':   phone,
+        'type': 'document',
+        'document': {
+            'id':       media_id,
+            'filename': filename,
+            'caption':  caption,
+        },
+    }
+    r = requests.post(
+        f'{BASE_URL}/messages',
+        json=payload,
+        headers={**headers, 'Content-Type': 'application/json'},
+    )
+    r.raise_for_status()

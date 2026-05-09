@@ -70,5 +70,23 @@ def health():
     return 'CASAD Bridge Bot is running', 200
 
 
+@app.route('/debug/token', methods=['GET'])
+def debug_token():
+    import requests
+    token = os.getenv('WHATSAPP_TOKEN', '')
+    phone_id = os.getenv('PHONE_NUMBER_ID', '')
+    r = requests.get(
+        f'https://graph.facebook.com/v19.0/{phone_id}',
+        headers={'Authorization': f'Bearer {token}'}
+    )
+    return {
+        'token_length': len(token),
+        'token_preview': f'{token[:6]}...{token[-4:]}' if len(token) > 10 else 'TOO SHORT',
+        'phone_number_id': phone_id,
+        'meta_api_status': r.status_code,
+        'meta_api_response': r.json()
+    }, 200
+
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

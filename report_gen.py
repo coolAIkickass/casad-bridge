@@ -108,7 +108,12 @@ def build_docx(report_json: dict) -> str:
     doc = Document(TEMPLATE_PATH)
     _fill_placeholders(doc, report_json)
 
-    photos = [p for p in report_json.get('photos', []) if p and os.path.exists(p)]
+    raw_photos = report_json.get('photos', [])
+    print(f"BUILD_DOCX raw photos from JSON: {raw_photos}")
+    for p in raw_photos:
+        print(f"  path={p!r}  exists={os.path.exists(p) if p else 'N/A'}")
+    photos = [p for p in raw_photos if p and os.path.exists(p)]
+    print(f"BUILD_DOCX usable photos: {photos}")
 
     if photos:
         # Split photos: first half → Appendix A (general), rest → Appendix B (damage)

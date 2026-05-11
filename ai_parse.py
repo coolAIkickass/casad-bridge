@@ -233,12 +233,12 @@ def parse_inspection(session: dict) -> dict:
         "For the photo_titles field: generate a short title (max 10 words) for each photo "
         "based on its description. If no description, infer from field notes context. "
         "photo_titles must have exactly the same number of entries as photo file paths.\n\n"
-        "For the photo_categories field: classify each photo as 'general' or 'damage'. "
-        "Default to 'damage' for all photos UNLESS: (a) the user explicitly says 'general', "
-        "'site photo', 'overview', 'approach', 'zoomed out', or similar; OR (b) the description "
-        "clearly describes a wide/panoramic shot of the whole bridge or site with no specific defect. "
-        "Any photo mentioning a crack, spalling, leaching, corrosion, exposed rebar, scour, "
-        "settlement, distress, or damage must be 'damage'. When in doubt, use 'damage'. "
+        "For the photo_categories field: classify every photo as 'damage' UNLESS the user "
+        "explicitly uses a word like 'general', 'general photo', 'site photo', or 'general site' "
+        "in the description — in that case use 'general'. "
+        "Do NOT infer category from the content of the photo. Do NOT classify as 'general' based on "
+        "zoom level, wide shots, or overview shots — a wide shot can still show damage. "
+        "Only the user's explicit words determine 'general'. When in any doubt, use 'damage'. "
         "photo_categories must have exactly the same number of entries as photo file paths."
     )
 
@@ -276,22 +276,6 @@ def parse_inspection(session: dict) -> dict:
     cats = result.get('photo_categories') or []
     if len(cats) != len(photo_paths):
         cats = ['damage'] * len(photo_paths)
-
-    # Safety net: if description contains any defect keyword, force 'damage'
-    # regardless of what Claude classified — prevents misclassification
-    DEFECT_KEYWORDS = {
-        'crack', 'cracking', 'spalling', 'leaching', 'leakage', 'honeycombing',
-        'honey combing', 'corrosion', 'rust', 'exposed rebar', 'exposed reinforcement',
-        'delamination', 'settlement', 'scour', 'tilting', 'distortion', 'displacement',
-        'erosion', 'damage', 'defect', 'distress', 'deterioration', 'failure',
-        'diaphragm', 'pier cap', 'abutment', 'girder', 'soffit', 'bearing',
-    }
-    for i, (cat, desc) in enumerate(zip(cats, photo_descriptions)):
-        if cat != 'damage' and desc:
-            desc_lower = desc.lower()
-            if any(kw in desc_lower for kw in DEFECT_KEYWORDS):
-                print(f"KEYWORD OVERRIDE: photo {i} forced to 'damage' (was '{cat}') — desc: {desc[:60]}")
-                cats[i] = 'damage'
 
     result['photo_categories'] = cats
 

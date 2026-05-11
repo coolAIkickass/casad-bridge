@@ -1,5 +1,6 @@
 # server.py — CASAD Bridge Inspection Automation Pipeline
-import os, threading, time
+import os, threading, time, io
+from PIL import Image
 from flask import Flask, request
 from dotenv import load_dotenv
 from db import init_db, store_message, get_session, mark_done
@@ -46,7 +47,15 @@ def webhook():
         audio = download_media(msg['media_id'])
         msg['content'] = transcribe_audio(audio)
     elif msg['type'] == 'image':
-        img_bytes = download_media(msg['media_id'])
+        raw_bytes = download_media(msg['media_id'])
+        # Convert to JPEG so python-docx can embed it (WhatsApp may send WebP/PNG)
+        img = Image.open(io.BytesIO(raw_bytes))
+        if img.mode in ('RGBA', 'P', 'LA'):
+            img = img.convert('RGB')
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=85)
+        img_bytes = buf.getvalue()
+
         media_dir = os.getenv('MEDIA_DIR', 'media')
         os.makedirs(media_dir, exist_ok=True)
         img_path = os.path.join(media_dir, f"{msg['media_id']}.jpg")

@@ -1,5 +1,5 @@
 # server.py — CASAD Bridge Inspection Automation Pipeline
-import os
+import os, threading, time
 from flask import Flask, request
 from dotenv import load_dotenv
 from db import init_db, store_message, get_session, mark_done
@@ -7,11 +7,11 @@ from whatsapp import parse_payload, download_media, send_message, send_document
 from transcribe import transcribe_audio
 from ai_parse import parse_inspection
 from report_gen import build_docx
-from drive import upload_and_share
 
 load_dotenv()
 
 VERIFY_TOKEN = os.getenv('VERIFY_TOKEN', 'casad2024')
+DONE_DELAY   = int(os.getenv('DONE_DELAY_SECONDS', '20'))
 processed_ids = set()  # in-memory dedup cache
 
 app = Flask(__name__)
@@ -58,22 +58,31 @@ def webhook():
     store_message(msg)
 
     if 'done' in (msg.get('content') or '').lower():
-        try:
-            session = get_session(msg['phone'])
-            report_json = parse_inspection(session)
-            docx_path   = build_docx(report_json)
-            send_document(
-                msg['phone'],
-                docx_path,
-                caption=f"CASAD Bridge Inspection Report - {report_json.get('river_name', '')} / {report_json.get('road_name', '')}",
-            )
-            mark_done(msg['phone'])
-        except Exception as e:
-            print(f"REPORT ERROR: {e}")
-            import traceback; traceback.print_exc()
-            send_message(msg['phone'], f"Sorry, report generation failed: {e}")
+        phone = msg['phone']
+        send_message(phone, f"Got it! Generating your report in {DONE_DELAY} seconds — make sure all photos are sent.")
+        threading.Thread(target=_generate_report, args=(phone,), daemon=True).start()
 
     return 'OK', 200
+
+
+def _generate_report(phone: str) -> None:
+    """Run in background thread: wait for late-arriving media, then build report."""
+    print(f"REPORT: waiting {DONE_DELAY}s for pending media from {phone}...")
+    time.sleep(DONE_DELAY)
+    try:
+        session     = get_session(phone)
+        report_json = parse_inspection(session)
+        docx_path   = build_docx(report_json)
+        send_document(
+            phone,
+            docx_path,
+            caption=f"CASAD Bridge Inspection Report - {report_json.get('river_name', '')} / {report_json.get('road_name', '')}",
+        )
+        mark_done(phone)
+    except Exception as e:
+        print(f"REPORT ERROR: {e}")
+        import traceback; traceback.print_exc()
+        send_message(phone, f"Sorry, report generation failed: {e}")
 
 
 @app.route('/health', methods=['GET'])

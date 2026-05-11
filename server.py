@@ -8,6 +8,7 @@ from whatsapp import parse_payload, download_media, send_message, send_document
 from transcribe import transcribe_audio
 from ai_parse import parse_inspection
 from report_gen import build_docx
+from mark_image import mark_defect
 
 load_dotenv()
 
@@ -92,6 +93,10 @@ def webhook():
         img.save(buf, format='JPEG', quality=85)
         img_bytes = buf.getvalue()
 
+        # Draw defect circle if user provided a caption with this photo
+        caption = msg.get('content') or ''
+        img_bytes = mark_defect(img_bytes, caption)
+
         media_dir = os.getenv('MEDIA_DIR', 'media')
         os.makedirs(media_dir, exist_ok=True)
         img_path = os.path.join(media_dir, f"{msg['media_id']}.jpg")
@@ -110,9 +115,13 @@ def webhook():
     content_lower = (msg.get('content') or '').lower().strip()
 
     # 'wait' → cancel pending report
-    if content_lower == 'wait' and phone in pending_cancels:
+    if 'wait' in content_lower and phone in pending_cancels:
         pending_cancels[phone].set()
-        send_message(phone, "Paused! Send your remaining items and type *done* again when ready.")
+        send_message(
+            phone,
+            "Ok, I am waiting. Please share remaining info. "
+            "Once done, type *done* to generate report."
+        )
         return 'OK', 200
 
     # 'done' → schedule report with delay
@@ -121,8 +130,9 @@ def webhook():
         pending_cancels[phone] = cancel_event
         send_message(
             phone,
-            "Good job! Generating your report in ~5 minutes.\n\n"
-            "*Make sure all photos/info is sent. If not, please type 'wait'.*"
+            "Good job! Generating your report in few minutes. "
+            "*I will notify you once done.*\n\n"
+            "_If you have more to share, type 'wait' now._"
         )
         threading.Thread(target=_generate_report, args=(phone, cancel_event), daemon=True).start()
 
@@ -149,6 +159,7 @@ def _generate_report(phone: str, cancel_event: threading.Event) -> None:
             docx_path,
             caption=f"CASAD Bridge Inspection Report - {report_json.get('river_name', '')} / {report_json.get('road_name', '')}",
         )
+        send_message(phone, "Yay! Your inspection report is generated, please check.")
         mark_done(phone)
     except Exception as e:
         print(f"REPORT ERROR: {e}")

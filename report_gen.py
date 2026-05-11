@@ -61,17 +61,7 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list, captions:
         if not photo_path or not os.path.exists(photo_path):
             continue
 
-        # Caption — add to doc first so relationship is registered, then move
-        cap_para = doc.add_paragraph()
-        cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        cap_para.add_run(f'Figure {i}').bold = True
-        cap_elem = cap_para._element
-        parent.remove(cap_elem)
-        parent.insert(insert_pos, cap_elem)
-        insert_pos += 1
-
-        # Image — MUST be added to doc (not a temp Document) so the image
-        # relationship is stored in doc's package; then move element into place
+        # Image — add to doc first (registers relationship), then move
         pic_para = doc.add_paragraph()
         pic_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         pic_para.add_run().add_picture(photo_path, width=Inches(5.5))
@@ -80,16 +70,20 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list, captions:
         parent.insert(insert_pos, pic_elem)
         insert_pos += 1
 
-        # User's comment about this photo
+        # Caption: "Figure 1: user comment" below the photo
         user_caption = (captions[i - 1] if captions and i - 1 < len(captions) else '') or ''
+        cap_text = f'Figure {i}'
         if user_caption:
-            uc_para = doc.add_paragraph()
-            uc_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            uc_para.add_run(user_caption).italic = True
-            uc_elem = uc_para._element
-            parent.remove(uc_elem)
-            parent.insert(insert_pos, uc_elem)
-            insert_pos += 1
+            cap_text += f': {user_caption}'
+        cap_para = doc.add_paragraph()
+        cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cap_run = cap_para.add_run(cap_text)
+        cap_run.italic = True
+        cap_run.font.size = Pt(10)
+        cap_elem = cap_para._element
+        parent.remove(cap_elem)
+        parent.insert(insert_pos, cap_elem)
+        insert_pos += 1
 
         # Page break after every 2 photos (except the last)
         if i % 2 == 0 and i < len(photos):
@@ -117,16 +111,12 @@ def build_docx(report_json: dict) -> str:
     print(f"BUILD_DOCX usable photos: {photos}")
 
     if photos:
-        mid = len(photos) // 2 or len(photos)
-        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_A]]', photos[:mid],   captions[:mid])
-        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_B]]', photos[mid:] or photos, captions[mid:] or captions)
+        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX]]', photos, captions)
     else:
-        # No photos submitted — replace markers with a note
-        for marker in ('[[PHOTO_APPENDIX_A]]', '[[PHOTO_APPENDIX_B]]'):
-            for para in doc.paragraphs:
-                if para.text.strip() == marker:
-                    para.runs[0].text = 'No photographs submitted.'
-                    break
+        for para in doc.paragraphs:
+            if para.text.strip() == '[[PHOTO_APPENDIX]]':
+                para.runs[0].text = 'No photographs submitted.'
+                break
 
     river    = re.sub(r'[^\w\-]', '_', report_json.get('river_name', 'bridge'))
     road     = re.sub(r'[^\w\-]', '_', report_json.get('road_name',  'road'))

@@ -1,7 +1,7 @@
 # report_gen.py — python-docx: JSON → filled .docx report
 import os, re
 from docx import Document
-from docx.shared import Inches, Pt
+from docx.shared import Inches, Pt, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
@@ -43,9 +43,19 @@ def _fill_placeholders(doc: Document, data: dict) -> None:
                     replace_in_para(para)
 
 
+def _shade_cell(cell, hex_color: str) -> None:
+    tc   = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    shd  = OxmlElement('w:shd')
+    shd.set(qn('w:val'),   'clear')
+    shd.set(qn('w:color'), 'auto')
+    shd.set(qn('w:fill'),  hex_color)
+    tcPr.append(shd)
+
+
 def _insert_photos_at_marker(doc: Document, marker: str, photos: list,
                               titles: list = None, fig_offset: int = 0) -> None:
-    """Find the marker paragraph and replace it with photo images + titles."""
+    """Find the marker paragraph and replace it with bordered photo tables."""
     target = None
     for para in doc.paragraphs:
         if para.text.strip() == marker:
@@ -58,39 +68,61 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list,
     insert_pos = list(parent).index(target._element)
     parent.remove(target._element)
 
-    for i, photo_path in enumerate(photos, 1):
-        if not photo_path or not os.path.exists(photo_path):
-            continue
+    valid = [(p, (titles[i] if titles and i < len(titles) else ''))
+             for i, p in enumerate(photos)
+             if p and os.path.exists(p)]
 
-        # Image — add to doc first (registers relationship), then move
-        pic_para = doc.add_paragraph()
-        pic_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        pic_para.add_run().add_picture(photo_path, width=Inches(5.5))
-        pic_elem = pic_para._element
-        parent.remove(pic_elem)
-        parent.insert(insert_pos, pic_elem)
+    for idx, (photo_path, title) in enumerate(valid, 1):
+        cap_text = f'Figure {fig_offset + idx}'
+        if title:
+            cap_text += f':  {title}'
+
+        # --- Bordered 2-row table: [image row] / [caption row] ---
+        tbl = doc.add_table(rows=2, cols=1)
+        tbl.style = 'Table Grid'
+
+        # Row 0 — photo centred with padding
+        img_cell = tbl.rows[0].cells[0]
+        img_para = img_cell.paragraphs[0]
+        img_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        img_para.paragraph_format.space_before = Pt(6)
+        img_para.paragraph_format.space_after  = Pt(6)
+        img_para.add_run().add_picture(photo_path, width=Inches(5.5))
+
+        # Row 1 — caption, grey background
+        cap_cell = tbl.rows[1].cells[0]
+        _shade_cell(cap_cell, 'EBF5FB')
+        cap_para = cap_cell.paragraphs[0]
+        cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cap_para.paragraph_format.space_before = Pt(4)
+        cap_para.paragraph_format.space_after  = Pt(4)
+        cap_run = cap_para.add_run(cap_text)
+        cap_run.italic     = True
+        cap_run.bold       = True
+        cap_run.font.size  = Pt(9)
+
+        # Move table to correct position (relationships stay in main doc ✓)
+        tbl_elem = tbl._element
+        parent.remove(tbl_elem)
+        parent.insert(insert_pos, tbl_elem)
         insert_pos += 1
 
-        # Caption: "Figure N: photo title" below the photo
-        title = (titles[i - 1] if titles and i - 1 < len(titles) else '') or ''
-        cap_text = f'Figure {fig_offset + i}'
-        if title:
-            cap_text += f': {title}'
-        cap_para = doc.add_paragraph()
-        cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        cap_run = cap_para.add_run(cap_text)
-        cap_run.italic = True
-        cap_run.font.size = Pt(10)
-        cap_elem = cap_para._element
-        parent.remove(cap_elem)
-        parent.insert(insert_pos, cap_elem)
+        # Small spacer paragraph between tables
+        sp = doc.add_paragraph()
+        sp.paragraph_format.space_before = Pt(0)
+        sp.paragraph_format.space_after  = Pt(4)
+        sp_elem = sp._element
+        parent.remove(sp_elem)
+        parent.insert(insert_pos, sp_elem)
         insert_pos += 1
 
         # Page break after every 2 photos (except the last)
-        if i % 2 == 0 and i < len(photos):
-            pb_para = doc.add_paragraph()
-            pb_para.add_run().add_break()
-            pb_elem = pb_para._element
+        if idx % 2 == 0 and idx < len(valid):
+            pb = doc.add_paragraph()
+            br = OxmlElement('w:br')
+            br.set(qn('w:type'), 'page')
+            pb.add_run()._r.append(br)
+            pb_elem = pb._element
             parent.remove(pb_elem)
             parent.insert(insert_pos, pb_elem)
             insert_pos += 1

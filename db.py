@@ -8,26 +8,30 @@ DB = os.getenv('DB_PATH', 'casad.db')
 def init_db():
     con = sqlite3.connect(DB)
     con.execute('''CREATE TABLE IF NOT EXISTS sessions
-        (phone TEXT PRIMARY KEY, bridge TEXT, status TEXT, started_at TEXT)''')
+        (phone TEXT PRIMARY KEY, bridge TEXT, status TEXT,
+         started_at TEXT, reminded_at TEXT)''')
     con.execute('''CREATE TABLE IF NOT EXISTS messages
         (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT,
          type TEXT, content TEXT, media_path TEXT,
          seq INTEGER, created_at TEXT, image_data BLOB)''')
-    # Add image_data column to existing databases that predate this column
-    try:
-        con.execute('ALTER TABLE messages ADD COLUMN image_data BLOB')
-    except Exception:
-        pass
+    for col_sql in (
+        'ALTER TABLE messages ADD COLUMN image_data BLOB',
+        'ALTER TABLE sessions ADD COLUMN reminded_at TEXT',
+    ):
+        try:
+            con.execute(col_sql)
+        except Exception:
+            pass
     con.commit()
     con.close()
 
 
 def store_message(msg):
     con = sqlite3.connect(DB)
-    # Upsert session row if this is the first message from this phone
     con.execute(
-        'INSERT OR IGNORE INTO sessions VALUES (?,?,?,?)',
-        (msg['phone'], msg.get('bridge', ''), 'active', datetime.utcnow().isoformat())
+        'INSERT OR IGNORE INTO sessions VALUES (?,?,?,?,?)',
+        (msg['phone'], msg.get('bridge', ''), 'active',
+         datetime.utcnow().isoformat(), None)
     )
     con.execute(
         'INSERT INTO messages VALUES (NULL,?,?,?,?,?,datetime("now"),?)',
@@ -41,7 +45,7 @@ def store_message(msg):
 def get_session(phone):
     con = sqlite3.connect(DB)
     con.row_factory = sqlite3.Row
-    session = con.execute('SELECT * FROM sessions WHERE phone=?', (phone,)).fetchone()
+    session  = con.execute('SELECT * FROM sessions WHERE phone=?', (phone,)).fetchone()
     messages = con.execute(
         'SELECT * FROM messages WHERE phone=? ORDER BY seq, created_at', (phone,)
     ).fetchall()
@@ -51,7 +55,7 @@ def get_session(phone):
 
     rows = [dict(m) for m in messages]
 
-    # Restore image files from BLOB if the file no longer exists (e.g. after a redeploy)
+    # Restore image files from BLOB if deleted by a redeploy
     os.makedirs(os.getenv('MEDIA_DIR', 'media'), exist_ok=True)
     for m in rows:
         if m.get('image_data') and m.get('media_path') and not os.path.exists(m['media_path']):
@@ -76,8 +80,30 @@ def reset_session(phone: str):
     con.close()
 
 
-def mark_done(phone):
+def mark_done(phone: str):
     con = sqlite3.connect(DB)
     con.execute("UPDATE sessions SET status='done' WHERE phone=?", (phone,))
     con.commit()
     con.close()
+
+
+def mark_reminded(phone: str):
+    con = sqlite3.connect(DB)
+    con.execute("UPDATE sessions SET reminded_at=datetime('now') WHERE phone=?", (phone,))
+    con.commit()
+    con.close()
+
+
+def get_stale_sessions() -> list:
+    """Return phones with active sessions idle for 3+ hours and not yet reminded."""
+    con = sqlite3.connect(DB)
+    rows = con.execute('''
+        SELECT s.phone FROM sessions s
+        WHERE s.status = 'active'
+          AND s.reminded_at IS NULL
+          AND (SELECT COUNT(*) FROM messages m WHERE m.phone = s.phone) > 0
+          AND (SELECT MAX(m.created_at) FROM messages m WHERE m.phone = s.phone)
+              < datetime('now', '-3 hours')
+    ''').fetchall()
+    con.close()
+    return [r[0] for r in rows]

@@ -193,10 +193,12 @@ def parse_inspection(session: dict) -> dict:
         "For the photo_titles field: generate a short title (max 10 words) for each photo "
         "based on its description. If no description, infer from field notes context. "
         "photo_titles must have exactly the same number of entries as photo file paths.\n\n"
-        "For the photo_categories field: classify each photo as either 'general' or 'damage'. "
-        "Use 'damage' if the description mentions any defect, crack, spalling, leaching, "
-        "corrosion, distress, settlement, scour, erosion, or structural damage. "
-        "Use 'general' for overall site views, bridge overview shots, or approach photos. "
+        "For the photo_categories field: classify each photo as 'general' or 'damage'. "
+        "Default to 'damage' for all photos UNLESS: (a) the user explicitly says 'general', "
+        "'site photo', 'overview', 'approach', 'zoomed out', or similar; OR (b) the description "
+        "clearly describes a wide/panoramic shot of the whole bridge or site with no specific defect. "
+        "Any photo mentioning a crack, spalling, leaching, corrosion, exposed rebar, scour, "
+        "settlement, distress, or damage must be 'damage'. When in doubt, use 'damage'. "
         "photo_categories must have exactly the same number of entries as photo file paths."
     )
 
@@ -230,10 +232,10 @@ def parse_inspection(session: dict) -> dict:
         titles = [' '.join(d.split()[:10]) if d else '' for d in photo_descriptions]
     result['photo_titles'] = titles
 
-    # Ensure photo_categories has the right count; fall back to 'general'
+    # Ensure photo_categories has the right count; fall back to 'damage'
     cats = result.get('photo_categories') or []
     if len(cats) != len(photo_paths):
-        cats = ['general'] * len(photo_paths)
+        cats = ['damage'] * len(photo_paths)
     result['photo_categories'] = cats
 
     print(f"PHOTOS injected: {photo_paths}")

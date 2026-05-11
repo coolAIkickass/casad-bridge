@@ -108,7 +108,7 @@ def build_docx(report_json: dict) -> str:
     # Pad lists to same length
     n = len(raw_photos)
     raw_titles     = list(raw_titles)     + [''] * n
-    raw_categories = list(raw_categories) + ['general'] * n
+    raw_categories = list(raw_categories) + ['damage'] * n
 
     # Split into general and damage buckets, keeping titles aligned
     general_photos, general_titles = [], []

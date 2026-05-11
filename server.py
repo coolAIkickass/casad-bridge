@@ -16,12 +16,12 @@ VERIFY_TOKEN = os.getenv('VERIFY_TOKEN', 'casad2024')
 DONE_DELAY   = int(os.getenv('DONE_DELAY_SECONDS', '20'))
 
 WELCOME_MSG = (
-    "Hello CASAD team, I will help you today in creating your *inspection report*. "
+    "Hello CASAD team, I will assist you in creating your *bridge inspection report*. "
     "Please share below:\n\n"
     "• Complete bridge details (name, location, type etc.)\n"
-    "• *General site photos* (overview, approach, full bridge view)\n"
-    "• *Damage / distressing photos* (cracks, spalling, defects etc.)\n"
-    "• Observations / caption for each photo\n"
+    "• Site photos - general\n"
+    "• Site photos - damaged/ distressing\n"
+    "• Observations about every damaged photo\n"
     "• Recommendations (if any)\n\n"
     "Type *done* when everything is sent."
 )

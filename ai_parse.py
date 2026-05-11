@@ -1,6 +1,7 @@
 # ai_parse.py — Claude API: field notes → structured JSON
 import json, os
 import anthropic
+from mark_image import mark_defect
 
 client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
 
@@ -223,6 +224,22 @@ def parse_inspection(session: dict) -> dict:
     print(f"PARSE: {len(messages)} messages, text length={len(messages_text)}, photos={len(photo_paths)}")
     print(f"FIELD NOTES:\n{messages_text}")
     print(f"PHOTO DESCRIPTIONS: {photo_descriptions}")
+
+    # Re-apply defect circle marking now that we have full descriptions
+    # (voice notes sent AFTER a photo weren't available when the image first arrived)
+    for path, desc in zip(photo_paths, photo_descriptions):
+        if not desc or not os.path.exists(path):
+            continue
+        try:
+            with open(path, 'rb') as f:
+                original = f.read()
+            marked = mark_defect(original, desc)
+            if marked != original:
+                with open(path, 'wb') as f:
+                    f.write(marked)
+                print(f"REMARK: circle applied to {path}")
+        except Exception as e:
+            print(f"REMARK FAILED for {path}: {e}")
 
     user_content = (
         f"Schema:\n{json.dumps(SCHEMA, indent=2)}\n\n"

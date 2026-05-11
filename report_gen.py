@@ -54,7 +54,8 @@ def _shade_cell(cell, hex_color: str) -> None:
 
 
 def _insert_photos_at_marker(doc: Document, marker: str, photos: list,
-                              titles: list = None, fig_offset: int = 0) -> None:
+                              titles: list = None, fig_offset: int = 0,
+                              show_figure_label: bool = True) -> None:
     """Find the marker paragraph and replace it with bordered photo tables."""
     target = None
     for para in doc.paragraphs:
@@ -73,9 +74,12 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list,
              if p and os.path.exists(p)]
 
     for idx, (photo_path, title) in enumerate(valid, 1):
-        cap_text = f'Figure {fig_offset + idx}'
-        if title:
-            cap_text += f':  {title}'
+        if show_figure_label:
+            cap_text = f'Figure {fig_offset + idx}'
+            if title:
+                cap_text += f':  {title}'
+        else:
+            cap_text = title  # title only, no "Figure N:" prefix
 
         # --- Bordered 2-row table: [image row] / [caption row] ---
         tbl = doc.add_table(rows=2, cols=1)
@@ -159,9 +163,10 @@ def build_docx(report_json: dict) -> str:
     print(f"BUILD_DOCX general photos: {general_photos}")
     print(f"BUILD_DOCX damage  photos: {damage_photos}")
 
-    # Insert into Appendix A (general) — figure numbers start at 1
+    # Insert into Appendix A (general) — no figure numbering
     if general_photos:
-        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_A]]', general_photos, general_titles, fig_offset=0)
+        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_A]]', general_photos, general_titles,
+                                  fig_offset=0, show_figure_label=False)
     else:
         for para in doc.paragraphs:
             if para.text.strip() == '[[PHOTO_APPENDIX_A]]':

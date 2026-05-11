@@ -151,16 +151,32 @@ SCHEMA = {
 
 
 def _find_photo_description(messages: list, photo_idx: int) -> str:
-    """Return the best description for a photo: inline caption or nearest preceding text."""
+    """Return the best description for a photo.
+
+    Priority:
+      1. Inline WhatsApp caption on the photo itself
+      2. Nearest text/voice note in the 3 messages BEFORE the photo
+      3. Nearest text/voice note in the 3 messages AFTER the photo
+    """
     m = messages[photo_idx]
+    # 1. Inline caption
     if m.get('content'):
         return m['content']
-    # Look back up to 4 messages for the nearest text/audio description
-    for k in range(photo_idx - 1, max(photo_idx - 5, -1), -1):
-        prev = messages[k]
-        content = (prev.get('content') or '').strip()
-        if content and not prev.get('media_path') and 'done' not in content.lower():
-            return content
+
+    def _is_text(msg):
+        content = (msg.get('content') or '').strip()
+        return bool(content) and not msg.get('media_path') and 'done' not in content.lower()
+
+    # 2. Look back up to 3 messages
+    for k in range(photo_idx - 1, max(photo_idx - 4, -1), -1):
+        if _is_text(messages[k]):
+            return messages[k]['content'].strip()
+
+    # 3. Look forward up to 3 messages (voice/text sent after the photo)
+    for k in range(photo_idx + 1, min(photo_idx + 4, len(messages))):
+        if _is_text(messages[k]):
+            return messages[k]['content'].strip()
+
     return ''
 
 

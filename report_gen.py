@@ -55,51 +55,38 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list) -> None:
 
     parent = target._element.getparent()
     insert_pos = list(parent).index(target._element)
-
-    # Remove the marker paragraph
     parent.remove(target._element)
 
     for i, photo_path in enumerate(photos, 1):
         if not photo_path or not os.path.exists(photo_path):
             continue
 
-        # Caption paragraph
-        cap_p = OxmlElement('w:p')
-        cap_pPr = OxmlElement('w:pPr')
-        cap_jc = OxmlElement('w:jc')
-        cap_jc.set(qn('w:val'), 'center')
-        cap_pPr.append(cap_jc)
-        cap_p.append(cap_pPr)
-        cap_r = OxmlElement('w:r')
-        cap_rPr = OxmlElement('w:rPr')
-        cap_b = OxmlElement('w:b')
-        cap_rPr.append(cap_b)
-        cap_r.append(cap_rPr)
-        cap_t = OxmlElement('w:t')
-        cap_t.text = f'Figure {i}'
-        cap_r.append(cap_t)
-        cap_p.append(cap_r)
-        parent.insert(insert_pos, cap_p)
+        # Caption — add to doc first so relationship is registered, then move
+        cap_para = doc.add_paragraph()
+        cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cap_para.add_run(f'Figure {i}').bold = True
+        cap_elem = cap_para._element
+        parent.remove(cap_elem)
+        parent.insert(insert_pos, cap_elem)
         insert_pos += 1
 
-        # Image paragraph — build via a temporary in-memory Document
-        tmp = Document()
-        pic_para = tmp.add_paragraph()
+        # Image — MUST be added to doc (not a temp Document) so the image
+        # relationship is stored in doc's package; then move element into place
+        pic_para = doc.add_paragraph()
         pic_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         pic_para.add_run().add_picture(photo_path, width=Inches(5.5))
         pic_elem = pic_para._element
+        parent.remove(pic_elem)
         parent.insert(insert_pos, pic_elem)
         insert_pos += 1
 
         # Page break after every 2 photos (except the last)
         if i % 2 == 0 and i < len(photos):
-            pb_p = OxmlElement('w:p')
-            pb_r = OxmlElement('w:r')
-            pb_br = OxmlElement('w:br')
-            pb_br.set(qn('w:type'), 'page')
-            pb_r.append(pb_br)
-            pb_p.append(pb_r)
-            parent.insert(insert_pos, pb_p)
+            pb_para = doc.add_paragraph()
+            pb_para.add_run().add_break()
+            pb_elem = pb_para._element
+            parent.remove(pb_elem)
+            parent.insert(insert_pos, pb_elem)
             insert_pos += 1
 
 

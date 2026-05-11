@@ -173,10 +173,10 @@ def build_docx(report_json: dict) -> str:
                 para.runs[0].text = 'No general photographs submitted.'
                 break
 
-    # Insert into Appendix B (damage) — figure numbers continue after A
+    # Insert into Appendix B (damage) — figure numbers always start at 1
     if damage_photos:
         _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_B]]', damage_photos, damage_titles,
-                                  fig_offset=len(general_photos))
+                                  fig_offset=0)
     else:
         for para in doc.paragraphs:
             if para.text.strip() == '[[PHOTO_APPENDIX_B]]':

@@ -17,11 +17,34 @@ Default values for missing information:
 - "NA" for bearing fields when not applicable
 - "NIL" for recommendation fields where no issue was found
 
+CRITICAL — Structural component accuracy:
+- Always use the EXACT component name the inspector mentioned. Do not generalise, substitute, or infer.
+  Examples:
+  • Inspector says "diaphragm" → use "diaphragm", NOT "superstructure"
+  • Inspector says "superstructure" → use "superstructure", NOT "pier cap" or "substructure"
+  • Inspector says "pier cap" → use "pier cap", NOT "substructure"
+  • Inspector says "abutment" → use "abutment", NOT "substructure"
+- Map the defect to the JSON field that matches the inspector's stated component:
+  • Superstructure components (girder, deck slab, diaphragm, soffit) → ss_* fields
+  • Substructure components (pier, abutment, pier cap, return wall) → sub_* fields
+  • Foundation components (pile, pile cap, well) → found_* fields
+- NEVER move a defect to a different structural section than the one the inspector stated.
+- If the same defect note is about both superstructure and substructure, fill both sections.
+
+CRITICAL — Photo titles (photo_titles field):
+- Use the inspector's EXACT component and defect words from the photo description.
+- Do NOT rephrase, generalise, or substitute component names.
+- Format: "[Defect type] in [exact component name as stated]"
+  Examples:
+  • Description "honeycombing and leaching in diaphragm" → "Honeycombing and Leaching in Diaphragm"
+  • Description "leaching superstructure" → "Leaching in Superstructure"
+  • Description "crack pier cap" → "Crack in Pier Cap"
+
 Recommendation fields (rec_gen_* and rec_str_*):
 - Write each as a complete professional sentence.
 - Format: state the problem/deficiency observed, then state the recommended remedial action.
 - Example: "Damage observed in wearing coat surface. — Renewal of wearing coat recommended."
-- For structural fields, include the specific component (e.g., girder, pier cap) and the defect type.
+- Use the inspector's exact component name — do not substitute (e.g. write "diaphragm", not "superstructure").
 - For rec_irc_action, write the full IRC SP:40-2019 recommended action sentence for the given condition rating.
   Example for Fair: "Structural deficiency is major. Medium to specialized repair and NDT of various structural components is needed."
 '''

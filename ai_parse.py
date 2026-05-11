@@ -142,30 +142,62 @@ SCHEMA = {
     "representative_name": "",
 
     # Photos (list of file paths — appended by report_gen.py)
-    "photos": []
+    "photos": [],
+
+    # Photo metadata — parallel lists, one entry per photo (appended by report_gen.py)
+    "photo_titles":     [],   # short title (max 10 words) per photo
+    "photo_categories": [],   # "general" or "damage" per photo
 }
+
+
+def _find_photo_description(messages: list, photo_idx: int) -> str:
+    """Return the best description for a photo: inline caption or nearest preceding text."""
+    m = messages[photo_idx]
+    if m.get('content'):
+        return m['content']
+    # Look back up to 4 messages for the nearest text/audio description
+    for k in range(photo_idx - 1, max(photo_idx - 5, -1), -1):
+        prev = messages[k]
+        content = (prev.get('content') or '').strip()
+        if content and not prev.get('media_path') and 'done' not in content.lower():
+            return content
+    return ''
 
 
 def parse_inspection(session: dict) -> dict:
     """Send session messages to Claude and return structured JSON."""
-    messages_text = '\n'.join(
-        m['content'] for m in session.get('messages', []) if m.get('content')
-    )
-    photo_data = [
-        (m['media_path'], m.get('content') or '')
-        for m in session.get('messages', [])
-        if m.get('media_path')
-    ]
-    photo_paths    = [p for p, _ in photo_data]
-    photo_captions = [c for _, c in photo_data]
+    messages = session.get('messages', [])
+    messages_text = '\n'.join(m['content'] for m in messages if m.get('content'))
 
-    print(f"PARSE: {len(session.get('messages', []))} messages, text length={len(messages_text)}, photos={len(photo_paths)}")
+    # Collect photo paths and their best available description
+    photo_paths        = []
+    photo_captions     = []   # raw description (used for circle detection)
+    photo_descriptions = []   # same, passed to Claude for title generation
+
+    for j, m in enumerate(messages):
+        if m.get('media_path'):
+            desc = _find_photo_description(messages, j)
+            photo_paths.append(m['media_path'])
+            photo_captions.append(desc)
+            photo_descriptions.append(desc)
+
+    print(f"PARSE: {len(messages)} messages, text length={len(messages_text)}, photos={len(photo_paths)}")
     print(f"FIELD NOTES:\n{messages_text}")
+    print(f"PHOTO DESCRIPTIONS: {photo_descriptions}")
 
     user_content = (
         f"Schema:\n{json.dumps(SCHEMA, indent=2)}\n\n"
         f"Field notes:\n{messages_text}\n\n"
-        f"Photo file paths (in sequence order):\n{json.dumps(photo_paths)}"
+        f"Photo file paths (in sequence order):\n{json.dumps(photo_paths)}\n\n"
+        f"Photo descriptions (one per photo, same order):\n{json.dumps(photo_descriptions)}\n\n"
+        "For the photo_titles field: generate a short title (max 10 words) for each photo "
+        "based on its description. If no description, infer from field notes context. "
+        "photo_titles must have exactly the same number of entries as photo file paths.\n\n"
+        "For the photo_categories field: classify each photo as either 'general' or 'damage'. "
+        "Use 'damage' if the description mentions any defect, crack, spalling, leaching, "
+        "corrosion, distress, settlement, scour, erosion, or structural damage. "
+        "Use 'general' for overall site views, bridge overview shots, or approach photos. "
+        "photo_categories must have exactly the same number of entries as photo file paths."
     )
 
     response = client.messages.create(
@@ -191,6 +223,20 @@ def parse_inspection(session: dict) -> dict:
     result = json.loads(raw)
     result['photos']         = photo_paths
     result['photo_captions'] = photo_captions
+
+    # Ensure photo_titles has the right count; fall back to first 10 words of description
+    titles = result.get('photo_titles') or []
+    if len(titles) != len(photo_paths):
+        titles = [' '.join(d.split()[:10]) if d else '' for d in photo_descriptions]
+    result['photo_titles'] = titles
+
+    # Ensure photo_categories has the right count; fall back to 'general'
+    cats = result.get('photo_categories') or []
+    if len(cats) != len(photo_paths):
+        cats = ['general'] * len(photo_paths)
+    result['photo_categories'] = cats
+
     print(f"PHOTOS injected: {photo_paths}")
-    print(f"CAPTIONS injected: {photo_captions}")
+    print(f"TITLES: {result['photo_titles']}")
+    print(f"CATEGORIES: {result['photo_categories']}")
     return result

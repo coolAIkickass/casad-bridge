@@ -19,8 +19,9 @@ WELCOME_MSG = (
     "Hello CASAD team, I will help you today in creating your *inspection report*. "
     "Please share below:\n\n"
     "• Complete bridge details (name, location, type etc.)\n"
-    "• Site photos\n"
-    "• Observations about each photo\n"
+    "• *General site photos* (overview, approach, full bridge view)\n"
+    "• *Damage / distressing photos* (cracks, spalling, defects etc.)\n"
+    "• Observations / caption for each photo\n"
     "• Recommendations (if any)\n\n"
     "Type *done* when everything is sent."
 )

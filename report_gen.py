@@ -43,8 +43,9 @@ def _fill_placeholders(doc: Document, data: dict) -> None:
                     replace_in_para(para)
 
 
-def _insert_photos_at_marker(doc: Document, marker: str, photos: list, captions: list = None) -> None:
-    """Find the marker paragraph and replace it with photo images + captions."""
+def _insert_photos_at_marker(doc: Document, marker: str, photos: list,
+                              titles: list = None, fig_offset: int = 0) -> None:
+    """Find the marker paragraph and replace it with photo images + titles."""
     target = None
     for para in doc.paragraphs:
         if para.text.strip() == marker:
@@ -70,11 +71,11 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list, captions:
         parent.insert(insert_pos, pic_elem)
         insert_pos += 1
 
-        # Caption: "Figure 1: user comment" below the photo
-        user_caption = (captions[i - 1] if captions and i - 1 < len(captions) else '') or ''
-        cap_text = f'Figure {i}'
-        if user_caption:
-            cap_text += f': {user_caption}'
+        # Caption: "Figure N: photo title" below the photo
+        title = (titles[i - 1] if titles and i - 1 < len(titles) else '') or ''
+        cap_text = f'Figure {fig_offset + i}'
+        if title:
+            cap_text += f': {title}'
         cap_para = doc.add_paragraph()
         cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         cap_run = cap_para.add_run(cap_text)
@@ -100,22 +101,49 @@ def build_docx(report_json: dict) -> str:
     doc = Document(TEMPLATE_PATH)
     _fill_placeholders(doc, report_json)
 
-    raw_photos   = report_json.get('photos', [])
-    raw_captions = report_json.get('photo_captions', [])
+    raw_photos     = report_json.get('photos', [])
+    raw_titles     = report_json.get('photo_titles', [])
+    raw_categories = report_json.get('photo_categories', [])
 
-    # Keep only photos whose files exist, carrying captions along
-    pairs = [(p, c) for p, c in zip(raw_photos, raw_captions + [''] * len(raw_photos))
-             if p and os.path.exists(p)]
-    photos   = [p for p, _ in pairs]
-    captions = [c for _, c in pairs]
-    print(f"BUILD_DOCX usable photos: {photos}")
+    # Pad lists to same length
+    n = len(raw_photos)
+    raw_titles     = list(raw_titles)     + [''] * n
+    raw_categories = list(raw_categories) + ['general'] * n
 
-    if photos:
-        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX]]', photos, captions)
+    # Split into general and damage buckets, keeping titles aligned
+    general_photos, general_titles = [], []
+    damage_photos,  damage_titles  = [], []
+
+    for path, title, cat in zip(raw_photos, raw_titles, raw_categories):
+        if not path or not os.path.exists(path):
+            continue
+        if str(cat).lower() == 'damage':
+            damage_photos.append(path)
+            damage_titles.append(title)
+        else:
+            general_photos.append(path)
+            general_titles.append(title)
+
+    print(f"BUILD_DOCX general photos: {general_photos}")
+    print(f"BUILD_DOCX damage  photos: {damage_photos}")
+
+    # Insert into Appendix A (general) — figure numbers start at 1
+    if general_photos:
+        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_A]]', general_photos, general_titles, fig_offset=0)
     else:
         for para in doc.paragraphs:
-            if para.text.strip() == '[[PHOTO_APPENDIX]]':
-                para.runs[0].text = 'No photographs submitted.'
+            if para.text.strip() == '[[PHOTO_APPENDIX_A]]':
+                para.runs[0].text = 'No general photographs submitted.'
+                break
+
+    # Insert into Appendix B (damage) — figure numbers continue after A
+    if damage_photos:
+        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_B]]', damage_photos, damage_titles,
+                                  fig_offset=len(general_photos))
+    else:
+        for para in doc.paragraphs:
+            if para.text.strip() == '[[PHOTO_APPENDIX_B]]':
+                para.runs[0].text = 'No damage photographs submitted.'
                 break
 
     river    = re.sub(r'[^\w\-]', '_', report_json.get('river_name', 'bridge'))

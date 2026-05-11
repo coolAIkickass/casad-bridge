@@ -359,21 +359,35 @@ dp = doc.add_paragraph(DISCLAIMER)
 dp.paragraph_format.space_before = Pt(10)
 dp.runs[0].font.size = Pt(10)
 
-# ── Appendix — Site Photographs ───────────────────────────────────────────────
+# ── Appendix A — General Site Pictures ───────────────────────────────────────
 doc.add_page_break()
 h_a = doc.add_paragraph()
 h_a.alignment = WD_ALIGN_PARAGRAPH.CENTER
-r_a = h_a.add_run("Appendix: Site Photographs")
+r_a = h_a.add_run("Appendix A: General Site Pictures")
 r_a.bold = True
 r_a.font.size = Pt(12)
 r_a.font.color.rgb = RGBColor.from_string(DARK_TEXT)
 
-# Marker paragraph — report_gen.py inserts photos here at runtime
-marker = doc.add_paragraph("[[PHOTO_APPENDIX]]")
-marker.alignment = WD_ALIGN_PARAGRAPH.CENTER
-marker.runs[0].font.color.rgb = RGBColor.from_string("AAAAAA")
-marker.runs[0].font.size = Pt(9)
-marker.runs[0].italic = True
+marker_a = doc.add_paragraph("[[PHOTO_APPENDIX_A]]")
+marker_a.alignment = WD_ALIGN_PARAGRAPH.CENTER
+marker_a.runs[0].font.color.rgb = RGBColor.from_string("AAAAAA")
+marker_a.runs[0].font.size = Pt(9)
+marker_a.runs[0].italic = True
+
+# ── Appendix B — Damage / Distressing Photographs ────────────────────────────
+doc.add_page_break()
+h_b = doc.add_paragraph()
+h_b.alignment = WD_ALIGN_PARAGRAPH.CENTER
+r_b = h_b.add_run("Appendix B: Damage / Distressing Photographs")
+r_b.bold = True
+r_b.font.size = Pt(12)
+r_b.font.color.rgb = RGBColor.from_string(DARK_TEXT)
+
+marker_b = doc.add_paragraph("[[PHOTO_APPENDIX_B]]")
+marker_b.alignment = WD_ALIGN_PARAGRAPH.CENTER
+marker_b.runs[0].font.color.rgb = RGBColor.from_string("AAAAAA")
+marker_b.runs[0].font.size = Pt(9)
+marker_b.runs[0].italic = True
 
 out = "casad_template.docx"
 doc.save(out)

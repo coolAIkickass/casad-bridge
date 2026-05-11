@@ -130,9 +130,8 @@ def webhook():
         pending_cancels[phone] = cancel_event
         send_message(
             phone,
-            "Good job! Generating your report in few minutes. "
-            "*I will notify you once done.*\n\n"
-            "_If you have more to share, type 'wait' now._"
+            "Good job! Generating your report in few minutes. I will notify you once done.\n\n"
+            "Note: _Make sure all photos/info is sent, if not, please type 'wait'._"
         )
         threading.Thread(target=_generate_report, args=(phone, cancel_event), daemon=True).start()
 

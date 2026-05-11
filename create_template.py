@@ -123,11 +123,11 @@ r2.font.color.rgb = RGBColor.from_string(DARK_TEXT)
 sub.paragraph_format.space_after = Pt(10)
 
 # ── Main 3-column table ───────────────────────────────────────────────────────
-# Column widths (A4 content ~17 cm): SR 1.2 | Description 7.3 | Details 8.5
+# Column widths (A4 content ~17 cm): SR 0.7 | Description 7.5 | Details 8.8
 table = doc.add_table(rows=0, cols=3)
 table.style = "Table Grid"
 
-col_widths = [Cm(1.2), Cm(7.3), Cm(8.5)]
+col_widths = [Cm(0.7), Cm(7.5), Cm(8.8)]
 for i, w in enumerate(col_widths):
     for cell in table.columns[i].cells:
         cell.width = w
@@ -358,6 +358,105 @@ DISCLAIMER = (
 dp = doc.add_paragraph(DISCLAIMER)
 dp.paragraph_format.space_before = Pt(10)
 dp.runs[0].font.size = Pt(10)
+
+# ── Appendix — Bridge Details Form ───────────────────────────────────────────
+doc.add_page_break()
+
+hf = doc.add_paragraph()
+hf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+rf = hf.add_run("Appendix: Bridge Details — Field Data Collection Form")
+rf.bold = True
+rf.font.size = Pt(12)
+rf.font.color.rgb = RGBColor.from_string(DARK_TEXT)
+hf.paragraph_format.space_after = Pt(4)
+
+subf = doc.add_paragraph()
+subf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+rsf = subf.add_run(
+    "Fill this form at site before sending information on WhatsApp. "
+    "All fields marked * are mandatory."
+)
+rsf.italic = True
+rsf.font.size = Pt(9)
+rsf.font.color.rgb = RGBColor.from_string("555555")
+subf.paragraph_format.space_after = Pt(8)
+
+form_fields = [
+    # (label, lines_for_answer, mandatory)
+    ("Name of River / Bridge *",                     1, True),
+    ("Name of Road *",                               1, True),
+    ("Chainage *",                                   1, True),
+    ("Latitude",                                     1, False),
+    ("Longitude",                                    1, False),
+    ("Circle / Division / Sub-Division *",           1, True),
+    ("No. of Spans *",                               1, True),
+    ("Span Length & Arrangement *",                  1, True),
+    ("Total Length of Bridge (m) *",                 1, True),
+    ("Total Length of Approach (m)",                 1, False),
+    ("Type of Bridge *\n(Simply Supported / Continuous / Arch / Other)", 1, True),
+    ("Type of Superstructure *",                     1, True),
+    ("Type of Substructure *",                       1, True),
+    ("Type of Foundation *",                         1, True),
+    ("Type of Bearing",                              1, False),
+    ("Clear Carriageway Width (m) *",                1, True),
+    ("Type of Railing\n(RCC Parapet / Pipe Railing / Crash Barrier)",   1, False),
+    ("Year of Construction *",                       1, True),
+    ("High Level / Submersible *",                   1, True),
+    ("River Perennial / Non-Perennial *",            1, True),
+    ("River Training / Protection Work (if any)",    1, False),
+    ("Previous Repair / Strengthening Work (if any)",1, False),
+    ("Date of Survey *",                             1, True),
+    ("Condition Rating *\n(Excellent / Good / Fair / Poor / Critical)",  1, True),
+    ("Name of Site Engineer / Representative *",     1, True),
+    ("Overall Observations & Recommendations",       3, False),
+]
+
+ftable = doc.add_table(rows=0, cols=2)
+ftable.style = "Table Grid"
+FORM_LABEL_W = Cm(7.0)
+FORM_ANS_W   = Cm(10.0)
+
+for label, n_lines, mandatory in form_fields:
+    row   = ftable.add_row()
+    lcell = row.cells[0]
+    acell = row.cells[1]
+    lcell.width = FORM_LABEL_W
+    acell.width = FORM_ANS_W
+
+    # label background — light blue for mandatory, plain for optional
+    bg = "EBF5FB" if mandatory else "FAFAFA"
+    set_cell_bg(lcell, bg)
+    set_cell_bg(acell, WHITE)
+    set_cell_borders(lcell)
+    set_cell_borders(acell)
+
+    # Label text (strip the * from display if we'll colour it)
+    lp = lcell.paragraphs[0] if lcell.paragraphs else lcell.add_paragraph()
+    lcell._element.remove(lp._element)
+    lp = lcell.add_paragraph()
+    lp.paragraph_format.space_before = Pt(3)
+    lp.paragraph_format.space_after  = Pt(3)
+    lp.paragraph_format.left_indent  = Pt(4)
+    lr = lp.add_run(label)
+    lr.bold      = mandatory
+    lr.font.size = Pt(9)
+    lr.font.color.rgb = RGBColor.from_string("1F3864" if mandatory else "444444")
+
+    # Answer cell — blank lines for writing
+    acell._element.remove(acell.paragraphs[0]._element)
+    for _ in range(n_lines):
+        ap = acell.add_paragraph()
+        ap.paragraph_format.space_before = Pt(2)
+        ap.paragraph_format.space_after  = Pt(8)
+        ap.paragraph_format.left_indent  = Pt(4)
+        ap.add_run("").font.size = Pt(9)
+
+# Fix column widths
+for row in ftable.rows:
+    row.cells[0].width = FORM_LABEL_W
+    row.cells[1].width = FORM_ANS_W
+
+doc.add_paragraph().paragraph_format.space_after = Pt(6)
 
 # ── Appendix A — General Site Pictures ───────────────────────────────────────
 doc.add_page_break()

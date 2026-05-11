@@ -3,7 +3,7 @@ import os, threading, time, io
 from PIL import Image
 from flask import Flask, request
 from dotenv import load_dotenv
-from db import init_db, store_message, get_session, get_session_status, reset_session, mark_done, mark_reminded, get_stale_sessions
+from db import init_db, store_message, get_session, get_session_status, reset_session, mark_done
 from whatsapp import parse_payload, download_media, send_message, send_document
 from transcribe import transcribe_audio
 from ai_parse import parse_inspection
@@ -57,18 +57,6 @@ def webhook():
         return 'OK', 200
 
     phone = msg['phone']
-
-    # Send inactivity reminders for any stale sessions on every incoming request
-    for stale_phone in get_stale_sessions():
-        try:
-            send_message(
-                stale_phone,
-                "Hello there! Are you done with the inspection? "
-                "Please type *done* to generate the report."
-            )
-            mark_reminded(stale_phone)
-        except Exception as e:
-            print(f"REMINDER FAILED for {stale_phone}: {e}")
 
     # New session detection — send welcome on first message of a new session
     status = get_session_status(phone)

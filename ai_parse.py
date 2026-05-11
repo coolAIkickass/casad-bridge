@@ -185,4 +185,8 @@ def parse_inspection(session: dict) -> dict:
         print("ERROR: Claude returned empty response")
         raise ValueError("Claude returned empty response — check field notes content")
 
-    return json.loads(raw)
+    result = json.loads(raw)
+    # Always inject photo paths directly — don't rely on Claude to echo them back
+    result['photos'] = photo_paths
+    print(f"PHOTOS injected: {photo_paths}")
+    return result

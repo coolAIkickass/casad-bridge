@@ -61,6 +61,21 @@ def get_session(phone):
     return {**dict(session), 'messages': rows}
 
 
+def get_session_status(phone: str):
+    con = sqlite3.connect(DB)
+    row = con.execute('SELECT status FROM sessions WHERE phone=?', (phone,)).fetchone()
+    con.close()
+    return row[0] if row else None
+
+
+def reset_session(phone: str):
+    con = sqlite3.connect(DB)
+    con.execute('DELETE FROM messages WHERE phone=?', (phone,))
+    con.execute('DELETE FROM sessions WHERE phone=?', (phone,))
+    con.commit()
+    con.close()
+
+
 def mark_done(phone):
     con = sqlite3.connect(DB)
     con.execute("UPDATE sessions SET status='done' WHERE phone=?", (phone,))

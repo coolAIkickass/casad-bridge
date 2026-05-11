@@ -3,7 +3,7 @@ import os, threading, time, io
 from PIL import Image
 from flask import Flask, request
 from dotenv import load_dotenv
-from db import init_db, store_message, get_session, mark_done
+from db import init_db, store_message, get_session, get_session_status, reset_session, mark_done
 from whatsapp import parse_payload, download_media, send_message, send_document
 from transcribe import transcribe_audio
 from ai_parse import parse_inspection
@@ -13,7 +13,19 @@ load_dotenv()
 
 VERIFY_TOKEN = os.getenv('VERIFY_TOKEN', 'casad2024')
 DONE_DELAY   = int(os.getenv('DONE_DELAY_SECONDS', '20'))
-processed_ids = set()  # in-memory dedup cache
+
+WELCOME_MSG = (
+    "Hello CASAD team, I will help you today in creating your *inspection report*. "
+    "Please share below:\n\n"
+    "• Complete bridge details (name, location, type etc.)\n"
+    "• Site photos\n"
+    "• Observations about each photo\n"
+    "• Recommendations (if any)\n\n"
+    "Type *done* when everything is sent."
+)
+
+processed_ids  = set()           # in-memory dedup
+pending_cancels = {}             # phone → threading.Event
 
 app = Flask(__name__)
 
@@ -31,7 +43,7 @@ def webhook():
     msg = parse_payload(request.json)
     print(f"MSG RECEIVED: {msg}")
 
-    # Deduplicate — Meta sometimes delivers the same message 2-3 times
+    # Deduplicate
     msg_id = msg.get('msg_id')
     if msg_id and msg_id in processed_ids:
         print(f"DUPLICATE SKIPPED: {msg_id}")
@@ -39,16 +51,24 @@ def webhook():
     if msg_id:
         processed_ids.add(msg_id)
 
-    if msg['type'] == 'unsupported':
-        print(f"UNSUPPORTED TYPE SKIPPED")
+    if msg['type'] in ('unsupported', 'unknown') or msg.get('phone') == 'unknown':
         return 'OK', 200
 
+    phone = msg['phone']
+
+    # New session detection — send welcome on first message
+    status = get_session_status(phone)
+    if status is None or status == 'done':
+        reset_session(phone)
+        send_message(phone, WELCOME_MSG)
+
+    # Process media
     if msg['type'] == 'audio':
         audio = download_media(msg['media_id'])
         msg['content'] = transcribe_audio(audio)
+
     elif msg['type'] == 'image':
         raw_bytes = download_media(msg['media_id'])
-        # Convert to JPEG so python-docx can embed it (WhatsApp may send WebP/PNG)
         img = Image.open(io.BytesIO(raw_bytes))
         if img.mode in ('RGBA', 'P', 'LA'):
             img = img.convert('RGB')
@@ -64,20 +84,46 @@ def webhook():
         msg['media_path'] = img_path
         msg['image_data'] = img_bytes
 
+        # New photo after done → cancel pending report
+        if phone in pending_cancels:
+            pending_cancels[phone].set()
+            send_message(phone, "More photos received! Please type *done* again when you've sent everything.")
+
     store_message(msg)
 
-    if 'done' in (msg.get('content') or '').lower():
-        phone = msg['phone']
-        send_message(phone, f"Got it! Generating your report in {DONE_DELAY} seconds — make sure all photos are sent.")
-        threading.Thread(target=_generate_report, args=(phone,), daemon=True).start()
+    content_lower = (msg.get('content') or '').lower().strip()
+
+    # 'wait' → cancel pending report
+    if content_lower == 'wait' and phone in pending_cancels:
+        pending_cancels[phone].set()
+        send_message(phone, "Paused! Send your remaining items and type *done* again when ready.")
+        return 'OK', 200
+
+    # 'done' → schedule report with delay
+    if 'done' in content_lower:
+        cancel_event = threading.Event()
+        pending_cancels[phone] = cancel_event
+        send_message(
+            phone,
+            "Good job! Generating your report in ~5 minutes.\n\n"
+            "*Make sure all photos/info is sent. If not, please type 'wait'.*"
+        )
+        threading.Thread(target=_generate_report, args=(phone, cancel_event), daemon=True).start()
 
     return 'OK', 200
 
 
-def _generate_report(phone: str) -> None:
-    """Run in background thread: wait for late-arriving media, then build report."""
+def _generate_report(phone: str, cancel_event: threading.Event) -> None:
     print(f"REPORT: waiting {DONE_DELAY}s for pending media from {phone}...")
     time.sleep(DONE_DELAY)
+
+    if cancel_event.is_set():
+        print(f"REPORT CANCELLED for {phone}")
+        pending_cancels.pop(phone, None)
+        return
+
+    pending_cancels.pop(phone, None)
+
     try:
         session     = get_session(phone)
         report_json = parse_inspection(session)
@@ -102,15 +148,15 @@ def health():
 @app.route('/debug/token', methods=['GET'])
 def debug_token():
     import requests
-    token = os.getenv('WHATSAPP_TOKEN', '')
+    token    = os.getenv('WHATSAPP_TOKEN', '')
     phone_id = os.getenv('PHONE_NUMBER_ID', '')
     r = requests.get(
         f'https://graph.facebook.com/v19.0/{phone_id}',
         headers={'Authorization': f'Bearer {token}'}
     )
     return {
-        'token_length': len(token),
-        'token_preview': f'{token[:6]}...{token[-4:]}' if len(token) > 10 else 'TOO SHORT',
+        'token_length':    len(token),
+        'token_preview':   f'{token[:6]}...{token[-4:]}' if len(token) > 10 else 'TOO SHORT',
         'phone_number_id': phone_id,
         'meta_api_status': r.status_code,
         'meta_api_response': r.json()

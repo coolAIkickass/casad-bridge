@@ -151,10 +151,13 @@ def parse_inspection(session: dict) -> dict:
     messages_text = '\n'.join(
         m['content'] for m in session.get('messages', []) if m.get('content')
     )
-    photo_paths = [
-        m['media_path'] for m in session.get('messages', [])
+    photo_data = [
+        (m['media_path'], m.get('content') or '')
+        for m in session.get('messages', [])
         if m.get('media_path')
     ]
+    photo_paths    = [p for p, _ in photo_data]
+    photo_captions = [c for _, c in photo_data]
 
     print(f"PARSE: {len(session.get('messages', []))} messages, text length={len(messages_text)}, photos={len(photo_paths)}")
     print(f"FIELD NOTES:\n{messages_text}")
@@ -186,7 +189,8 @@ def parse_inspection(session: dict) -> dict:
         raise ValueError("Claude returned empty response — check field notes content")
 
     result = json.loads(raw)
-    # Always inject photo paths directly — don't rely on Claude to echo them back
-    result['photos'] = photo_paths
+    result['photos']         = photo_paths
+    result['photo_captions'] = photo_captions
     print(f"PHOTOS injected: {photo_paths}")
+    print(f"CAPTIONS injected: {photo_captions}")
     return result

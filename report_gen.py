@@ -43,7 +43,7 @@ def _fill_placeholders(doc: Document, data: dict) -> None:
                     replace_in_para(para)
 
 
-def _insert_photos_at_marker(doc: Document, marker: str, photos: list) -> None:
+def _insert_photos_at_marker(doc: Document, marker: str, photos: list, captions: list = None) -> None:
     """Find the marker paragraph and replace it with photo images + captions."""
     target = None
     for para in doc.paragraphs:
@@ -80,6 +80,17 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list) -> None:
         parent.insert(insert_pos, pic_elem)
         insert_pos += 1
 
+        # User's comment about this photo
+        user_caption = (captions[i - 1] if captions and i - 1 < len(captions) else '') or ''
+        if user_caption:
+            uc_para = doc.add_paragraph()
+            uc_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            uc_para.add_run(user_caption).italic = True
+            uc_elem = uc_para._element
+            parent.remove(uc_elem)
+            parent.insert(insert_pos, uc_elem)
+            insert_pos += 1
+
         # Page break after every 2 photos (except the last)
         if i % 2 == 0 and i < len(photos):
             pb_para = doc.add_paragraph()
@@ -95,18 +106,20 @@ def build_docx(report_json: dict) -> str:
     doc = Document(TEMPLATE_PATH)
     _fill_placeholders(doc, report_json)
 
-    raw_photos = report_json.get('photos', [])
-    print(f"BUILD_DOCX raw photos from JSON: {raw_photos}")
-    for p in raw_photos:
-        print(f"  path={p!r}  exists={os.path.exists(p) if p else 'N/A'}")
-    photos = [p for p in raw_photos if p and os.path.exists(p)]
+    raw_photos   = report_json.get('photos', [])
+    raw_captions = report_json.get('photo_captions', [])
+
+    # Keep only photos whose files exist, carrying captions along
+    pairs = [(p, c) for p, c in zip(raw_photos, raw_captions + [''] * len(raw_photos))
+             if p and os.path.exists(p)]
+    photos   = [p for p, _ in pairs]
+    captions = [c for _, c in pairs]
     print(f"BUILD_DOCX usable photos: {photos}")
 
     if photos:
-        # Split photos: first half → Appendix A (general), rest → Appendix B (damage)
         mid = len(photos) // 2 or len(photos)
-        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_A]]', photos[:mid])
-        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_B]]', photos[mid:] or photos)
+        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_A]]', photos[:mid],   captions[:mid])
+        _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_B]]', photos[mid:] or photos, captions[mid:] or captions)
     else:
         # No photos submitted — replace markers with a note
         for marker in ('[[PHOTO_APPENDIX_A]]', '[[PHOTO_APPENDIX_B]]'):

@@ -225,22 +225,6 @@ def parse_inspection(session: dict) -> dict:
     print(f"FIELD NOTES:\n{messages_text}")
     print(f"PHOTO DESCRIPTIONS: {photo_descriptions}")
 
-    # Re-apply defect circle marking now that we have full descriptions
-    # (voice notes sent AFTER a photo weren't available when the image first arrived)
-    for path, desc in zip(photo_paths, photo_descriptions):
-        if not desc or not os.path.exists(path):
-            continue
-        try:
-            with open(path, 'rb') as f:
-                original = f.read()
-            marked = mark_defect(original, desc)
-            if marked != original:
-                with open(path, 'wb') as f:
-                    f.write(marked)
-                print(f"REMARK: circle applied to {path}")
-        except Exception as e:
-            print(f"REMARK FAILED for {path}: {e}")
-
     user_content = (
         f"Schema:\n{json.dumps(SCHEMA, indent=2)}\n\n"
         f"Field notes:\n{messages_text}\n\n"
@@ -292,7 +276,40 @@ def parse_inspection(session: dict) -> dict:
     cats = result.get('photo_categories') or []
     if len(cats) != len(photo_paths):
         cats = ['damage'] * len(photo_paths)
+
+    # Safety net: if description contains any defect keyword, force 'damage'
+    # regardless of what Claude classified — prevents misclassification
+    DEFECT_KEYWORDS = {
+        'crack', 'cracking', 'spalling', 'leaching', 'leakage', 'honeycombing',
+        'honey combing', 'corrosion', 'rust', 'exposed rebar', 'exposed reinforcement',
+        'delamination', 'settlement', 'scour', 'tilting', 'distortion', 'displacement',
+        'erosion', 'damage', 'defect', 'distress', 'deterioration', 'failure',
+        'diaphragm', 'pier cap', 'abutment', 'girder', 'soffit', 'bearing',
+    }
+    for i, (cat, desc) in enumerate(zip(cats, photo_descriptions)):
+        if cat != 'damage' and desc:
+            desc_lower = desc.lower()
+            if any(kw in desc_lower for kw in DEFECT_KEYWORDS):
+                print(f"KEYWORD OVERRIDE: photo {i} forced to 'damage' (was '{cat}') — desc: {desc[:60]}")
+                cats[i] = 'damage'
+
     result['photo_categories'] = cats
+
+    # Apply defect circle marking ONLY to damage photos, using full descriptions
+    # (circle marking happens here, not on arrival, so we have voice note context)
+    for path, desc, cat in zip(photo_paths, photo_descriptions, cats):
+        if cat != 'damage' or not desc or not os.path.exists(path):
+            continue
+        try:
+            with open(path, 'rb') as f:
+                original = f.read()
+            marked = mark_defect(original, desc)
+            if marked != original:
+                with open(path, 'wb') as f:
+                    f.write(marked)
+                print(f"CIRCLE MARKED: {path}")
+        except Exception as e:
+            print(f"CIRCLE MARK FAILED for {path}: {e}")
 
     print(f"PHOTOS injected: {photo_paths}")
     print(f"TITLES: {result['photo_titles']}")

@@ -8,7 +8,6 @@ from whatsapp import parse_payload, download_media, send_message, send_document
 from transcribe import transcribe_audio
 from ai_parse import parse_inspection
 from report_gen import build_docx
-from mark_image import mark_defect
 
 load_dotenv()
 
@@ -81,10 +80,6 @@ def webhook():
         buf = io.BytesIO()
         img.save(buf, format='JPEG', quality=85)
         img_bytes = buf.getvalue()
-
-        # Draw defect circle if user provided a caption with this photo
-        caption = msg.get('content') or ''
-        img_bytes = mark_defect(img_bytes, caption)
 
         media_dir = os.getenv('MEDIA_DIR', 'media')
         os.makedirs(media_dir, exist_ok=True)

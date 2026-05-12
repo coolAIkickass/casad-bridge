@@ -136,14 +136,16 @@ r2.font.color.rgb = RGBColor.from_string(DARK_TEXT)
 sub.paragraph_format.space_after = Pt(10)
 
 # ── Main 3-column table ───────────────────────────────────────────────────────
-# Column widths (A4 content ~17 cm): SR 0.7 | Description 7.5 | Details 8.8
+# Column widths (A4 content ~17 cm): SR 0.3 | Description 7.9 | Details 8.8
 table = doc.add_table(rows=0, cols=3)
 table.style = "Table Grid"
 
-col_widths = [Cm(0.3), Cm(7.9), Cm(8.8)]
-for i, w in enumerate(col_widths):
-    for cell in table.columns[i].cells:
-        cell.width = w
+col_widths_cm = [0.3, 7.9, 8.8]   # cm
+col_widths     = [Cm(x) for x in col_widths_cm]
+
+def cm_to_dxa(cm):
+    """Convert centimetres to DXA (twentieths of a point), which Word uses for w:tcW."""
+    return int(round(cm * 1440 / 2.54))
 
 # Column headers
 hrow = table.add_row()
@@ -151,7 +153,6 @@ for i, (txt, w) in enumerate(zip(["SR\nNO.", "DESCRIPTION", "DETAILS"], col_widt
     cell_para(hrow.cells[i], txt, bold=True, size=10, color=WHITE, align=WD_ALIGN_PARAGRAPH.CENTER)
     set_cell_bg(hrow.cells[i], HEADER_BG)
     set_cell_borders(hrow.cells[i], "FFFFFF")
-    hrow.cells[i].width = w
 
 # ═══ SECTION A ═══════════════════════════════════════════════════════════════
 section_header(table, "(A)  DETAILS OF EXISTING BRIDGE")
@@ -315,19 +316,62 @@ span_row(table, "Recommendations based on IRC SP: 40-2019", bg=SECTION_BG, bold=
 add_row(table, "", "Condition Rating\n(Excellent / Good / Fair / Poor / Critical)", "{{rec_irc_condition}}")
 add_row(table, "", "Recommended Action",                                             "{{rec_irc_action}}")
 
-# ── Fix column widths (python-docx doesn't always persist widths set on columns) ─
-for row in table.rows:
-    for i, (cell, w) in enumerate(zip(row.cells, col_widths)):
-        cell.width = w
+# ── Enforce fixed column widths via XML (python-docx cell.width is unreliable) ─
+tbl = table._tbl
 
-# ── Force fixed table layout so Word respects column widths ──────────────────
-tblPr = table._tbl.find(qn('w:tblPr'))
+# 1. tblPr: total width + fixed layout
+tblPr = tbl.find(qn('w:tblPr'))
 if tblPr is None:
     tblPr = OxmlElement('w:tblPr')
-    table._tbl.insert(0, tblPr)
+    tbl.insert(0, tblPr)
+
+# Remove any existing tblW python-docx may have written (it writes w=0)
+for old in tblPr.findall(qn('w:tblW')):
+    tblPr.remove(old)
+total_dxa = sum(cm_to_dxa(x) for x in col_widths_cm)
+tblW = OxmlElement('w:tblW')
+tblW.set(qn('w:w'),    str(total_dxa))
+tblW.set(qn('w:type'), 'dxa')
+tblPr.append(tblW)
+
+# Remove any existing tblLayout before adding ours
+for old in tblPr.findall(qn('w:tblLayout')):
+    tblPr.remove(old)
 tblLayout = OxmlElement('w:tblLayout')
 tblLayout.set(qn('w:type'), 'fixed')
 tblPr.append(tblLayout)
+
+# 2. tblGrid: declares column widths — required for tblLayout=fixed to work
+for old in tbl.findall(qn('w:tblGrid')):
+    tbl.remove(old)
+tblGrid = OxmlElement('w:tblGrid')
+col_dxa = [cm_to_dxa(x) for x in col_widths_cm]
+for dxa in col_dxa:
+    gridCol = OxmlElement('w:gridCol')
+    gridCol.set(qn('w:w'), str(dxa))
+    tblGrid.append(gridCol)
+tblPr.addnext(tblGrid)
+
+# 3. Set w:tcW on every w:tc directly (skip duplicates from merged cells)
+for tr in tbl.findall(qn('w:tr')):
+    col_idx = 0
+    for tc in tr.findall(qn('w:tc')):
+        tcPr = tc.find(qn('w:tcPr'))
+        if tcPr is None:
+            tcPr = OxmlElement('w:tcPr')
+            tc.insert(0, tcPr)
+        # Find gridSpan to handle merged columns
+        gs_el = tcPr.find(qn('w:gridSpan'))
+        span  = int(gs_el.get(qn('w:val'), 1)) if gs_el is not None else 1
+        # Width = sum of spanned column DXA values
+        merged_dxa = sum(col_dxa[min(col_idx + k, len(col_dxa) - 1)] for k in range(span))
+        tcW = tcPr.find(qn('w:tcW'))
+        if tcW is None:
+            tcW = OxmlElement('w:tcW')
+            tcPr.insert(0, tcW)
+        tcW.set(qn('w:w'),    str(merged_dxa))
+        tcW.set(qn('w:type'), 'dxa')
+        col_idx += span
 
 # ── Signature block ───────────────────────────────────────────────────────────
 doc.add_paragraph()

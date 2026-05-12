@@ -1,7 +1,7 @@
 # ai_parse.py — Claude API: field notes → structured JSON
 import json, os
 import anthropic
-from mark_image import mark_defect
+from mark_image import get_defect_coords
 
 client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
 
@@ -417,30 +417,31 @@ def parse_inspection(session: dict) -> dict:
 
     result['photo_categories'] = cats
 
-    # Apply defect circle marking ONLY to damaged photos — run in parallel
+    # Locate defects in damage photos — run in parallel, return coords (no image modification)
     import concurrent.futures
 
-    def _mark_one(args):
+    def _locate_one(args):
         path, desc = args
         try:
             with open(path, 'rb') as f:
-                original = f.read()
-            marked = mark_defect(original, desc)
-            if marked != original:
-                with open(path, 'wb') as f:
-                    f.write(marked)
-                print(f"CIRCLE MARKED: {path}")
+                img_bytes = f.read()
+            return (path, get_defect_coords(img_bytes, desc))
         except Exception as e:
-            print(f"CIRCLE MARK FAILED for {path}: {e}")
+            print(f"DEFECT LOCATE FAILED for {path}: {e}")
+            return (path, None)
 
-    mark_jobs = [
+    locate_jobs = [
         (path, desc)
         for path, desc, cat in zip(photo_paths, photo_descriptions, cats)
         if cat in ('damage', 'damaged') and desc and os.path.exists(path)
     ]
-    if mark_jobs:
+    photo_coords = {path: None for path in photo_paths}
+    if locate_jobs:
         with concurrent.futures.ThreadPoolExecutor() as pool:
-            list(pool.map(_mark_one, mark_jobs))
+            for path, coords in pool.map(_locate_one, locate_jobs):
+                photo_coords[path] = coords
+
+    result['photo_coords'] = [photo_coords.get(p) for p in photo_paths]
 
     print(f"PHOTOS injected: {photo_paths}")
     print(f"TITLES: {result['photo_titles']}")

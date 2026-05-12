@@ -127,8 +127,66 @@ def _shade_cell(cell, hex_color: str) -> None:
     tcPr.append(shd)
 
 
+def _add_defect_circle(para, x_pct: float, y_pct: float,
+                        img_w_emu: int, img_h_emu: int, shape_id: int) -> None:
+    """Append an editable red oval DrawingML shape (wp:anchor) to the paragraph.
+
+    The shape floats over the image at the detected defect location.
+    Engineers can select, move, or resize it in Word like any shape.
+    """
+    from lxml import etree
+
+    RADIUS = max(400000, min(img_w_emu, img_h_emu) // 7)  # ~proportional to image size
+    space_before_emu = 76200  # 6pt space_before on img_para
+
+    cx = int(x_pct * img_w_emu)
+    cy = space_before_emu + int(y_pct * img_h_emu)
+
+    left = max(0, cx - RADIUS)
+    top  = max(0, cy - RADIUS)
+    diam = RADIUS * 2
+
+    xml = (
+        f'<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        f' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"'
+        f' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+        f' xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+        f'<w:drawing>'
+        f'<wp:anchor distT="0" distB="0" distL="0" distR="0"'
+        f' simplePos="0" relativeHeight="251658240" behindDoc="0"'
+        f' locked="0" layoutInCell="1" allowOverlap="1">'
+        f'<wp:simplePos x="0" y="0"/>'
+        f'<wp:positionH relativeFrom="column"><wp:posOffset>{left}</wp:posOffset></wp:positionH>'
+        f'<wp:positionV relativeFrom="paragraph"><wp:posOffset>{top}</wp:posOffset></wp:positionV>'
+        f'<wp:extent cx="{diam}" cy="{diam}"/>'
+        f'<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+        f'<wp:wrapNone/>'
+        f'<wp:docPr id="{shape_id}" name="DefectCircle{shape_id}"/>'
+        f'<wp:cNvGraphicFramePr/>'
+        f'<a:graphic>'
+        f'<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+        f'<wps:wsp>'
+        f'<wps:cNvSpPr><a:spLocks noChangeArrowheads="1"/></wps:cNvSpPr>'
+        f'<wps:spPr>'
+        f'<a:xfrm><a:off x="0" y="0"/><a:ext cx="{diam}" cy="{diam}"/></a:xfrm>'
+        f'<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>'
+        f'<a:noFill/>'
+        f'<a:ln w="57150" cmpd="sng"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>'
+        f'</wps:spPr>'
+        f'<wps:bodyPr/>'
+        f'</wps:wsp>'
+        f'</a:graphicData>'
+        f'</a:graphic>'
+        f'</wp:anchor>'
+        f'</w:drawing>'
+        f'</w:r>'
+    )
+    para._p.append(etree.fromstring(xml))
+
+
 def _insert_photos_at_marker(doc: Document, marker: str, photos: list,
-                              titles: list = None, fig_offset: int = 0,
+                              titles: list = None, coords: list = None,
+                              fig_offset: int = 0,
                               show_figure_label: bool = True) -> None:
     """Find the marker paragraph and replace it with bordered photo tables."""
     target = None
@@ -143,11 +201,15 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list,
     insert_pos = list(parent).index(target._element)
     parent.remove(target._element)
 
-    valid = [(p, (titles[i] if titles and i < len(titles) else ''))
+    valid = [(p,
+              titles[i] if titles and i < len(titles) else '',
+              coords[i] if coords and i < len(coords) else None)
              for i, p in enumerate(photos)
              if p and os.path.exists(p)]
 
-    for idx, (photo_path, title) in enumerate(valid, 1):
+    shape_id_counter = fig_offset * 100 + 1   # unique IDs across appendices
+
+    for idx, (photo_path, title, photo_coords) in enumerate(valid, 1):
         if show_figure_label:
             cap_text = f'Figure {fig_offset + idx}'
             if title:
@@ -166,6 +228,22 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list,
         img_para.paragraph_format.space_before = Pt(6)
         img_para.paragraph_format.space_after  = Pt(6)
         img_para.add_run().add_picture(photo_path, width=Inches(5.5))
+
+        # Overlay an editable red oval at the detected defect location
+        if photo_coords:
+            try:
+                from PIL import Image as _PIL
+                with _PIL.open(photo_path) as _img:
+                    w_px, h_px = _img.size
+                img_w_emu = int(5.5 * 914400)
+                img_h_emu = int(img_w_emu * h_px / w_px)
+                _add_defect_circle(img_para,
+                                   photo_coords[0], photo_coords[1],
+                                   img_w_emu, img_h_emu,
+                                   shape_id=shape_id_counter)
+                shape_id_counter += 1
+            except Exception as e:
+                print(f"ADD CIRCLE SHAPE FAILED for {photo_path}: {e}")
 
         # Row 1 — caption, grey background
         cap_cell = tbl.rows[1].cells[0]
@@ -234,6 +312,7 @@ def build_docx(report_json: dict) -> str:
     raw_photos     = report_json.get('photos', [])
     raw_titles     = report_json.get('photo_titles', [])
     raw_categories = report_json.get('photo_categories', [])
+    raw_coords     = report_json.get('photo_coords', [])
 
     # Safety: restore any missing photo files from session BLOB data
     session_messages = report_json.get('_messages', [])
@@ -253,38 +332,41 @@ def build_docx(report_json: dict) -> str:
     n = len(raw_photos)
     raw_titles     = list(raw_titles)     + [''] * n
     raw_categories = list(raw_categories) + ['damage'] * n
+    raw_coords     = list(raw_coords)     + [None] * n
 
-    # Split into general and damage buckets, keeping titles aligned
-    general_photos, general_titles = [], []
-    damage_photos,  damage_titles  = [], []
+    # Split into general and damage buckets, keeping titles/coords aligned
+    general_photos, general_titles, general_coords = [], [], []
+    damage_photos,  damage_titles,  damage_coords  = [], [], []
 
-    for path, title, cat in zip(raw_photos, raw_titles, raw_categories):
+    for path, title, cat, coord in zip(raw_photos, raw_titles, raw_categories, raw_coords):
         if not path or not os.path.exists(path):
             continue
         if str(cat).lower() in ('damage', 'damaged'):
             damage_photos.append(path)
             damage_titles.append(title)
+            damage_coords.append(coord)
         else:
             general_photos.append(path)
             general_titles.append(title)
+            general_coords.append(coord)
 
     print(f"BUILD_DOCX general photos: {general_photos}")
     print(f"BUILD_DOCX damage  photos: {damage_photos}")
 
-    # Insert into Appendix A (general) — no figure numbering
+    # Insert into Appendix A (general) — no figure numbering, no defect circles
     if general_photos:
         _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_A]]', general_photos, general_titles,
-                                  fig_offset=0, show_figure_label=False)
+                                  coords=None, fig_offset=0, show_figure_label=False)
     else:
         for para in doc.paragraphs:
             if para.text.strip() == '[[PHOTO_APPENDIX_A]]':
                 para.runs[0].text = 'No general photographs submitted.'
                 break
 
-    # Insert into Appendix B (damage) — figure numbers always start at 1
+    # Insert into Appendix B (damage) — figure numbers start at 1, with editable circles
     if damage_photos:
         _insert_photos_at_marker(doc, '[[PHOTO_APPENDIX_B]]', damage_photos, damage_titles,
-                                  fig_offset=0)
+                                  coords=damage_coords, fig_offset=0)
     else:
         for para in doc.paragraphs:
             if para.text.strip() == '[[PHOTO_APPENDIX_B]]':

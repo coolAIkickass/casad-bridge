@@ -136,7 +136,11 @@ def webhook():
         store_message(msg)           # creates the session row in DB
         set_session_state(phone, 'menu')
         send_message(phone, WELCOME_MSG)
-        return 'OK', 200
+        # If they already sent a valid menu number, fall through and handle it
+        # immediately rather than making them send it again.
+        if content_lower not in VALID_OPTIONS or content_lower == '6':
+            return 'OK', 200
+        # else: fall through with state='menu' so the menu handler routes them
 
     state, photo_count = get_session_state(phone)
 

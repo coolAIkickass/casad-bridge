@@ -231,50 +231,63 @@ SCHEMA = {
 }
 
 
-def _find_photo_description(messages: list, photo_idx: int) -> str:
-    """Return the best description for a photo.
+def _find_photo_description(messages: list, photo_idx: int,
+                             claimed: set = None) -> str:
+    """Return the best description for a photo, marking the source as claimed.
 
     Priority:
       1. Inline WhatsApp caption on the photo itself
       2. Text/voice in the SAME section (same category) that explicitly
          references this photo number (e.g. "photo 2 ...")
-      3. Nearest text/voice in the SAME section, up to 3 messages before
-      4. Nearest text/voice in the SAME section, up to 3 messages after
+      3. Nearest unclaimed text/voice in the SAME section, up to 3 before
+      4. Nearest unclaimed text/voice in the SAME section, up to 3 after
+
+    claimed: set of message indices already used as descriptions. Updated
+             in-place so subsequent calls skip those messages.
     """
+    if claimed is None:
+        claimed = set()
+
     m = messages[photo_idx]
     photo_cat = m.get('category', 'damaged')
     photo_num = m.get('photo_num')
 
-    # 1. Inline caption sent with the photo
+    # 1. Inline caption sent with the photo (photo's own content — never shared)
     if m.get('content'):
         return m['content']
 
-    def _is_same_section_text(msg):
+    def _is_available_text(idx):
+        if idx in claimed:
+            return False
+        msg = messages[idx]
         content = (msg.get('content') or '').strip()
         return (bool(content)
                 and not msg.get('media_path')
                 and msg.get('category') == photo_cat)
 
-    # 2. Explicit numeric reference within the same section
+    # 2. Explicit numeric reference within the same section (unclaimed only)
     if photo_num:
         search_range = list(range(max(0, photo_idx - 5), photo_idx)) + \
                        list(range(photo_idx + 1, min(len(messages), photo_idx + 6)))
         patterns = (f'photo {photo_num}', f'pic {photo_num}',
                     f'image {photo_num}', f'{photo_num}.')
         for k in search_range:
-            if _is_same_section_text(messages[k]):
+            if _is_available_text(k):
                 txt = messages[k]['content'].lower()
                 if any(p in txt for p in patterns):
+                    claimed.add(k)
                     return messages[k]['content'].strip()
 
-    # 3. Nearest same-section text/voice before the photo
+    # 3. Nearest unclaimed same-section text/voice BEFORE the photo
     for k in range(photo_idx - 1, max(photo_idx - 4, -1), -1):
-        if _is_same_section_text(messages[k]):
+        if _is_available_text(k):
+            claimed.add(k)
             return messages[k]['content'].strip()
 
-    # 4. Nearest same-section text/voice after the photo
+    # 4. Nearest unclaimed same-section text/voice AFTER the photo
     for k in range(photo_idx + 1, min(photo_idx + 4, len(messages))):
-        if _is_same_section_text(messages[k]):
+        if _is_available_text(k):
+            claimed.add(k)
             return messages[k]['content'].strip()
 
     return ''
@@ -319,9 +332,11 @@ def parse_inspection(session: dict) -> dict:
     photo_descriptions       = []   # same, passed to Claude for title generation
     photo_categories_from_db = []   # set by menu state at collection time
 
+    claimed_text_indices = set()   # track which text msgs have been used as photo captions
+
     for j, m in enumerate(messages):
         if m.get('media_path'):
-            desc = _find_photo_description(messages, j)
+            desc = _find_photo_description(messages, j, claimed_text_indices)
             photo_paths.append(m['media_path'])
             photo_captions.append(desc)
             photo_descriptions.append(desc)

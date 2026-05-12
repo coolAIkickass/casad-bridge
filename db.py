@@ -8,11 +8,13 @@ DB = os.getenv('DB_PATH', 'casad.db')
 def init_db():
     con = sqlite3.connect(DB)
     con.execute('''CREATE TABLE IF NOT EXISTS sessions
-        (phone TEXT PRIMARY KEY, bridge TEXT, status TEXT,
+        (id INTEGER PRIMARY KEY AUTOINCREMENT,
+         phone TEXT, bridge TEXT, status TEXT,
          state TEXT, photo_count INTEGER,
-         started_at TEXT)''')
+         started_at TEXT, ended_at TEXT)''')
     con.execute('''CREATE TABLE IF NOT EXISTS messages
         (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT,
+         session_id INTEGER,
          type TEXT, content TEXT, media_path TEXT,
          category TEXT, photo_num INTEGER,
          seq INTEGER, created_at TEXT, image_data BLOB)''')
@@ -23,6 +25,9 @@ def init_db():
         'ALTER TABLE messages ADD COLUMN photo_num INTEGER',
         'ALTER TABLE sessions ADD COLUMN state TEXT',
         'ALTER TABLE sessions ADD COLUMN photo_count INTEGER',
+        'ALTER TABLE sessions ADD COLUMN ended_at TEXT',
+        'ALTER TABLE sessions ADD COLUMN id INTEGER',
+        'ALTER TABLE messages ADD COLUMN session_id INTEGER',
     ):
         try:
             con.execute(col_sql)
@@ -32,16 +37,29 @@ def init_db():
     con.close()
 
 
+def _active_session_id(con, phone):
+    """Return the rowid of the current active (not ended) session for this phone."""
+    row = con.execute(
+        'SELECT id FROM sessions WHERE phone=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1',
+        (phone,)
+    ).fetchone()
+    return row[0] if row else None
+
+
 def store_message(msg):
     con = sqlite3.connect(DB)
+    # Create session row if none exists yet
+    sid = _active_session_id(con, msg['phone'])
+    if sid is None:
+        con.execute(
+            'INSERT INTO sessions (phone, bridge, status, state, photo_count, started_at) VALUES (?,?,?,?,?,?)',
+            (msg['phone'], msg.get('bridge', ''), 'active', 'menu', 0, datetime.utcnow().isoformat())
+        )
+        sid = con.execute('SELECT last_insert_rowid()').fetchone()[0]
     con.execute(
-        'INSERT OR IGNORE INTO sessions VALUES (?,?,?,?,?,?)',
-        (msg['phone'], msg.get('bridge', ''), 'active',
-         'menu', 0, datetime.utcnow().isoformat())
-    )
-    con.execute(
-        'INSERT INTO messages VALUES (NULL,?,?,?,?,?,?,?,datetime("now"),?)',
-        (msg['phone'], msg['type'], msg.get('content'),
+        'INSERT INTO messages (phone, session_id, type, content, media_path, category, photo_num, seq, created_at, image_data) '
+        'VALUES (?,?,?,?,?,?,?,?,datetime("now"),?)',
+        (msg['phone'], sid, msg['type'], msg.get('content'),
          msg.get('media_path'), msg.get('category'),
          msg.get('photo_num'), msg.get('seq', 0), msg.get('image_data'))
     )
@@ -52,17 +70,17 @@ def store_message(msg):
 def get_session(phone):
     con = sqlite3.connect(DB)
     con.row_factory = sqlite3.Row
-    session  = con.execute('SELECT * FROM sessions WHERE phone=?', (phone,)).fetchone()
+    sid = _active_session_id(con, phone)
+    if sid is None:
+        con.close()
+        return None
+    session  = con.execute('SELECT * FROM sessions WHERE id=?', (sid,)).fetchone()
     messages = con.execute(
-        'SELECT * FROM messages WHERE phone=? ORDER BY seq, created_at', (phone,)
+        'SELECT * FROM messages WHERE session_id=? ORDER BY seq, created_at', (sid,)
     ).fetchall()
     con.close()
-    if not session:
-        return None
 
     rows = [dict(m) for m in messages]
-
-    # Restore image files from BLOB if deleted by a redeploy
     os.makedirs(os.getenv('MEDIA_DIR', 'media'), exist_ok=True)
     for m in rows:
         if m.get('image_data') and m.get('media_path') and not os.path.exists(m['media_path']):
@@ -74,48 +92,64 @@ def get_session(phone):
 
 def get_session_status(phone: str):
     con = sqlite3.connect(DB)
-    row = con.execute('SELECT status FROM sessions WHERE phone=?', (phone,)).fetchone()
+    row = con.execute(
+        'SELECT status FROM sessions WHERE phone=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1',
+        (phone,)
+    ).fetchone()
     con.close()
     return row[0] if row else None
 
 
 def get_session_state(phone: str):
     con = sqlite3.connect(DB)
-    row = con.execute('SELECT state, photo_count FROM sessions WHERE phone=?', (phone,)).fetchone()
+    row = con.execute(
+        'SELECT state, photo_count FROM sessions WHERE phone=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1',
+        (phone,)
+    ).fetchone()
     con.close()
     return (row[0] or 'menu', row[1] or 0) if row else ('menu', 0)
 
 
 def set_session_state(phone: str, state: str):
     con = sqlite3.connect(DB)
-    con.execute('UPDATE sessions SET state=? WHERE phone=?', (state, phone))
+    sid = _active_session_id(con, phone)
+    if sid:
+        con.execute('UPDATE sessions SET state=? WHERE id=?', (state, sid))
     con.commit()
     con.close()
 
 
 def increment_photo_count(phone: str) -> int:
-    """Increment and return the new photo count for this session."""
     con = sqlite3.connect(DB)
-    con.execute(
-        'UPDATE sessions SET photo_count = COALESCE(photo_count, 0) + 1 WHERE phone=?',
-        (phone,)
-    )
-    row = con.execute('SELECT photo_count FROM sessions WHERE phone=?', (phone,)).fetchone()
+    sid = _active_session_id(con, phone)
+    if sid:
+        con.execute(
+            'UPDATE sessions SET photo_count = COALESCE(photo_count, 0) + 1 WHERE id=?', (sid,)
+        )
+    row = con.execute('SELECT photo_count FROM sessions WHERE id=?', (sid,)).fetchone()
     con.commit()
     con.close()
     return row[0] if row else 1
 
 
 def reset_session(phone: str):
+    """End the current active session (stamp ended_at) rather than deleting it."""
     con = sqlite3.connect(DB)
-    con.execute('DELETE FROM messages WHERE phone=?', (phone,))
-    con.execute('DELETE FROM sessions WHERE phone=?', (phone,))
+    con.execute(
+        "UPDATE sessions SET ended_at=?, status='exited' WHERE phone=? AND ended_at IS NULL",
+        (datetime.utcnow().isoformat(), phone)
+    )
     con.commit()
     con.close()
 
 
 def mark_done(phone: str):
     con = sqlite3.connect(DB)
-    con.execute("UPDATE sessions SET status='done' WHERE phone=?", (phone,))
+    sid = _active_session_id(con, phone)
+    if sid:
+        con.execute(
+            "UPDATE sessions SET status='done', ended_at=? WHERE id=?",
+            (datetime.utcnow().isoformat(), sid)
+        )
     con.commit()
     con.close()

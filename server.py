@@ -275,26 +275,53 @@ def dashboard():
         return 'Unauthorized — add ?token=YOUR_TOKEN', 403
 
     import sqlite3 as _sq
-    db = os.getenv('DB_PATH', 'casad.db')
+    from datetime import datetime as _dt, timedelta as _td
+
+    show_all = request.args.get('all') == '1'
+    token    = request.args.get('token', '')
+
+    db  = os.getenv('DB_PATH', 'casad.db')
     con = _sq.connect(db)
     con.row_factory = _sq.Row
 
-    sessions = con.execute(
-        'SELECT * FROM sessions ORDER BY started_at DESC'
-    ).fetchall()
+    if show_all:
+        sessions = con.execute(
+            'SELECT * FROM sessions ORDER BY started_at DESC'
+        ).fetchall()
+    else:
+        cutoff = (_dt.utcnow() - _td(hours=3)).isoformat()
+        sessions = con.execute(
+            'SELECT * FROM sessions WHERE started_at >= ? ORDER BY started_at DESC',
+            (cutoff,)
+        ).fetchall()
+
+    # Total count for the toggle link
+    total_all = con.execute('SELECT COUNT(*) FROM sessions').fetchone()[0]
 
     session_data = []
     for s in sessions:
-        phone = s['phone']
-        msgs  = con.execute(
+        sid  = s['id']
+        msgs = con.execute(
             'SELECT type, content, category, photo_num, created_at, media_path '
-            'FROM messages WHERE phone=? ORDER BY id',
-            (phone,)
-        ).fetchall()
+            'FROM messages WHERE session_id=? ORDER BY id',
+            (sid,)
+        ).fetchall() if sid else []
+        # Fallback for old rows without session_id
+        if not msgs and not sid:
+            msgs = con.execute(
+                'SELECT type, content, category, photo_num, created_at, media_path '
+                'FROM messages WHERE phone=? ORDER BY id',
+                (s['phone'],)
+            ).fetchall()
         session_data.append((dict(s), [dict(m) for m in msgs]))
     con.close()
 
-    STATUS_COLOR = {'active': '#2e7d32', 'done': '#1565c0', 'error': '#c62828'}
+    STATUS_COLOR = {
+        'active': '#2e7d32',
+        'done':   '#1565c0',
+        'exited': '#e65100',
+        'error':  '#c62828',
+    }
     CATEGORY_ICON = {
         'bridge_details':  '🏗',
         'damaged':         '🔴',
@@ -312,17 +339,19 @@ def dashboard():
         state   = sess.get('state', '-')
         photos  = sess.get('photo_count', 0)
         started = (sess.get('started_at') or '')[:16].replace('T', ' ')
+        ended   = (sess.get('ended_at') or '')[:16].replace('T', ' ')
         sc      = STATUS_COLOR.get(status, '#555')
+        ended_html = f'<span style="color:#999;font-size:12px">Ended {ended} UTC</span>' if ended else ''
 
         msg_rows = ''
         for m in msgs:
-            mtype    = m['type'] or ''
-            content  = (m['content'] or '').replace('<', '&lt;').replace('>', '&gt;')
-            cat      = m.get('category')
-            icon     = CATEGORY_ICON.get(cat, '')
-            pnum     = f' 📸{m["photo_num"]}' if m.get('photo_num') else ''
-            ts       = (m.get('created_at') or '')[:16].replace('T', ' ')
-            has_img  = '🖼 ' if m.get('media_path') else ''
+            mtype   = m['type'] or ''
+            content = (m['content'] or '').replace('<', '&lt;').replace('>', '&gt;')
+            cat     = m.get('category')
+            icon    = CATEGORY_ICON.get(cat, '')
+            pnum    = f' 📸{m["photo_num"]}' if m.get('photo_num') else ''
+            ts      = (m.get('created_at') or '')[:16].replace('T', ' ')
+            has_img = '🖼 ' if m.get('media_path') else ''
             cat_label = f'<span style="color:#888;font-size:11px">{icon} {cat or ""}{pnum}</span>' if cat else ''
             content_display = (has_img + content[:300] + ('…' if len(content) > 300 else '')) or '<em style="color:#aaa">—</em>'
             msg_rows += (
@@ -341,7 +370,8 @@ def dashboard():
             <span style="background:{sc};color:#fff;padding:2px 8px;border-radius:12px;font-size:12px">{status}</span>
             <span style="color:#555;font-size:13px">State: <b>{state}</b></span>
             <span style="color:#555;font-size:13px">📸 {photos} photo(s)</span>
-            <span style="color:#999;font-size:12px;margin-left:auto">Started {started} UTC</span>
+            <span style="color:#999;font-size:12px">Started {started} UTC</span>
+            {ended_html}
           </div>
           <div style="overflow-x:auto">
             <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -363,7 +393,15 @@ def dashboard():
     total    = len(session_data)
     active_n = sum(1 for s, _ in session_data if s.get('status') == 'active')
     done_n   = sum(1 for s, _ in session_data if s.get('status') == 'done')
-    now_utc  = __import__('datetime').datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    exited_n = sum(1 for s, _ in session_data if s.get('status') == 'exited')
+    now_utc  = _dt.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+
+    if show_all:
+        toggle_html = f'<a href="/dashboard?token={token}" style="color:#1565c0;font-size:13px">← Show last 3 hours only</a>'
+        period_label = f'All time ({total_all} sessions)'
+    else:
+        toggle_html = f'<a href="/dashboard?token={token}&all=1" style="color:#1565c0;font-size:13px">Show all {total_all} sessions →</a>'
+        period_label = 'Last 3 hours'
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -385,12 +423,14 @@ def dashboard():
   <span style="margin-left:auto;font-size:13px;opacity:.7">Last loaded: {now_utc} UTC &nbsp;·&nbsp; Refresh page to update</span>
 </div>
 <div style="padding:16px 24px">
-  <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
-    <span class="badge" style="background:#e3f2fd;color:#1565c0">Total sessions: {total}</span>
+  <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+    <span class="badge" style="background:#e3f2fd;color:#1565c0">{period_label}: {total} sessions</span>
     <span class="badge" style="background:#e8f5e9;color:#2e7d32">Active: {active_n}</span>
     <span class="badge" style="background:#e3f2fd;color:#1565c0">Report generated: {done_n}</span>
+    <span class="badge" style="background:#fff3e0;color:#e65100">Exited: {exited_n}</span>
+    <span style="margin-left:auto">{toggle_html}</span>
   </div>
-  {rows_html or '<p style="color:#aaa;text-align:center;margin-top:48px">No sessions yet — waiting for testers…</p>'}
+  {rows_html or '<p style="color:#aaa;text-align:center;margin-top:48px">No sessions in this period.</p>'}
 </div>
 </body>
 </html>'''

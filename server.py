@@ -1,9 +1,11 @@
 # server.py — CASAD Bridge Inspection Automation Pipeline
-import os, threading, time, io
+import os, threading, io
 from PIL import Image
 from flask import Flask, request
 from dotenv import load_dotenv
-from db import init_db, store_message, get_session, get_session_status, reset_session, mark_done
+from db import (init_db, store_message, get_session, get_session_status,
+                get_session_state, set_session_state, increment_photo_count,
+                reset_session, mark_done)
 from whatsapp import parse_payload, download_media, send_message, send_document
 from transcribe import transcribe_audio
 from ai_parse import parse_inspection
@@ -12,21 +14,37 @@ from report_gen import build_docx
 load_dotenv()
 
 VERIFY_TOKEN = os.getenv('VERIFY_TOKEN', 'casad2024')
-DONE_DELAY   = int(os.getenv('DONE_DELAY_SECONDS', '20'))
 
-WELCOME_MSG = (
-    "Hello CASAD team, I will assist you in creating your *bridge inspection report*. "
-    "Please share below:\n\n"
-    "• Complete bridge details (name, location, type etc.)\n"
-    "• Site photos - general\n"
-    "• Site photos - damaged/ distressing\n"
-    "• Observations about every damaged photo\n"
-    "• Recommendations (if any)\n\n"
-    "Type *done* when everything is sent."
+MENU_MSG = (
+    "Please select what you would like to share and type the number to continue:\n\n"
+    "1️⃣  Bridge details\n"
+    "2️⃣  General photos\n"
+    "3️⃣  Damaged photos with observation\n"
+    "4️⃣  Recommendations\n"
+    "5️⃣  Generate report\n\n"
+    "_Send the number to select an option. You can switch sections anytime by sending a different number._"
 )
 
-processed_ids  = set()           # in-memory dedup
-pending_cancels = {}             # phone → threading.Event
+WELCOME_MSG = (
+    "Hello CASAD team! I will assist you in creating your *bridge inspection report*.\n\n"
+    + MENU_MSG
+)
+
+SECTION_PROMPTS = {
+    '1': "📋 *Bridge Details*\nPlease share bridge details — name, location, road, spans, type etc. (text or voice note).\n\nSend another number anytime to switch sections.",
+    '2': "📸 *General Photos*\nSend your general / overview site photos now.\n\nSend another number anytime to switch sections.",
+    '3': "🔴 *Damaged Photos*\nSend damaged photos. For each photo you can:\n• Add a caption directly on the photo, OR\n• Send a text/voice note before or after (reference by photo number if describing multiple)\n\nSend another number anytime to switch sections.",
+    '4': "📝 *Recommendations*\nShare your recommendations — condition rating and any remedial suggestions (text or voice note).\n\nSend another number anytime to switch sections.",
+}
+
+CATEGORY_MAP = {
+    '1': 'bridge_details',
+    '2': 'general',
+    '3': 'damaged',
+    '4': 'recommendations',
+}
+
+processed_ids = set()
 
 app = Flask(__name__)
 
@@ -44,7 +62,6 @@ def webhook():
     msg = parse_payload(request.json)
     print(f"MSG RECEIVED: {msg}")
 
-    # Deduplicate
     msg_id = msg.get('msg_id')
     if msg_id and msg_id in processed_ids:
         print(f"DUPLICATE SKIPPED: {msg_id}")
@@ -56,9 +73,9 @@ def webhook():
         return 'OK', 200
 
     phone = msg['phone']
-
-    # New session detection — send welcome on first message of a new session
     status = get_session_status(phone)
+
+    # New or completed session — reset and send welcome
     if status is None or status == 'done':
         reset_session(phone)
         try:
@@ -66,6 +83,44 @@ def webhook():
             print(f"WELCOME sent to {phone}")
         except Exception as e:
             print(f"WELCOME FAILED for {phone}: {e}")
+        return 'OK', 200
+
+    state, photo_count = get_session_state(phone)
+    content_raw   = (msg.get('content') or '')
+    content_lower = content_raw.lower().strip()
+
+    # ── Gratitude replies ──────────────────────────────────────────────────────
+    GRATITUDE_WORDS  = ('thank you', 'thanks', 'thankyou', 'thank u', 'shukriya', 'dhanyawad')
+    GRATITUDE_EMOJIS = ('👍', '🙏', '❤️', '😊', '🤝', '👏')
+    if (any(w in content_lower for w in GRATITUDE_WORDS) or
+            any(e in content_raw for e in GRATITUDE_EMOJIS)):
+        send_message(phone, "I am glad I could be of use to you! 😊 See you again!")
+        return 'OK', 200
+
+    # ── Menu keyword ───────────────────────────────────────────────────────────
+    if content_lower == 'menu':
+        set_session_state(phone, 'menu')
+        send_message(phone, MENU_MSG)
+        return 'OK', 200
+
+    # ── Option 1–5 selected ────────────────────────────────────────────────────
+    if content_lower in ('1', '2', '3', '4', '5'):
+        option = content_lower
+
+        if option == '5':
+            send_message(phone, "Generating your report now... I'll send it in a few minutes. 📄")
+            threading.Thread(target=_generate_report, args=(phone,), daemon=True).start()
+            return 'OK', 200
+
+        set_session_state(phone, option)
+        send_message(phone, SECTION_PROMPTS[option])
+        return 'OK', 200
+
+    # ── Content message — store under current section ──────────────────────────
+    if state == 'menu':
+        # User sent something without selecting a section
+        send_message(phone, "Please select a section first:\n\n" + MENU_MSG)
+        return 'OK', 200
 
     # Process media
     if msg['type'] == 'audio':
@@ -89,50 +144,19 @@ def webhook():
         msg['media_path'] = img_path
         msg['image_data'] = img_bytes
 
-        # New photo after done → cancel pending report
-        if phone in pending_cancels:
-            pending_cancels[phone].set()
-            send_message(phone, "More photos received! Please type *done* again when you've sent everything.")
+        # Assign photo number and acknowledge
+        photo_num = increment_photo_count(phone)
+        msg['photo_num'] = photo_num
+        category  = CATEGORY_MAP.get(state, 'damaged')
+        section   = "general" if category == 'general' else "damaged"
+        send_message(phone, f"📸 Photo {photo_num} saved ({section}).")
 
+    msg['category'] = CATEGORY_MAP.get(state, 'bridge_details')
     store_message(msg)
-
-    content_lower = (msg.get('content') or '').lower().strip()
-
-    # 'wait' → cancel pending report
-    if 'wait' in content_lower and phone in pending_cancels:
-        pending_cancels[phone].set()
-        send_message(
-            phone,
-            "Ok, I am waiting. Please share remaining info. "
-            "Once done, type *done* to generate report."
-        )
-        return 'OK', 200
-
-    # 'done' → schedule report with delay
-    if 'done' in content_lower:
-        cancel_event = threading.Event()
-        pending_cancels[phone] = cancel_event
-        send_message(
-            phone,
-            "Good job! Generating your report in few minutes. I will notify you once done.\n\n"
-            "Note: Make sure all photos/info is sent, *if not, please type 'wait'.*"
-        )
-        threading.Thread(target=_generate_report, args=(phone, cancel_event), daemon=True).start()
-
     return 'OK', 200
 
 
-def _generate_report(phone: str, cancel_event: threading.Event) -> None:
-    print(f"REPORT: waiting {DONE_DELAY}s for pending media from {phone}...")
-    time.sleep(DONE_DELAY)
-
-    if cancel_event.is_set():
-        print(f"REPORT CANCELLED for {phone}")
-        pending_cancels.pop(phone, None)
-        return
-
-    pending_cancels.pop(phone, None)
-
+def _generate_report(phone: str) -> None:
     try:
         session     = get_session(phone)
         report_json = parse_inspection(session)
@@ -140,9 +164,9 @@ def _generate_report(phone: str, cancel_event: threading.Event) -> None:
         send_document(
             phone,
             docx_path,
-            caption=f"CASAD Bridge Inspection Report - {report_json.get('river_name', '')} / {report_json.get('road_name', '')}",
+            caption=f"CASAD Bridge Inspection Report — {report_json.get('river_name', '')} / {report_json.get('road_name', '')}",
         )
-        send_message(phone, "Yay! Your inspection report is generated, please check.")
+        send_message(phone, "✅ Your inspection report is ready. Please check!")
         mark_done(phone)
     except Exception as e:
         print(f"REPORT ERROR: {e}")

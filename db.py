@@ -9,14 +9,20 @@ def init_db():
     con = sqlite3.connect(DB)
     con.execute('''CREATE TABLE IF NOT EXISTS sessions
         (phone TEXT PRIMARY KEY, bridge TEXT, status TEXT,
-         started_at TEXT, reminded_at TEXT)''')
+         state TEXT, photo_count INTEGER,
+         started_at TEXT)''')
     con.execute('''CREATE TABLE IF NOT EXISTS messages
         (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT,
          type TEXT, content TEXT, media_path TEXT,
+         category TEXT, photo_num INTEGER,
          seq INTEGER, created_at TEXT, image_data BLOB)''')
+    # Safe migrations for existing DBs
     for col_sql in (
         'ALTER TABLE messages ADD COLUMN image_data BLOB',
-        'ALTER TABLE sessions ADD COLUMN reminded_at TEXT',
+        'ALTER TABLE messages ADD COLUMN category TEXT',
+        'ALTER TABLE messages ADD COLUMN photo_num INTEGER',
+        'ALTER TABLE sessions ADD COLUMN state TEXT',
+        'ALTER TABLE sessions ADD COLUMN photo_count INTEGER',
     ):
         try:
             con.execute(col_sql)
@@ -29,14 +35,15 @@ def init_db():
 def store_message(msg):
     con = sqlite3.connect(DB)
     con.execute(
-        'INSERT OR IGNORE INTO sessions VALUES (?,?,?,?,?)',
+        'INSERT OR IGNORE INTO sessions VALUES (?,?,?,?,?,?)',
         (msg['phone'], msg.get('bridge', ''), 'active',
-         datetime.utcnow().isoformat(), None)
+         'menu', 0, datetime.utcnow().isoformat())
     )
     con.execute(
-        'INSERT INTO messages VALUES (NULL,?,?,?,?,?,datetime("now"),?)',
+        'INSERT INTO messages VALUES (NULL,?,?,?,?,?,?,?,datetime("now"),?)',
         (msg['phone'], msg['type'], msg.get('content'),
-         msg.get('media_path'), msg.get('seq', 0), msg.get('image_data'))
+         msg.get('media_path'), msg.get('category'),
+         msg.get('photo_num'), msg.get('seq', 0), msg.get('image_data'))
     )
     con.commit()
     con.close()
@@ -72,6 +79,33 @@ def get_session_status(phone: str):
     return row[0] if row else None
 
 
+def get_session_state(phone: str):
+    con = sqlite3.connect(DB)
+    row = con.execute('SELECT state, photo_count FROM sessions WHERE phone=?', (phone,)).fetchone()
+    con.close()
+    return (row[0] or 'menu', row[1] or 0) if row else ('menu', 0)
+
+
+def set_session_state(phone: str, state: str):
+    con = sqlite3.connect(DB)
+    con.execute('UPDATE sessions SET state=? WHERE phone=?', (state, phone))
+    con.commit()
+    con.close()
+
+
+def increment_photo_count(phone: str) -> int:
+    """Increment and return the new photo count for this session."""
+    con = sqlite3.connect(DB)
+    con.execute(
+        'UPDATE sessions SET photo_count = COALESCE(photo_count, 0) + 1 WHERE phone=?',
+        (phone,)
+    )
+    row = con.execute('SELECT photo_count FROM sessions WHERE phone=?', (phone,)).fetchone()
+    con.commit()
+    con.close()
+    return row[0] if row else 1
+
+
 def reset_session(phone: str):
     con = sqlite3.connect(DB)
     con.execute('DELETE FROM messages WHERE phone=?', (phone,))
@@ -85,25 +119,3 @@ def mark_done(phone: str):
     con.execute("UPDATE sessions SET status='done' WHERE phone=?", (phone,))
     con.commit()
     con.close()
-
-
-def mark_reminded(phone: str):
-    con = sqlite3.connect(DB)
-    con.execute("UPDATE sessions SET reminded_at=datetime('now') WHERE phone=?", (phone,))
-    con.commit()
-    con.close()
-
-
-def get_stale_sessions() -> list:
-    """Return phones with active sessions idle for 3+ hours and not yet reminded."""
-    con = sqlite3.connect(DB)
-    rows = con.execute('''
-        SELECT s.phone FROM sessions s
-        WHERE s.status = 'active'
-          AND s.reminded_at IS NULL
-          AND (SELECT COUNT(*) FROM messages m WHERE m.phone = s.phone) > 0
-          AND (SELECT MAX(m.created_at) FROM messages m WHERE m.phone = s.phone)
-              < datetime('now', '-3 hours')
-    ''').fetchall()
-    con.close()
-    return [r[0] for r in rows]

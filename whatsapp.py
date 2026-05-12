@@ -23,6 +23,8 @@ def parse_payload(data: dict) -> dict:
 
         if mtype == 'text':
             content = message['text']['body']
+        elif mtype == 'reaction':
+            content = message['reaction'].get('emoji', '')
         elif mtype == 'audio':
             media_id = message['audio']['id']
         elif mtype == 'image':

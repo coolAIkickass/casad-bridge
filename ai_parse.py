@@ -178,25 +178,40 @@ def _find_photo_description(messages: list, photo_idx: int) -> str:
     """Return the best description for a photo.
 
     Priority:
-      1. Inline WhatsApp caption on the photo itself
-      2. Nearest text/voice note in the 3 messages BEFORE the photo
-      3. Nearest text/voice note in the 3 messages AFTER the photo
+      1. Inline WhatsApp caption on the photo itself  → use as-is
+      2. Text/voice that explicitly references this photo number (e.g. "photo 2 ...")
+      3. Nearest text/voice in the 3 messages before the photo
+      4. Nearest text/voice in the 3 messages after the photo
     """
     m = messages[photo_idx]
-    # 1. Inline caption
+    photo_num = m.get('photo_num')
+
+    # 1. Inline caption sent with the photo
     if m.get('content'):
         return m['content']
 
     def _is_text(msg):
         content = (msg.get('content') or '').strip()
-        return bool(content) and not msg.get('media_path') and 'done' not in content.lower()
+        return bool(content) and not msg.get('media_path')
 
-    # 2. Look back up to 3 messages
+    # 2. Explicit numeric reference in any nearby message
+    if photo_num:
+        search_range = list(range(max(0, photo_idx - 5), photo_idx)) + \
+                       list(range(photo_idx + 1, min(len(messages), photo_idx + 6)))
+        patterns = (f'photo {photo_num}', f'pic {photo_num}',
+                    f'image {photo_num}', f'{photo_num}.')
+        for k in search_range:
+            if _is_text(messages[k]):
+                txt = messages[k]['content'].lower()
+                if any(p in txt for p in patterns):
+                    return messages[k]['content'].strip()
+
+    # 3. Nearest text/voice before the photo
     for k in range(photo_idx - 1, max(photo_idx - 4, -1), -1):
         if _is_text(messages[k]):
             return messages[k]['content'].strip()
 
-    # 3. Look forward up to 3 messages (voice/text sent after the photo)
+    # 4. Nearest text/voice after the photo
     for k in range(photo_idx + 1, min(photo_idx + 4, len(messages))):
         if _is_text(messages[k]):
             return messages[k]['content'].strip()
@@ -210,9 +225,10 @@ def parse_inspection(session: dict) -> dict:
     messages_text = '\n'.join(m['content'] for m in messages if m.get('content'))
 
     # Collect photo paths and their best available description
-    photo_paths        = []
-    photo_captions     = []   # raw description (used for circle detection)
-    photo_descriptions = []   # same, passed to Claude for title generation
+    photo_paths              = []
+    photo_captions           = []   # raw description (used for circle detection)
+    photo_descriptions       = []   # same, passed to Claude for title generation
+    photo_categories_from_db = []   # set by menu state at collection time
 
     for j, m in enumerate(messages):
         if m.get('media_path'):
@@ -220,6 +236,8 @@ def parse_inspection(session: dict) -> dict:
             photo_paths.append(m['media_path'])
             photo_captions.append(desc)
             photo_descriptions.append(desc)
+            # Category is set by the menu state at collection time — no AI classification needed
+            photo_categories_from_db.append(m.get('category', 'damaged'))
 
     print(f"PARSE: {len(messages)} messages, text length={len(messages_text)}, photos={len(photo_paths)}")
     print(f"FIELD NOTES:\n{messages_text}")
@@ -233,13 +251,10 @@ def parse_inspection(session: dict) -> dict:
         "For the photo_titles field: generate a short title (max 10 words) for each photo "
         "based on its description. If no description, infer from field notes context. "
         "photo_titles must have exactly the same number of entries as photo file paths.\n\n"
-        "For the photo_categories field: classify every photo as 'damage' UNLESS the user "
-        "explicitly uses a word like 'general', 'general photo', 'site photo', or 'general site' "
-        "in the description — in that case use 'general'. "
-        "Do NOT infer category from the content of the photo. Do NOT classify as 'general' based on "
-        "zoom level, wide shots, or overview shots — a wide shot can still show damage. "
-        "Only the user's explicit words determine 'general'. When in any doubt, use 'damage'. "
-        "photo_categories must have exactly the same number of entries as photo file paths."
+        "For the photo_categories field: use exactly the values provided in the "
+        "Photo categories list below — do NOT reclassify. "
+        "photo_categories must have exactly the same number of entries as photo file paths.\n\n"
+        f"Photo categories (one per photo, same order as file paths):\n{json.dumps(photo_categories_from_db)}"
     )
 
     response = client.messages.create(
@@ -272,17 +287,15 @@ def parse_inspection(session: dict) -> dict:
         titles = [' '.join(d.split()[:10]) if d else '' for d in photo_descriptions]
     result['photo_titles'] = titles
 
-    # Ensure photo_categories has the right count; fall back to 'damage'
-    cats = result.get('photo_categories') or []
-    if len(cats) != len(photo_paths):
-        cats = ['damage'] * len(photo_paths)
+    # Categories come from DB (menu state) — use as authoritative source
+    cats = photo_categories_from_db if len(photo_categories_from_db) == len(photo_paths) \
+           else (result.get('photo_categories') or ['damaged'] * len(photo_paths))
 
     result['photo_categories'] = cats
 
-    # Apply defect circle marking ONLY to damage photos, using full descriptions
-    # (circle marking happens here, not on arrival, so we have voice note context)
+    # Apply defect circle marking ONLY to damaged photos
     for path, desc, cat in zip(photo_paths, photo_descriptions, cats):
-        if cat != 'damage' or not desc or not os.path.exists(path):
+        if cat not in ('damage', 'damaged') or not desc or not os.path.exists(path):
             continue
         try:
             with open(path, 'rb') as f:

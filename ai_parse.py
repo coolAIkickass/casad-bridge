@@ -417,10 +417,11 @@ def parse_inspection(session: dict) -> dict:
 
     result['photo_categories'] = cats
 
-    # Apply defect circle marking ONLY to damaged photos
-    for path, desc, cat in zip(photo_paths, photo_descriptions, cats):
-        if cat not in ('damage', 'damaged') or not desc or not os.path.exists(path):
-            continue
+    # Apply defect circle marking ONLY to damaged photos — run in parallel
+    import concurrent.futures
+
+    def _mark_one(args):
+        path, desc = args
         try:
             with open(path, 'rb') as f:
                 original = f.read()
@@ -431,6 +432,15 @@ def parse_inspection(session: dict) -> dict:
                 print(f"CIRCLE MARKED: {path}")
         except Exception as e:
             print(f"CIRCLE MARK FAILED for {path}: {e}")
+
+    mark_jobs = [
+        (path, desc)
+        for path, desc, cat in zip(photo_paths, photo_descriptions, cats)
+        if cat in ('damage', 'damaged') and desc and os.path.exists(path)
+    ]
+    if mark_jobs:
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            list(pool.map(_mark_one, mark_jobs))
 
     print(f"PHOTOS injected: {photo_paths}")
     print(f"TITLES: {result['photo_titles']}")

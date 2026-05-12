@@ -7,33 +7,55 @@ DB = os.getenv('DB_PATH', 'casad.db')
 
 def init_db():
     con = sqlite3.connect(DB)
-    con.execute('''CREATE TABLE IF NOT EXISTS sessions
-        (id INTEGER PRIMARY KEY AUTOINCREMENT,
-         phone TEXT, bridge TEXT, status TEXT,
-         state TEXT, photo_count INTEGER,
-         started_at TEXT, ended_at TEXT)''')
-    con.execute('''CREATE TABLE IF NOT EXISTS messages
-        (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT,
-         session_id INTEGER,
-         type TEXT, content TEXT, media_path TEXT,
-         category TEXT, photo_num INTEGER,
-         seq INTEGER, created_at TEXT, image_data BLOB)''')
-    # Safe migrations for existing DBs
-    for col_sql in (
-        'ALTER TABLE messages ADD COLUMN image_data BLOB',
-        'ALTER TABLE messages ADD COLUMN category TEXT',
-        'ALTER TABLE messages ADD COLUMN photo_num INTEGER',
-        'ALTER TABLE sessions ADD COLUMN state TEXT',
-        'ALTER TABLE sessions ADD COLUMN photo_count INTEGER',
-        'ALTER TABLE sessions ADD COLUMN ended_at TEXT',
-        'ALTER TABLE sessions ADD COLUMN id INTEGER',
-        'ALTER TABLE messages ADD COLUMN session_id INTEGER',
-        'ALTER TABLE sessions ADD COLUMN report_path TEXT',
-    ):
-        try:
-            con.execute(col_sql)
-        except Exception:
-            pass
+
+    # ── sessions table ────────────────────────────────────────────────────────
+    existing_sess_cols = {row[1] for row in con.execute("PRAGMA table_info(sessions)")}
+
+    if not existing_sess_cols:
+        # Fresh DB — create with full schema
+        con.execute('''CREATE TABLE sessions
+            (id INTEGER PRIMARY KEY AUTOINCREMENT,
+             phone TEXT, bridge TEXT, status TEXT,
+             state TEXT, photo_count INTEGER,
+             started_at TEXT, ended_at TEXT, report_path TEXT)''')
+    else:
+        # Old schema had phone as PRIMARY KEY — rebuild with id as PK
+        needs_rebuild = 'id' not in existing_sess_cols or 'report_path' not in existing_sess_cols
+        if needs_rebuild:
+            copy_cols = [c for c in ('phone','bridge','status','state','photo_count','started_at','ended_at','report_path')
+                         if c in existing_sess_cols]
+            col_list = ', '.join(copy_cols)
+            con.execute('''CREATE TABLE sessions_new
+                (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 phone TEXT, bridge TEXT, status TEXT,
+                 state TEXT, photo_count INTEGER,
+                 started_at TEXT, ended_at TEXT, report_path TEXT)''')
+            con.execute(f'INSERT INTO sessions_new ({col_list}) SELECT {col_list} FROM sessions')
+            con.execute('DROP TABLE sessions')
+            con.execute('ALTER TABLE sessions_new RENAME TO sessions')
+
+    # ── messages table ────────────────────────────────────────────────────────
+    existing_msg_cols = {row[1] for row in con.execute("PRAGMA table_info(messages)")}
+
+    if not existing_msg_cols:
+        con.execute('''CREATE TABLE messages
+            (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT,
+             session_id INTEGER,
+             type TEXT, content TEXT, media_path TEXT,
+             category TEXT, photo_num INTEGER,
+             seq INTEGER, created_at TEXT, image_data BLOB)''')
+    else:
+        for col_sql in (
+            'ALTER TABLE messages ADD COLUMN image_data BLOB',
+            'ALTER TABLE messages ADD COLUMN category TEXT',
+            'ALTER TABLE messages ADD COLUMN photo_num INTEGER',
+            'ALTER TABLE messages ADD COLUMN session_id INTEGER',
+        ):
+            try:
+                con.execute(col_sql)
+            except Exception:
+                pass
+
     con.commit()
     con.close()
 

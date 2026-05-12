@@ -315,13 +315,20 @@ def dashboard():
     session_data = []
     for s in sessions:
         sid  = s['id']
-        msgs = con.execute(
-            'SELECT type, content, category, photo_num, created_at, media_path '
-            'FROM messages WHERE session_id=? ORDER BY id',
-            (sid,)
-        ).fetchall() if sid else []
-        # Fallback for old rows without session_id
-        if not msgs and not sid:
+        if sid:
+            msgs = con.execute(
+                'SELECT type, content, category, photo_num, created_at, media_path '
+                'FROM messages WHERE session_id=? ORDER BY id',
+                (sid,)
+            ).fetchall()
+            # Also grab old messages with no session_id linked to this phone
+            if not msgs:
+                msgs = con.execute(
+                    'SELECT type, content, category, photo_num, created_at, media_path '
+                    'FROM messages WHERE phone=? AND (session_id IS NULL OR session_id=?) ORDER BY id',
+                    (s['phone'], sid)
+                ).fetchall()
+        else:
             msgs = con.execute(
                 'SELECT type, content, category, photo_num, created_at, media_path '
                 'FROM messages WHERE phone=? ORDER BY id',

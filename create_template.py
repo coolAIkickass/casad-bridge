@@ -140,7 +140,7 @@ sub.paragraph_format.space_after = Pt(10)
 table = doc.add_table(rows=0, cols=3)
 table.style = "Table Grid"
 
-col_widths = [Cm(0.5), Cm(7.7), Cm(8.8)]
+col_widths = [Cm(0.3), Cm(7.9), Cm(8.8)]
 for i, w in enumerate(col_widths):
     for cell in table.columns[i].cells:
         cell.width = w

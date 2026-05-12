@@ -132,7 +132,7 @@ def webhook():
     if content_lower in ('7', 'exit', 'restart', 'new'):
         reset_session(phone)
         send_message(phone,
-            "✅ Session cleared. Send any message to start a fresh inspection. 👋")
+            "Done, hope you have a great day ahead 👋. To start again, send 'hi'.")
         return 'OK', 200
 
     status = get_session_status(phone)

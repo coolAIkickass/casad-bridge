@@ -210,14 +210,44 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list,
             insert_pos += 1
 
 
+def _ensure_fixed_layout(doc: Document) -> None:
+    """Force tblLayout=fixed on all tables so Word respects column widths."""
+    for table in doc.tables:
+        tblPr = table._tbl.find(qn('w:tblPr'))
+        if tblPr is None:
+            tblPr = OxmlElement('w:tblPr')
+            table._tbl.insert(0, tblPr)
+        existing = tblPr.find(qn('w:tblLayout'))
+        if existing is not None:
+            tblPr.remove(existing)
+        tblLayout = OxmlElement('w:tblLayout')
+        tblLayout.set(qn('w:type'), 'fixed')
+        tblPr.append(tblLayout)
+
+
 def build_docx(report_json: dict) -> str:
     """Fill CASAD template with report_json and return saved file path."""
     doc = Document(TEMPLATE_PATH)
     _fill_placeholders(doc, report_json)
+    _ensure_fixed_layout(doc)
 
     raw_photos     = report_json.get('photos', [])
     raw_titles     = report_json.get('photo_titles', [])
     raw_categories = report_json.get('photo_categories', [])
+
+    # Safety: restore any missing photo files from session BLOB data
+    session_messages = report_json.get('_messages', [])
+    for m in session_messages:
+        path = m.get('media_path')
+        blob = m.get('image_data')
+        if path and blob and not os.path.exists(path):
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, 'wb') as f:
+                    f.write(blob)
+                print(f"BUILD_DOCX restored: {path}")
+            except Exception as e:
+                print(f"BUILD_DOCX restore failed for {path}: {e}")
 
     # Pad lists to same length
     n = len(raw_photos)

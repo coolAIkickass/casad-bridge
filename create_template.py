@@ -320,6 +320,15 @@ for row in table.rows:
     for i, (cell, w) in enumerate(zip(row.cells, col_widths)):
         cell.width = w
 
+# ── Force fixed table layout so Word respects column widths ──────────────────
+tblPr = table._tbl.find(qn('w:tblPr'))
+if tblPr is None:
+    tblPr = OxmlElement('w:tblPr')
+    table._tbl.insert(0, tblPr)
+tblLayout = OxmlElement('w:tblLayout')
+tblLayout.set(qn('w:type'), 'fixed')
+tblPr.append(tblLayout)
+
 # ── Signature block ───────────────────────────────────────────────────────────
 doc.add_paragraph()
 sig = doc.add_paragraph()

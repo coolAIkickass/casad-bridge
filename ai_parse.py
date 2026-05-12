@@ -388,6 +388,7 @@ def parse_inspection(session: dict) -> dict:
     result = json.loads(raw)
     result['photos']         = photo_paths
     result['photo_captions'] = photo_captions
+    result['_messages']      = messages   # passed to build_docx for BLOB restoration
 
     # Ensure photo_titles has the right count; fall back to first 10 words of description
     titles = result.get('photo_titles') or []

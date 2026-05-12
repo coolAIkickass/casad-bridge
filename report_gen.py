@@ -153,7 +153,7 @@ def build_docx(report_json: dict) -> str:
     for path, title, cat in zip(raw_photos, raw_titles, raw_categories):
         if not path or not os.path.exists(path):
             continue
-        if str(cat).lower() == 'damage':
+        if str(cat).lower() in ('damage', 'damaged'):
             damage_photos.append(path)
             damage_titles.append(title)
         else:

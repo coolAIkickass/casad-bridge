@@ -41,6 +41,13 @@ CRITICAL — Photo titles (photo_titles field):
   • Description "leaching superstructure" → "Leaching in Superstructure"
   • Description "crack pier cap" → "Crack in Pier Cap"
 
+CRITICAL — Photo number references in observation fields:
+- When filling ss_*, sub_*, found_*, bearing_*, approach_*, expansion_joint, wearing_coat, vegetation fields:
+  - If a defect is observed, append the relevant photo numbers: "Observed (Photo No.-1), (Photo No.-3)"
+  - Match photo numbers using the Photo information list provided — reference photos whose description mentions that specific defect and component
+  - Only add photo references when the value is "Observed" or a specific description — NOT for "Absent", "Not Visible", "NA", "NIL", "-"
+  - Format exactly: "Observed (Photo No.-X)" or "Observed (Photo No.-X), (Photo No.-Y)"
+
 Recommendation fields (rec_gen_* and rec_str_*):
 - Write each as a complete professional sentence.
 - Format: state the problem/deficiency observed, then state the recommended remedial action.
@@ -243,18 +250,25 @@ def parse_inspection(session: dict) -> dict:
     print(f"FIELD NOTES:\n{messages_text}")
     print(f"PHOTO DESCRIPTIONS: {photo_descriptions}")
 
+    photo_info = [
+        {"photo_no": i + 1, "description": d, "category": c}
+        for i, (d, c) in enumerate(zip(photo_descriptions, photo_categories_from_db))
+    ]
+
     user_content = (
         f"Schema:\n{json.dumps(SCHEMA, indent=2)}\n\n"
         f"Field notes:\n{messages_text}\n\n"
-        f"Photo file paths (in sequence order):\n{json.dumps(photo_paths)}\n\n"
-        f"Photo descriptions (one per photo, same order):\n{json.dumps(photo_descriptions)}\n\n"
+        f"Photo information (photo number, description, category — use photo_no for references):\n"
+        f"{json.dumps(photo_info, indent=2)}\n\n"
+        f"Photo file paths (in sequence order, matching photo_no above):\n{json.dumps(photo_paths)}\n\n"
         "For the photo_titles field: generate a short title (max 10 words) for each photo "
         "based on its description. If no description, infer from field notes context. "
         "photo_titles must have exactly the same number of entries as photo file paths.\n\n"
-        "For the photo_categories field: use exactly the values provided in the "
-        "Photo categories list below — do NOT reclassify. "
+        "For the photo_categories field: use exactly the category values from Photo information above — do NOT reclassify. "
         "photo_categories must have exactly the same number of entries as photo file paths.\n\n"
-        f"Photo categories (one per photo, same order as file paths):\n{json.dumps(photo_categories_from_db)}"
+        "For observation fields (ss_*, sub_*, found_*, bearing_*, approach_*, expansion_joint, "
+        "wearing_coat, vegetation): append photo references where relevant, e.g. "
+        "\"Observed (Photo No.-1), (Photo No.-3)\". Only for observed/present defects."
     )
 
     response = client.messages.create(

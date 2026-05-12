@@ -94,6 +94,19 @@ def span_row(table, title, bg=None, bold=True, size=9, color=None):
     set_cell_borders(cells[0])
 
 
+def b_section_header(table, sr, title):
+    """Numbered section header row (e.g. '2  SUPERSTRUCTURE') with light blue bg."""
+    row   = table.add_row()
+    cells = row.cells
+    # Merge description + details columns so title spans them
+    cells[1].merge(cells[2])
+    cell_para(cells[0], sr,    bold=True, size=9, color=DARK_TEXT)
+    cell_para(cells[1], title, bold=True, size=9, color=DARK_TEXT)
+    for c in (cells[0], cells[1]):
+        set_cell_bg(c, SECTION_BG)
+        set_cell_borders(c)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 doc = Document()
@@ -127,7 +140,7 @@ sub.paragraph_format.space_after = Pt(10)
 table = doc.add_table(rows=0, cols=3)
 table.style = "Table Grid"
 
-col_widths = [Cm(0.7), Cm(7.5), Cm(8.8)]
+col_widths = [Cm(0.5), Cm(7.7), Cm(8.8)]
 for i, w in enumerate(col_widths):
     for cell in table.columns[i].cells:
         cell.width = w
@@ -176,7 +189,7 @@ section_header(table, "(B)  SURVEY AND CONDITION ASSESSMENT")
 add_row(table, "1", "DATE OF SURVEY & INSPECTION:", "{{date_of_survey}}")
 
 # B2 — Superstructure
-add_row(table, "2", "SUPERSTRUCTURE", "")
+b_section_header(table, "2", "SUPERSTRUCTURE")
 ss_items = [
     ("(a)", "CRACKS (Length, Width, Location):",    "{{ss_cracks}}"),
     ("(b)", "LEACHING:",                             "{{ss_leaching}}"),
@@ -193,7 +206,7 @@ for sr, desc, ph in ss_items:
     add_row(table, sr, desc, ph)
 
 # B3 — Substructure
-add_row(table, "3", "SUBSTRUCTURE", "")
+b_section_header(table, "3", "SUBSTRUCTURE")
 sub_items = [
     ("(a)", "CRACKS (Length, Width, Location):",    "{{sub_cracks}}"),
     ("(b)", "LEACHING:",                             "{{sub_leaching}}"),
@@ -210,7 +223,7 @@ for sr, desc, ph in sub_items:
     add_row(table, sr, desc, ph)
 
 # B4 — Foundations
-add_row(table, "4", "FOUNDATIONS (pile / cap etc.)", "")
+b_section_header(table, "4", "FOUNDATIONS (pile / cap etc.)")
 found_items = [
     ("(a)", "CRACKS (Length, Width, Location):",    "{{found_cracks}}"),
     ("(b)", "LEACHING:",                             "{{found_leaching}}"),
@@ -229,7 +242,7 @@ for sr, desc, ph in found_items:
     add_row(table, sr, desc, ph)
 
 # B5 — Bearings
-add_row(table, "5", "BEARINGS", "")
+b_section_header(table, "5", "BEARINGS")
 for sr, desc, ph in [
     ("(a)", "DISPLACEMENT:",  "{{bearing_displacement}}"),
     ("(b)", "DISTORTION:",    "{{bearing_distortion}}"),
@@ -238,7 +251,7 @@ for sr, desc, ph in [
     add_row(table, sr, desc, ph)
 
 # B6 — Approach
-add_row(table, "6", "APPROACH AND OTHER", "")
+b_section_header(table, "6", "APPROACH AND OTHER")
 for sr, desc, ph in [
     ("(a)", "SETTLEMENT:",         "{{approach_settlement}}"),
     ("(b)", "EROSION OF SLOPE:",   "{{approach_erosion}}"),
@@ -250,7 +263,7 @@ add_row(table, "7", "EXPANSION JOINT:", "{{expansion_joint}}")
 add_row(table, "8", "WEARING COAT:",    "{{wearing_coat}}")
 
 # B9 — Miscellaneous
-add_row(table, "9", "MISCELLANEOUS", "")
+b_section_header(table, "9", "MISCELLANEOUS")
 for sr, desc, ph in [
     ("(a)", "FLOOD GAUGE MARK:",               "{{flood_gauge}}"),
     ("(b)", "MASONRY STEPS:",                  "{{masonry_steps}}"),

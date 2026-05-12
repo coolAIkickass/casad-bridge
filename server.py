@@ -239,5 +239,137 @@ def debug_token():
     }, 200
 
 
+DASHBOARD_TOKEN = os.getenv('DASHBOARD_TOKEN', 'casad-test-2024')
+
+@app.route('/dashboard', methods=['GET'])
+def dashboard():
+    """Live HTML dashboard showing all tester sessions and their messages."""
+    if request.args.get('token') != DASHBOARD_TOKEN:
+        return 'Unauthorized — add ?token=YOUR_TOKEN', 403
+
+    import sqlite3 as _sq
+    db = os.getenv('DB_PATH', 'casad.db')
+    con = _sq.connect(db)
+    con.row_factory = _sq.Row
+
+    sessions = con.execute(
+        'SELECT * FROM sessions ORDER BY started_at DESC'
+    ).fetchall()
+
+    session_data = []
+    for s in sessions:
+        phone = s['phone']
+        msgs  = con.execute(
+            'SELECT type, content, category, photo_num, created_at, media_path '
+            'FROM messages WHERE phone=? ORDER BY id',
+            (phone,)
+        ).fetchall()
+        session_data.append((dict(s), [dict(m) for m in msgs]))
+    con.close()
+
+    STATUS_COLOR = {'active': '#2e7d32', 'done': '#1565c0', 'error': '#c62828'}
+    CATEGORY_ICON = {
+        'bridge_details':  '🏗',
+        'damaged':         '🔴',
+        'general':         '📷',
+        'recommendations': '📋',
+        'system':          '⚙️',
+        None: '',
+    }
+
+    rows_html = ''
+    for sess, msgs in session_data:
+        phone   = sess['phone']
+        status  = sess.get('status', 'active')
+        state   = sess.get('state', '-')
+        photos  = sess.get('photo_count', 0)
+        started = (sess.get('started_at') or '')[:16].replace('T', ' ')
+        sc      = STATUS_COLOR.get(status, '#555')
+
+        msg_rows = ''
+        for m in msgs:
+            mtype    = m['type'] or ''
+            content  = (m['content'] or '').replace('<', '&lt;').replace('>', '&gt;')
+            cat      = m.get('category')
+            icon     = CATEGORY_ICON.get(cat, '')
+            pnum     = f' 📸{m["photo_num"]}' if m.get('photo_num') else ''
+            ts       = (m.get('created_at') or '')[:16].replace('T', ' ')
+            has_img  = '🖼 ' if m.get('media_path') else ''
+            cat_label = f'<span style="color:#888;font-size:11px">{icon} {cat or ""}{pnum}</span>' if cat else ''
+            content_display = (has_img + content[:300] + ('…' if len(content) > 300 else '')) or '<em style="color:#aaa">—</em>'
+            msg_rows += (
+                f'<tr>'
+                f'<td style="color:#888;white-space:nowrap;font-size:11px">{ts}</td>'
+                f'<td><code style="background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:11px">{mtype}</code></td>'
+                f'<td>{cat_label}</td>'
+                f'<td style="font-size:12px">{content_display}</td>'
+                f'</tr>'
+            )
+
+        rows_html += f'''
+        <div style="border:1px solid #ddd;border-radius:8px;margin:16px 0;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+          <div style="background:#f8f9fa;padding:10px 16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            <span style="font-weight:600;font-size:15px">📱 {phone}</span>
+            <span style="background:{sc};color:#fff;padding:2px 8px;border-radius:12px;font-size:12px">{status}</span>
+            <span style="color:#555;font-size:13px">State: <b>{state}</b></span>
+            <span style="color:#555;font-size:13px">📸 {photos} photo(s)</span>
+            <span style="color:#999;font-size:12px;margin-left:auto">Started {started} UTC</span>
+          </div>
+          <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead>
+                <tr style="background:#f0f4f8;text-align:left">
+                  <th style="padding:6px 10px;color:#666;font-weight:600;width:130px">Time (UTC)</th>
+                  <th style="padding:6px 10px;color:#666;font-weight:600;width:70px">Type</th>
+                  <th style="padding:6px 10px;color:#666;font-weight:600;width:130px">Category</th>
+                  <th style="padding:6px 10px;color:#666;font-weight:600">Content</th>
+                </tr>
+              </thead>
+              <tbody>
+                {msg_rows or '<tr><td colspan="4" style="padding:10px;color:#aaa;text-align:center">No messages yet</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>'''
+
+    total    = len(session_data)
+    active_n = sum(1 for s, _ in session_data if s.get('status') == 'active')
+    done_n   = sum(1 for s, _ in session_data if s.get('status') == 'done')
+    now_utc  = __import__('datetime').datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="30">
+  <title>CASAD Test Dashboard</title>
+  <style>
+    body{{font-family:system-ui,sans-serif;margin:0;background:#f4f6f9;color:#222}}
+    h1{{margin:0;font-size:22px}}
+    .badge{{display:inline-block;padding:3px 10px;border-radius:12px;font-size:13px;font-weight:600}}
+    tbody tr:nth-child(even){{background:#fafafa}}
+    tbody tr:hover{{background:#f0f6ff}}
+    td{{padding:6px 10px;vertical-align:top;border-top:1px solid #eee}}
+  </style>
+</head>
+<body>
+<div style="background:#1f3864;color:#fff;padding:14px 24px;display:flex;align-items:center;gap:16px">
+  <h1>CASAD Bridge Bot — Test Dashboard</h1>
+  <span style="margin-left:auto;font-size:13px;opacity:.7">Auto-refreshes every 30 s &nbsp;·&nbsp; {now_utc} UTC</span>
+</div>
+<div style="padding:16px 24px">
+  <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+    <span class="badge" style="background:#e3f2fd;color:#1565c0">Total sessions: {total}</span>
+    <span class="badge" style="background:#e8f5e9;color:#2e7d32">Active: {active_n}</span>
+    <span class="badge" style="background:#e3f2fd;color:#1565c0">Report generated: {done_n}</span>
+  </div>
+  {rows_html or '<p style="color:#aaa;text-align:center;margin-top:48px">No sessions yet — waiting for testers…</p>'}
+</div>
+</body>
+</html>'''
+
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

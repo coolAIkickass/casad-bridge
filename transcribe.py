@@ -13,6 +13,6 @@ def transcribe_audio(audio_bytes: bytes) -> str:
     transcript = client.audio.transcriptions.create(
         model='whisper-large-v3',
         file=audio_file,
-        language='hi',   # 'hi' handles Hindi/Gujarati/English mixed audio well
+        # No language forced — Whisper auto-detects Hindi/Gujarati/English
     )
     return transcript.text

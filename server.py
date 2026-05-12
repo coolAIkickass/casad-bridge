@@ -37,6 +37,34 @@ SECTION_NAMES = {
     '4': 'Recommendations',
 }
 
+BRIDGE_DETAILS_PROMPT = (
+    "Ok! Please share *Bridge Details* including the following:\n\n"
+    "1. Name of River\n"
+    "2. Name of Road\n"
+    "3. Chainage of Bridge\n"
+    "4. Latitude & Longitude\n"
+    "5. Circle / Division / Sub-Division\n"
+    "6. No. of Spans\n"
+    "7. Span Length & Arrangement\n"
+    "8. Type of Bridge (Simply Supported / Continuous / Arch / Other)\n"
+    "9. Type of Superstructure (e.g. T-Beam, PSC Girder, Slab, Truss)\n"
+    "10. Type of Substructure (e.g. RCC Pier, Masonry Abutment)\n"
+    "11. Type of Foundation (e.g. Pile, Well, Open)\n"
+    "12. Type of Bearing (e.g. Elastomeric, Roller, NA)\n"
+    "13. Total Length of Bridge\n"
+    "14. Total Length of Approach\n"
+    "15. Type of Railing (RCC Parapet / Pipe Railing / Crash Barrier)\n"
+    "16. River Training Work (if any)\n"
+    "17. Previous Repair / Strengthening Work (if any)\n"
+    "18. Clear Carriageway Width\n"
+    "19. Year of Construction\n"
+    "20. High Level / Submersible Bridge\n"
+    "21. River — Perennial or Not\n"
+    "22. Date of Survey\n\n"
+    "You can share all details in one text or voice note.\n\n"
+    "Type *done* once you are finished with this section."
+)
+
 CATEGORY_MAP = {
     '1': 'bridge_details',
     '2': 'general',
@@ -113,9 +141,12 @@ def webhook():
 
         # Valid section selected
         set_session_state(phone, content_lower)
-        name = SECTION_NAMES[content_lower]
-        send_message(phone,
-            f"Ok! Please share *{name}*.\n\nType *done* once you are finished with this section.")
+        if content_lower == '1':
+            send_message(phone, BRIDGE_DETAILS_PROMPT)
+        else:
+            name = SECTION_NAMES[content_lower]
+            send_message(phone,
+                f"Ok! Please share *{name}*.\n\nType *done* once you are finished with this section.")
         return 'OK', 200
 
     # ── Collecting state: user is sharing content for a section ───────────────
@@ -124,6 +155,13 @@ def webhook():
     if content_lower == 'done':
         set_session_state(phone, 'menu')
         send_message(phone, "Got it! ✅\n\n" + MENU_MSG)
+        return 'OK', 200
+
+    # Single digit sent while in a section → guide user back to menu
+    if content_lower in VALID_OPTIONS and msg['type'] == 'text':
+        send_message(phone,
+            f"To switch sections, please type *done* first to go back to the main menu, "
+            f"then select the option you want.")
         return 'OK', 200
 
     # Process audio

@@ -357,7 +357,6 @@ def dashboard():
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="30">
   <title>CASAD Test Dashboard</title>
   <style>
     body{{font-family:system-ui,sans-serif;margin:0;background:#f4f6f9;color:#222}}
@@ -371,7 +370,7 @@ def dashboard():
 <body>
 <div style="background:#1f3864;color:#fff;padding:14px 24px;display:flex;align-items:center;gap:16px">
   <h1>CASAD Bridge Bot — Test Dashboard</h1>
-  <span style="margin-left:auto;font-size:13px;opacity:.7">Auto-refreshes every 30 s &nbsp;·&nbsp; {now_utc} UTC</span>
+  <span style="margin-left:auto;font-size:13px;opacity:.7">Last loaded: {now_utc} UTC &nbsp;·&nbsp; Refresh page to update</span>
 </div>
 <div style="padding:16px 24px">
   <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">

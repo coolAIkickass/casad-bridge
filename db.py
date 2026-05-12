@@ -28,6 +28,7 @@ def init_db():
         'ALTER TABLE sessions ADD COLUMN ended_at TEXT',
         'ALTER TABLE sessions ADD COLUMN id INTEGER',
         'ALTER TABLE messages ADD COLUMN session_id INTEGER',
+        'ALTER TABLE sessions ADD COLUMN report_path TEXT',
     ):
         try:
             con.execute(col_sql)
@@ -143,13 +144,13 @@ def reset_session(phone: str):
     con.close()
 
 
-def mark_done(phone: str):
+def mark_done(phone: str, report_path: str = None):
     con = sqlite3.connect(DB)
     sid = _active_session_id(con, phone)
     if sid:
         con.execute(
-            "UPDATE sessions SET status='done', ended_at=? WHERE id=?",
-            (datetime.utcnow().isoformat(), sid)
+            "UPDATE sessions SET status='done', ended_at=?, report_path=? WHERE id=?",
+            (datetime.utcnow().isoformat(), report_path, sid)
         )
     con.commit()
     con.close()

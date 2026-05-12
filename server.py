@@ -236,7 +236,7 @@ def _generate_report(phone: str) -> None:
             caption=f"CASAD Bridge Inspection Report — {report_json.get('river_name', '')} / {report_json.get('road_name', '')}",
         )
         send_message(phone, "✅ Your inspection report is ready. Please check!")
-        mark_done(phone)
+        mark_done(phone, report_path=docx_path)
     except Exception as e:
         print(f"REPORT ERROR: {e}")
         import traceback; traceback.print_exc()
@@ -267,6 +267,20 @@ def debug_token():
 
 
 DASHBOARD_TOKEN = os.getenv('DASHBOARD_TOKEN', 'casad-test-2024')
+
+@app.route('/download/<path:filename>', methods=['GET'])
+def download_report(filename):
+    """Serve a generated report .docx for download (token-protected)."""
+    from flask import send_file, abort
+    if request.args.get('token') != DASHBOARD_TOKEN:
+        return 'Unauthorized', 403
+    # Restrict to the OUTPUT_DIR to prevent path traversal
+    safe_dir  = os.path.realpath(os.getenv('OUTPUT_DIR', 'media'))
+    full_path = os.path.realpath(os.path.join(safe_dir, os.path.basename(filename)))
+    if not full_path.startswith(safe_dir) or not os.path.exists(full_path):
+        abort(404)
+    return send_file(full_path, as_attachment=True,
+                     download_name=os.path.basename(full_path))
 
 @app.route('/dashboard', methods=['GET'])
 def dashboard():
@@ -341,7 +355,17 @@ def dashboard():
         started = (sess.get('started_at') or '')[:16].replace('T', ' ')
         ended   = (sess.get('ended_at') or '')[:16].replace('T', ' ')
         sc      = STATUS_COLOR.get(status, '#555')
-        ended_html = f'<span style="color:#999;font-size:12px">Ended {ended} UTC</span>' if ended else ''
+        ended_html    = f'<span style="color:#999;font-size:12px">Ended {ended} UTC</span>' if ended else ''
+        report_path   = sess.get('report_path')
+        report_btn    = ''
+        if report_path:
+            fname = os.path.basename(report_path)
+            if os.path.exists(report_path):
+                report_btn = (f'<a href="/download/{fname}?token={token}" '
+                              f'style="background:#1565c0;color:#fff;padding:4px 12px;border-radius:6px;'
+                              f'font-size:12px;text-decoration:none;white-space:nowrap">⬇ Download Report</a>')
+            else:
+                report_btn = '<span style="color:#aaa;font-size:12px">⚠ Report file expired</span>'
 
         msg_rows = ''
         for m in msgs:
@@ -372,6 +396,7 @@ def dashboard():
             <span style="color:#555;font-size:13px">📸 {photos} photo(s)</span>
             <span style="color:#999;font-size:12px">Started {started} UTC</span>
             {ended_html}
+            {report_btn}
           </div>
           <div style="overflow-x:auto">
             <table style="width:100%;border-collapse:collapse;font-size:13px">

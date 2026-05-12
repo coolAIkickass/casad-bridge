@@ -1,5 +1,5 @@
 # report_gen.py — python-docx: JSON → filled .docx report
-import os, re
+import os, re, copy
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -41,6 +41,76 @@ def _fill_placeholders(doc: Document, data: dict) -> None:
             for cell in row.cells:
                 for para in cell.paragraphs:
                     replace_in_para(para)
+
+
+def _add_bookmark(para, bookmark_id: int, name: str) -> None:
+    """Wrap paragraph content in a named bookmark."""
+    p = para._p
+    bm_start = OxmlElement('w:bookmarkStart')
+    bm_start.set(qn('w:id'), str(bookmark_id))
+    bm_start.set(qn('w:name'), name)
+    bm_end = OxmlElement('w:bookmarkEnd')
+    bm_end.set(qn('w:id'), str(bookmark_id))
+    p.insert(0, bm_start)
+    p.append(bm_end)
+
+
+def _replace_photo_refs_with_hyperlinks(doc: Document) -> None:
+    """Replace '(Photo No.-X)' text in table cells with internal bookmark hyperlinks."""
+    import re
+    pattern = re.compile(r'(\(Photo No\.-\d+\))')
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    full_text = ''.join(r.text for r in para.runs)
+                    if '(Photo No.-' not in full_text:
+                        continue
+
+                    # Capture run formatting from first run
+                    p = para._p
+                    first_rpr = None
+                    first_r = p.find(qn('w:r'))
+                    if first_r is not None:
+                        first_rpr = first_r.find(qn('w:rPr'))
+
+                    # Remove all existing runs
+                    for r_el in p.findall(qn('w:r')):
+                        p.remove(r_el)
+
+                    # Rebuild paragraph — plain text + hyperlink elements
+                    for part in pattern.split(full_text):
+                        if not part:
+                            continue
+                        m = re.match(r'\(Photo No\.-(\d+)\)', part)
+                        if m:
+                            fig_num  = m.group(1)
+                            anchor   = f'figure_{fig_num}'
+                            hl = OxmlElement('w:hyperlink')
+                            hl.set(qn('w:anchor'), anchor)
+                            r_el = OxmlElement('w:r')
+                            rPr  = OxmlElement('w:rPr')
+                            rs   = OxmlElement('w:rStyle')
+                            rs.set(qn('w:val'), 'Hyperlink')
+                            rPr.append(rs)
+                            r_el.append(rPr)
+                            t_el = OxmlElement('w:t')
+                            t_el.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+                            t_el.text = part
+                            r_el.append(t_el)
+                            hl.append(r_el)
+                            p.append(hl)
+                        else:
+                            r_el = OxmlElement('w:r')
+                            if first_rpr is not None:
+                                import copy
+                                r_el.append(copy.deepcopy(first_rpr))
+                            t_el = OxmlElement('w:t')
+                            t_el.set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+                            t_el.text = part
+                            r_el.append(t_el)
+                            p.append(r_el)
 
 
 def _shade_cell(cell, hex_color: str) -> None:
@@ -104,6 +174,10 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list,
         cap_run.italic     = True
         cap_run.bold       = True
         cap_run.font.size  = Pt(9)
+
+        # Add bookmark so (Photo No.-X) hyperlinks can navigate here
+        if show_figure_label:
+            _add_bookmark(cap_para, fig_offset + idx, f'figure_{fig_offset + idx}')
 
         # Move table to correct position (relationships stay in main doc ✓)
         tbl_elem = tbl._element
@@ -182,6 +256,9 @@ def build_docx(report_json: dict) -> str:
             if para.text.strip() == '[[PHOTO_APPENDIX_B]]':
                 para.runs[0].text = 'No damage photographs submitted.'
                 break
+
+    # Convert (Photo No.-X) text to clickable hyperlinks now that bookmarks exist
+    _replace_photo_refs_with_hyperlinks(doc)
 
     river    = re.sub(r'[^\w\-]', '_', report_json.get('river_name', 'bridge'))
     road     = re.sub(r'[^\w\-]', '_', report_json.get('road_name',  'road'))

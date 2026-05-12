@@ -185,51 +185,83 @@ def _find_photo_description(messages: list, photo_idx: int) -> str:
     """Return the best description for a photo.
 
     Priority:
-      1. Inline WhatsApp caption on the photo itself  → use as-is
-      2. Text/voice that explicitly references this photo number (e.g. "photo 2 ...")
-      3. Nearest text/voice in the 3 messages before the photo
-      4. Nearest text/voice in the 3 messages after the photo
+      1. Inline WhatsApp caption on the photo itself
+      2. Text/voice in the SAME section (same category) that explicitly
+         references this photo number (e.g. "photo 2 ...")
+      3. Nearest text/voice in the SAME section, up to 3 messages before
+      4. Nearest text/voice in the SAME section, up to 3 messages after
     """
     m = messages[photo_idx]
+    photo_cat = m.get('category', 'damaged')
     photo_num = m.get('photo_num')
 
     # 1. Inline caption sent with the photo
     if m.get('content'):
         return m['content']
 
-    def _is_text(msg):
+    def _is_same_section_text(msg):
         content = (msg.get('content') or '').strip()
-        return bool(content) and not msg.get('media_path')
+        return (bool(content)
+                and not msg.get('media_path')
+                and msg.get('category') == photo_cat)
 
-    # 2. Explicit numeric reference in any nearby message
+    # 2. Explicit numeric reference within the same section
     if photo_num:
         search_range = list(range(max(0, photo_idx - 5), photo_idx)) + \
                        list(range(photo_idx + 1, min(len(messages), photo_idx + 6)))
         patterns = (f'photo {photo_num}', f'pic {photo_num}',
                     f'image {photo_num}', f'{photo_num}.')
         for k in search_range:
-            if _is_text(messages[k]):
+            if _is_same_section_text(messages[k]):
                 txt = messages[k]['content'].lower()
                 if any(p in txt for p in patterns):
                     return messages[k]['content'].strip()
 
-    # 3. Nearest text/voice before the photo
+    # 3. Nearest same-section text/voice before the photo
     for k in range(photo_idx - 1, max(photo_idx - 4, -1), -1):
-        if _is_text(messages[k]):
+        if _is_same_section_text(messages[k]):
             return messages[k]['content'].strip()
 
-    # 4. Nearest text/voice after the photo
+    # 4. Nearest same-section text/voice after the photo
     for k in range(photo_idx + 1, min(photo_idx + 4, len(messages))):
-        if _is_text(messages[k]):
+        if _is_same_section_text(messages[k]):
             return messages[k]['content'].strip()
 
     return ''
 
 
+def _group_messages_by_category(messages: list) -> str:
+    """Present messages to Claude grouped by section for clear context."""
+    buckets = {
+        'bridge_details':  [],
+        'damaged':         [],
+        'general':         [],
+        'recommendations': [],
+    }
+    for m in messages:
+        cat = m.get('category', '')
+        text = (m.get('content') or '').strip()
+        if text and cat in buckets:
+            buckets[cat].append(text)
+
+    parts = []
+    if buckets['bridge_details']:
+        parts.append("BRIDGE DETAILS (use for Section A fields):\n" +
+                     '\n'.join(buckets['bridge_details']))
+    if buckets['damaged']:
+        parts.append("DAMAGE OBSERVATIONS (use for Section B defect fields):\n" +
+                     '\n'.join(buckets['damaged']))
+    if buckets['recommendations']:
+        parts.append("RECOMMENDATIONS (use for Section C fields):\n" +
+                     '\n'.join(buckets['recommendations']))
+    if buckets['general']:
+        parts.append("GENERAL SITE NOTES:\n" + '\n'.join(buckets['general']))
+    return '\n\n'.join(parts)
+
+
 def parse_inspection(session: dict) -> dict:
     """Send session messages to Claude and return structured JSON."""
     messages = session.get('messages', [])
-    messages_text = '\n'.join(m['content'] for m in messages if m.get('content'))
 
     # Collect photo paths and their best available description
     photo_paths              = []
@@ -246,29 +278,41 @@ def parse_inspection(session: dict) -> dict:
             # Category is set by the menu state at collection time — no AI classification needed
             photo_categories_from_db.append(m.get('category', 'damaged'))
 
-    print(f"PARSE: {len(messages)} messages, text length={len(messages_text)}, photos={len(photo_paths)}")
-    print(f"FIELD NOTES:\n{messages_text}")
-    print(f"PHOTO DESCRIPTIONS: {photo_descriptions}")
+    grouped_notes = _group_messages_by_category(messages)
 
-    photo_info = [
-        {"photo_no": i + 1, "description": d, "category": c}
-        for i, (d, c) in enumerate(zip(photo_descriptions, photo_categories_from_db))
-    ]
+    # Assign figure numbers only to damage photos (these are the numbers used in Appendix B)
+    fig_counter = 0
+    photo_info  = []
+    for i, (d, c) in enumerate(zip(photo_descriptions, photo_categories_from_db)):
+        entry = {"description": d, "category": c}
+        if c in ('damage', 'damaged'):
+            fig_counter += 1
+            entry["figure_no"] = fig_counter
+            entry["reference"]  = f"(Photo No.-{fig_counter})"
+        else:
+            entry["figure_no"] = None
+            entry["reference"]  = None   # general photos are not referenced in observations
+        photo_info.append(entry)
+
+    print(f"PARSE: {len(messages)} messages, photos={len(photo_paths)}")
+    print(f"GROUPED NOTES:\n{grouped_notes}")
+    print(f"PHOTO INFO: {photo_info}")
 
     user_content = (
         f"Schema:\n{json.dumps(SCHEMA, indent=2)}\n\n"
-        f"Field notes:\n{messages_text}\n\n"
-        f"Photo information (photo number, description, category — use photo_no for references):\n"
+        f"Field notes (grouped by section):\n{grouped_notes}\n\n"
+        f"Photo information (use 'reference' value when citing each photo in observation fields):\n"
         f"{json.dumps(photo_info, indent=2)}\n\n"
-        f"Photo file paths (in sequence order, matching photo_no above):\n{json.dumps(photo_paths)}\n\n"
-        "For the photo_titles field: generate a short title (max 10 words) for each photo "
-        "based on its description. If no description, infer from field notes context. "
-        "photo_titles must have exactly the same number of entries as photo file paths.\n\n"
-        "For the photo_categories field: use exactly the category values from Photo information above — do NOT reclassify. "
-        "photo_categories must have exactly the same number of entries as photo file paths.\n\n"
+        f"Photo file paths (in sequence order):\n{json.dumps(photo_paths)}\n\n"
+        "For photo_titles: generate a short title (max 10 words) per photo from its description. "
+        "photo_titles must have exactly the same count as photo file paths.\n\n"
+        "For photo_categories: use the category values from Photo information — do NOT reclassify. "
+        "photo_categories must have exactly the same count as photo file paths.\n\n"
         "For observation fields (ss_*, sub_*, found_*, bearing_*, approach_*, expansion_joint, "
-        "wearing_coat, vegetation): append photo references where relevant, e.g. "
-        "\"Observed (Photo No.-1), (Photo No.-3)\". Only for observed/present defects."
+        "wearing_coat, vegetation): when a defect is observed, append the 'reference' value from "
+        "matching damage photos, e.g. \"Observed (Photo No.-1), (Photo No.-3)\". "
+        "Only reference damage photos (those with a non-null reference). "
+        "Do NOT add references to Absent / Not Visible / NIL / NA fields."
     )
 
     response = client.messages.create(

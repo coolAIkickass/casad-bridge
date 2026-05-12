@@ -93,10 +93,12 @@ CRITICAL — Photo titles (photo_titles field):
 
 CRITICAL — Photo number references in observation fields:
 - When filling ss_*, sub_*, found_*, bearing_*, approach_*, expansion_joint, wearing_coat, vegetation fields:
-  - If a defect is observed, append the relevant photo numbers: "Observed (Photo No.-1), (Photo No.-3)"
+  - If a defect is observed WITH a photo, append the relevant photo numbers: "Observed (Photo No.-1), (Photo No.-3)"
+  - If a defect is reported in OBSERVATIONS (NO PHOTO) section, write "Observed" WITHOUT any photo reference
   - Match photo numbers using the Photo information list provided — reference photos whose description mentions that specific defect and component
   - Only add photo references when the value is "Observed" or a specific description — NOT for "Absent", "Not Visible", "NA", "NIL", "-"
   - Format exactly: "Observed (Photo No.-X)" or "Observed (Photo No.-X), (Photo No.-Y)"
+  - If both a photo AND an observation-only note exist for the same defect, combine: "Observed (Photo No.-1)" (do not duplicate the word Observed)
 
 Recommendation fields (rec_gen_* and rec_str_*):
 - Write each as a complete professional sentence.
@@ -298,6 +300,7 @@ def _group_messages_by_category(messages: list) -> str:
     buckets = {
         'bridge_details':  [],
         'damaged':         [],
+        'observations':    [],
         'general':         [],
         'recommendations': [],
     }
@@ -312,8 +315,14 @@ def _group_messages_by_category(messages: list) -> str:
         parts.append("BRIDGE DETAILS (use for Section A fields):\n" +
                      '\n'.join(buckets['bridge_details']))
     if buckets['damaged']:
-        parts.append("DAMAGE OBSERVATIONS (use for Section B defect fields):\n" +
+        parts.append("DAMAGE OBSERVATIONS WITH PHOTOS (use for Section B defect fields — add photo references):\n" +
                      '\n'.join(buckets['damaged']))
+    if buckets['observations']:
+        parts.append(
+            "OBSERVATIONS WITHOUT PHOTOS (use for Section B defect fields — do NOT add photo references; "
+            "write 'Observed' only; also feed into Section C recommendations where relevant):\n" +
+            '\n'.join(buckets['observations'])
+        )
     if buckets['recommendations']:
         parts.append("RECOMMENDATIONS (use for Section C fields):\n" +
                      '\n'.join(buckets['recommendations']))

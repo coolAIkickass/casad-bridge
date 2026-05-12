@@ -20,8 +20,9 @@ MENU_MSG = (
     "1️⃣  Bridge details\n"
     "2️⃣  General photos\n"
     "3️⃣  Damaged photos with observation\n"
-    "4️⃣  Recommendations\n"
-    "5️⃣  Generate report\n\n"
+    "4️⃣  Observations (no photo)\n"
+    "5️⃣  Recommendations\n"
+    "6️⃣  Generate report\n\n"
     "_Send the number to select._"
 )
 
@@ -34,8 +35,19 @@ SECTION_NAMES = {
     '1': 'Bridge Details',
     '2': 'General Photos',
     '3': 'Damaged Photos with Observation',
-    '4': 'Recommendations',
+    '4': 'Observations (No Photo)',
+    '5': 'Recommendations',
 }
+
+OBSERVATIONS_PROMPT = (
+    "Ok! Please describe any *defects or damage observed* that were not captured in photos.\n\n"
+    "For each defect, mention:\n"
+    "• Which component is affected (e.g. pier, abutment, girder, deck slab)\n"
+    "• Type of defect (e.g. cracks, leaching, honeycombing, spalling)\n"
+    "• Severity or extent if known\n\n"
+    "You can share multiple defects in one message, or send multiple messages / voice notes.\n\n"
+    "Type *done* once you are finished with this section."
+)
 
 BRIDGE_DETAILS_PROMPT = (
     "Ok! Please share *Bridge Details* including the following:\n\n"
@@ -69,10 +81,11 @@ CATEGORY_MAP = {
     '1': 'bridge_details',
     '2': 'general',
     '3': 'damaged',
-    '4': 'recommendations',
+    '4': 'observations',
+    '5': 'recommendations',
 }
 
-VALID_OPTIONS = ('1', '2', '3', '4', '5')
+VALID_OPTIONS = ('1', '2', '3', '4', '5', '6')
 
 processed_ids = set()
 
@@ -134,7 +147,7 @@ def webhook():
                 "Please select the correct number from below:\n\n" + MENU_MSG)
             return 'OK', 200
 
-        if content_lower == '5':
+        if content_lower == '6':
             send_message(phone, "Generating your report now... I'll send it in a few minutes. 📄")
             threading.Thread(target=_generate_report, args=(phone,), daemon=True).start()
             return 'OK', 200
@@ -143,6 +156,8 @@ def webhook():
         set_session_state(phone, content_lower)
         if content_lower == '1':
             send_message(phone, BRIDGE_DETAILS_PROMPT)
+        elif content_lower == '4':
+            send_message(phone, OBSERVATIONS_PROMPT)
         else:
             name = SECTION_NAMES[content_lower]
             send_message(phone,
@@ -271,6 +286,7 @@ def dashboard():
     CATEGORY_ICON = {
         'bridge_details':  '🏗',
         'damaged':         '🔴',
+        'observations':    '📝',
         'general':         '📷',
         'recommendations': '📋',
         'system':          '⚙️',

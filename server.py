@@ -16,13 +16,13 @@ load_dotenv()
 VERIFY_TOKEN = os.getenv('VERIFY_TOKEN', 'casad2024')
 
 MENU_MSG = (
-    "Please select what you would like to share and type the number to continue:\n\n"
+    "What would you like to share next?\n\n"
     "1️⃣  Bridge details\n"
     "2️⃣  General photos\n"
     "3️⃣  Damaged photos with observation\n"
     "4️⃣  Recommendations\n"
     "5️⃣  Generate report\n\n"
-    "_Send the number to select an option. You can switch sections anytime by sending a different number._"
+    "_Send the number to select._"
 )
 
 WELCOME_MSG = (
@@ -30,11 +30,11 @@ WELCOME_MSG = (
     + MENU_MSG
 )
 
-SECTION_PROMPTS = {
-    '1': "📋 *Bridge Details*\nPlease share bridge details — name, location, road, spans, type etc. (text or voice note).\n\nSend another number anytime to switch sections.",
-    '2': "📸 *General Photos*\nSend your general / overview site photos now.\n\nSend another number anytime to switch sections.",
-    '3': "🔴 *Damaged Photos*\nSend damaged photos. For each photo you can:\n• Add a caption directly on the photo, OR\n• Send a text/voice note before or after (reference by photo number if describing multiple)\n\nSend another number anytime to switch sections.",
-    '4': "📝 *Recommendations*\nShare your recommendations — condition rating and any remedial suggestions (text or voice note).\n\nSend another number anytime to switch sections.",
+SECTION_NAMES = {
+    '1': 'Bridge Details',
+    '2': 'General Photos',
+    '3': 'Damaged Photos with Observation',
+    '4': 'Recommendations',
 }
 
 CATEGORY_MAP = {
@@ -43,6 +43,8 @@ CATEGORY_MAP = {
     '3': 'damaged',
     '4': 'recommendations',
 }
+
+VALID_OPTIONS = ('1', '2', '3', '4', '5')
 
 processed_ids = set()
 
@@ -73,23 +75,10 @@ def webhook():
         return 'OK', 200
 
     phone = msg['phone']
-    status = get_session_status(phone)
-
-    # New or completed session — reset and send welcome
-    if status is None or status == 'done':
-        reset_session(phone)
-        try:
-            send_message(phone, WELCOME_MSG)
-            print(f"WELCOME sent to {phone}")
-        except Exception as e:
-            print(f"WELCOME FAILED for {phone}: {e}")
-        return 'OK', 200
-
-    state, photo_count = get_session_state(phone)
     content_raw   = (msg.get('content') or '')
     content_lower = content_raw.lower().strip()
 
-    # ── Gratitude replies ──────────────────────────────────────────────────────
+    # ── Gratitude replies (any state) ─────────────────────────────────────────
     GRATITUDE_WORDS  = ('thank you', 'thanks', 'thankyou', 'thank u', 'shukriya', 'dhanyawad')
     GRATITUDE_EMOJIS = ('👍', '🙏', '❤️', '😊', '🤝', '👏')
     if (any(w in content_lower for w in GRATITUDE_WORDS) or
@@ -97,36 +86,52 @@ def webhook():
         send_message(phone, "I am glad I could be of use to you! 😊 See you again!")
         return 'OK', 200
 
-    # ── Menu keyword ───────────────────────────────────────────────────────────
-    if content_lower == 'menu':
+    status = get_session_status(phone)
+
+    # ── New or completed session ───────────────────────────────────────────────
+    if status is None or status == 'done':
+        reset_session(phone)
+        msg['category'] = 'system'
+        store_message(msg)           # creates the session row in DB
         set_session_state(phone, 'menu')
-        send_message(phone, MENU_MSG)
+        send_message(phone, WELCOME_MSG)
         return 'OK', 200
 
-    # ── Option 1–5 selected ────────────────────────────────────────────────────
-    if content_lower in ('1', '2', '3', '4', '5'):
-        option = content_lower
+    state, photo_count = get_session_state(phone)
 
-        if option == '5':
+    # ── Menu state: waiting for option 1–5 ────────────────────────────────────
+    if state == 'menu':
+        if content_lower not in VALID_OPTIONS:
+            send_message(phone,
+                "Please select the correct number from below:\n\n" + MENU_MSG)
+            return 'OK', 200
+
+        if content_lower == '5':
             send_message(phone, "Generating your report now... I'll send it in a few minutes. 📄")
             threading.Thread(target=_generate_report, args=(phone,), daemon=True).start()
             return 'OK', 200
 
-        set_session_state(phone, option)
-        send_message(phone, SECTION_PROMPTS[option])
+        # Valid section selected
+        set_session_state(phone, content_lower)
+        name = SECTION_NAMES[content_lower]
+        send_message(phone,
+            f"Ok! Please share *{name}*.\n\nType *done* once you are finished with this section.")
         return 'OK', 200
 
-    # ── Content message — store under current section ──────────────────────────
-    if state == 'menu':
-        # User sent something without selecting a section
-        send_message(phone, "Please select a section first:\n\n" + MENU_MSG)
+    # ── Collecting state: user is sharing content for a section ───────────────
+
+    # 'done' → back to menu
+    if content_lower == 'done':
+        set_session_state(phone, 'menu')
+        send_message(phone, "Got it! ✅\n\n" + MENU_MSG)
         return 'OK', 200
 
-    # Process media
+    # Process audio
     if msg['type'] == 'audio':
         audio = download_media(msg['media_id'])
         msg['content'] = transcribe_audio(audio)
 
+    # Process image
     elif msg['type'] == 'image':
         raw_bytes = download_media(msg['media_id'])
         img = Image.open(io.BytesIO(raw_bytes))
@@ -144,11 +149,9 @@ def webhook():
         msg['media_path'] = img_path
         msg['image_data'] = img_bytes
 
-        # Assign photo number and acknowledge
         photo_num = increment_photo_count(phone)
         msg['photo_num'] = photo_num
-        category  = CATEGORY_MAP.get(state, 'damaged')
-        section   = "general" if category == 'general' else "damaged"
+        section = "general" if state == '2' else "damaged"
         send_message(phone, f"📸 Photo {photo_num} saved ({section}).")
 
     msg['category'] = CATEGORY_MAP.get(state, 'bridge_details')

@@ -160,8 +160,9 @@ def webhook():
     # Single digit sent while in a section → guide user back to menu
     if content_lower in VALID_OPTIONS and msg['type'] == 'text':
         send_message(phone,
-            f"To switch sections, please type *done* first to go back to the main menu, "
-            f"then select the option you want.")
+            "Incorrect input. To switch sections:\n\n"
+            "• Type *done* to go back to the main menu.\n"
+            "• Then select the menu option you want.")
         return 'OK', 200
 
     # Process audio

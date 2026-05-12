@@ -22,7 +22,8 @@ MENU_MSG = (
     "3️⃣  Damaged photos with observation\n"
     "4️⃣  Observations (no photo)\n"
     "5️⃣  Recommendations\n"
-    "6️⃣  Generate report\n\n"
+    "6️⃣  Generate report\n"
+    "7️⃣  Exit (start over / new bridge)\n\n"
     "_Send the number to select._"
 )
 
@@ -85,7 +86,7 @@ CATEGORY_MAP = {
     '5': 'recommendations',
 }
 
-VALID_OPTIONS = ('1', '2', '3', '4', '5', '6')
+VALID_OPTIONS = ('1', '2', '3', '4', '5', '6', '7')
 
 processed_ids = set()
 
@@ -127,6 +128,13 @@ def webhook():
         send_message(phone, "I am glad I could be of use to you! 😊 See you again!")
         return 'OK', 200
 
+    # ── Exit / restart (any state) ────────────────────────────────────────────
+    if content_lower in ('7', 'exit', 'restart', 'new'):
+        reset_session(phone)
+        send_message(phone,
+            "✅ Session cleared. Send any message to start a fresh inspection. 👋")
+        return 'OK', 200
+
     status = get_session_status(phone)
 
     # ── New or completed session ───────────────────────────────────────────────
@@ -138,7 +146,7 @@ def webhook():
         send_message(phone, WELCOME_MSG)
         # If they already sent a valid menu number, fall through and handle it
         # immediately rather than making them send it again.
-        if content_lower not in VALID_OPTIONS or content_lower == '6':
+        if content_lower not in VALID_OPTIONS or content_lower in ('6', '7'):
             return 'OK', 200
         # else: fall through with state='menu' so the menu handler routes them
 

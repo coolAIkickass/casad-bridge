@@ -166,6 +166,21 @@ def reset_session(phone: str):
     con.close()
 
 
+def has_bridge_details(phone: str) -> bool:
+    """Return True if the active session has at least one bridge_details message."""
+    con = sqlite3.connect(DB)
+    sid = _active_session_id(con, phone)
+    if sid is None:
+        con.close()
+        return False
+    row = con.execute(
+        "SELECT 1 FROM messages WHERE session_id=? AND category='bridge_details' LIMIT 1",
+        (sid,)
+    ).fetchone()
+    con.close()
+    return row is not None
+
+
 def mark_done(phone: str, report_path: str = None):
     con = sqlite3.connect(DB)
     sid = _active_session_id(con, phone)

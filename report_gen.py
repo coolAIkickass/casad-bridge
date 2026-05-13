@@ -227,16 +227,25 @@ def _insert_photos_at_marker(doc: Document, marker: str, photos: list,
         img_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         img_para.paragraph_format.space_before = Pt(6)
         img_para.paragraph_format.space_after  = Pt(6)
-        img_para.add_run().add_picture(photo_path, width=Inches(5.5))
+
+        # Constrain to fit within page: max 5.5" wide, 4.0" tall
+        from PIL import Image as _PIL
+        with _PIL.open(photo_path) as _img:
+            w_px, h_px = _img.size
+        MAX_W = Inches(5.5)
+        MAX_H = Inches(4.0)
+        if w_px > 0 and h_px / w_px * MAX_W > MAX_H:
+            img_para.add_run().add_picture(photo_path, height=MAX_H)
+            img_w_emu = int(MAX_H * w_px / h_px)
+            img_h_emu = int(MAX_H)
+        else:
+            img_para.add_run().add_picture(photo_path, width=MAX_W)
+            img_w_emu = int(MAX_W)
+            img_h_emu = int(MAX_W * h_px / w_px)
 
         # Overlay an editable red oval at the detected defect location
         if photo_coords:
             try:
-                from PIL import Image as _PIL
-                with _PIL.open(photo_path) as _img:
-                    w_px, h_px = _img.size
-                img_w_emu = int(5.5 * 914400)
-                img_h_emu = int(img_w_emu * h_px / w_px)
                 _add_defect_circle(img_para,
                                    photo_coords[0], photo_coords[1],
                                    img_w_emu, img_h_emu,

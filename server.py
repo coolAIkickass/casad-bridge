@@ -5,7 +5,7 @@ from flask import Flask, request
 from dotenv import load_dotenv
 from db import (init_db, store_message, get_session, get_session_status,
                 get_session_state, set_session_state, increment_photo_count,
-                reset_session, mark_done)
+                reset_session, mark_done, has_bridge_details)
 from whatsapp import parse_payload, download_media, send_message, send_document
 from transcribe import transcribe_audio
 from ai_parse import parse_inspection
@@ -152,6 +152,22 @@ def webhook():
 
     state, photo_count = get_session_state(phone)
 
+    # ── Confirm-generate state: user was warned about missing bridge details ────
+    if state == 'confirm_generate':
+        if content_lower == '6':
+            set_session_state(phone, 'menu')
+            send_message(phone, "Generating your report now... I'll send it in a few minutes. 📄")
+            threading.Thread(target=_generate_report, args=(phone,), daemon=True).start()
+            return 'OK', 200
+        elif content_lower == '1':
+            set_session_state(phone, '1')
+            send_message(phone, BRIDGE_DETAILS_PROMPT)
+            return 'OK', 200
+        else:
+            send_message(phone,
+                "Please send *6* to generate the report now, or *1* to add bridge details first.")
+            return 'OK', 200
+
     # ── Menu state: waiting for option 1–5 ────────────────────────────────────
     if state == 'menu':
         if content_lower not in VALID_OPTIONS:
@@ -160,6 +176,16 @@ def webhook():
             return 'OK', 200
 
         if content_lower == '6':
+            if not has_bridge_details(phone):
+                send_message(phone,
+                    "⚠️ *Bridge details not found.*\n\n"
+                    "You haven't shared any bridge details yet (option 1️⃣). "
+                    "The report will have empty fields for bridge information.\n\n"
+                    "• To add bridge details first, select *1* → share details → type *done* → then select *6* again.\n"
+                    "• To generate the report as-is (with missing bridge info), send *6* again now."
+                )
+                set_session_state(phone, 'confirm_generate')
+                return 'OK', 200
             send_message(phone, "Generating your report now... I'll send it in a few minutes. 📄")
             threading.Thread(target=_generate_report, args=(phone,), daemon=True).start()
             return 'OK', 200

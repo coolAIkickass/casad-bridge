@@ -17,7 +17,8 @@ def init_db():
             (id INTEGER PRIMARY KEY AUTOINCREMENT,
              phone TEXT, bridge TEXT, status TEXT,
              state TEXT, photo_count INTEGER,
-             started_at TEXT, ended_at TEXT, report_path TEXT)''')
+             started_at TEXT, ended_at TEXT, report_path TEXT,
+             report_format TEXT)''')
     else:
         # Old schema had phone as PRIMARY KEY — rebuild with id as PK
         needs_rebuild = 'id' not in existing_sess_cols or 'report_path' not in existing_sess_cols

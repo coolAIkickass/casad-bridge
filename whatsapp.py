@@ -47,7 +47,7 @@ def parse_payload(data: dict) -> dict:
         return {'phone': 'unknown', 'type': 'unknown', 'content': None, 'seq': 0}
 
 
-def download_media(media_id: str, save: bool = False) -> bytes | str:
+def download_media(media_id: str, save: bool = False):
     """Download a media file from WhatsApp. Returns bytes or saved file path."""
     headers = {'Authorization': f'Bearer {TOKEN}'}
     # Step 1: get the download URL

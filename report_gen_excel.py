@@ -38,7 +38,7 @@ def _fill_title_page(wb, d):
 def _fill_appendix_a(wb, d):
     ws = wb['Appendix-A']
     mapping = {
-        'C4':  d.get('river_name', '-'),
+        'C4':  d.get('bridge_title', d.get('river_name', '-')),  # Name of Bridge
         'C6':  d.get('river_name', '-'),
         'C7':  d.get('road_name', '-'),
         'C9':  f"{d.get('latitude','-')} , {d.get('longitude','-')}",
@@ -61,28 +61,38 @@ def _fill_appendix_a(wb, d):
 
 def _fill_appendix_b(wb, d):
     ws = wb['Appendix-B']
-    # Map known Appendix-B inspection rows to report_json fields
-    # These are approximate — fill the "Particulars as per record" column (C)
+    # Correct row mapping verified against the actual R&B template structure
     fields = {
-        # Approaches (rows ~13-18)
-        'C13': d.get('approach_settlement', '-'),
-        'C14': d.get('approach_erosion', '-'),
-        'C17': d.get('approach_other', '-'),
-        # Substructure (rows ~32-35)
-        'C32': d.get('sub_cracks', '-'),
-        'C33': d.get('sub_other', '-'),
-        # Bearings (rows ~36-39)
-        'C37': d.get('bearing_displacement', '-'),
-        'C38': d.get('bearing_distortion', '-'),
-        'C39': d.get('bearing_corrosion', '-'),
-        # Superstructure (rows ~40-47)
-        'C41': d.get('ss_cracks', '-'),
-        'C42': d.get('ss_spalling', '-'),
-        'C43': d.get('ss_exposed_rebar', '-'),
-        'C46': d.get('ss_delamination', '-'),
-        # Wearing coat / expansion joint / parapets
-        'C55': d.get('wearing_coat', '-'),
-        'C56': d.get('expansion_joint', '-'),
+        # Section 1 — General identity (rows 4-12, blank in template)
+        'C4':  d.get('bridge_title', d.get('river_name', '-')),
+        'C6':  d.get('river_name', '-'),
+        'C7':  d.get('road_name', '-'),
+        'C8':  d.get('road_number', '-'),
+        'C9':  f"{d.get('latitude','-')} , {d.get('longitude','-')}",
+        'C10': f"{d.get('division','-')} / {d.get('circle','-')}",
+        'C11': d.get('type_of_bridge', d.get('bridge_type', '-')),
+        'C12': d.get('date_of_survey', '-'),
+        # Section 4 — Approaches (rows 14-19)
+        'C14': d.get('approach_settlement', '-'),
+        'C15': d.get('approach_side_slopes', '-'),
+        'C16': d.get('approach_erosion', '-'),
+        'C17': d.get('approach_slab', '-'),
+        'C18': d.get('approach_geometrics', '-'),
+        'C19': d.get('approach_other', '-'),
+        # Section 8 — Substructure cross-refs (rows 42-46)
+        'C42': 'Refer Table  1 and 2',
+        'C43': 'Refer Table  1 and 2',
+        'C44': 'Refer Table  1 and 2',
+        'C45': 'Refer Table  1 and 2',
+        'C46': 'Refer Table  1 and 2',
+        # Section 9.1.4 — Bearing pedestal/seismic arrestor cracks (row 52)
+        'C52': d.get('sub_cracks', '-'),
+        # Section 10 — Superstructure cross-refs (rows 59, 61-64)
+        'C59': 'Refer Table  3 and 4',
+        'C61': 'Refer Table  3 and 4',
+        'C62': 'Refer Table  3 and 4',
+        'C63': 'Refer Table  3 and 4',
+        'C64': 'Refer Table  3 and 4',
     }
     for addr, val in fields.items():
         try:
@@ -188,14 +198,16 @@ def _fill_appendix_c(wb, d):
             try:
                 from PIL import Image as PILImage
                 with PILImage.open(path) as img:
+                    img.load()
+                    if img.mode in ('RGBA', 'P', 'LA'):
+                        img = img.convert('RGB')
                     w, h = img.size
-                # Resize to max 400x300 maintaining aspect ratio
-                max_w, max_h = 400, 300
-                scale = min(max_w / w, max_h / h)
-                new_w, new_h = int(w * scale), int(h * scale)
-                img_resized = img.resize((new_w, new_h))
-                buf = io.BytesIO()
-                img_resized.save(buf, format='JPEG', quality=85)
+                    max_w, max_h = 400, 300
+                    scale = min(max_w / w, max_h / h)
+                    new_w, new_h = int(w * scale), int(h * scale)
+                    img_resized = img.resize((new_w, new_h))
+                    buf = io.BytesIO()
+                    img_resized.save(buf, format='JPEG', quality=85)
                 buf.seek(0)
                 xl_img = XLImage(buf)
                 xl_img.anchor = f'B{row}'
@@ -250,10 +262,13 @@ def build_excel(report_json: dict) -> str:
     _fill_appendix_c_captions(wb, report_json)
     _fill_appendix_c(wb, report_json)
 
-    river    = re.sub(r'[^\w\-]', '_', report_json.get('river_name', 'bridge'))
-    road     = re.sub(r'[^\w\-]', '_', report_json.get('road_name', 'road'))
+    # Prefer bridge_title for the filename; fall back to river_name
+    name     = report_json.get('bridge_title') or report_json.get('river_name', 'bridge')
+    road     = report_json.get('road_name', 'road')
+    name     = re.sub(r'[^\w\-]', '_', name)
+    road     = re.sub(r'[^\w\-]', '_', road)
     date_str = report_json.get('date_of_survey', 'report').replace('/', '-')
-    out_path = os.path.join(OUTPUT_DIR, f'CASAD_{river}_{road}_{date_str}.xlsx')
+    out_path = os.path.join(OUTPUT_DIR, f'CASAD_{name}_{road}_{date_str}.xlsx')
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     wb.save(out_path)
     print(f"EXCEL REPORT SAVED: {out_path}")

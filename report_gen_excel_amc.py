@@ -243,12 +243,14 @@ def _fill_appendix_c(wb, d):
         try:
             from PIL import Image as PILImage
             with PILImage.open(path) as img:
+                img.load()
+                if img.mode in ('RGBA', 'P', 'LA'):
+                    img = img.convert('RGB')
                 w, h = img.size
-            max_w, max_h = 400, 300
-            scale    = min(max_w / w, max_h / h)
-            new_w    = int(w * scale)
-            new_h    = int(h * scale)
-            with PILImage.open(path) as img:
+                max_w, max_h = 400, 300
+                scale    = min(max_w / w, max_h / h)
+                new_w    = int(w * scale)
+                new_h    = int(h * scale)
                 img_resized = img.resize((new_w, new_h))
                 buf = io.BytesIO()
                 img_resized.save(buf, format='JPEG', quality=85)

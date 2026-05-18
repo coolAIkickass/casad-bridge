@@ -1,0 +1,157 @@
+{
+  "bridge_title":        "Khokhara ROB",
+  "river_name":          "N/A (Railway Over Bridge)",
+  "road_name":           "Kankaria Anupam Cinema Road",
+  "road_number":         "-",
+  "latitude":            "23.000000",
+  "longitude":           "72.607542",
+  "division":            "AMC",
+  "circle":              "AMC",
+  "client_name":         "AHMEDABAD MUNICIPAL CORPORATION",
+  "project_name":        "Bridge Inspection Work Ahmedabad City",
+  "project_number":      "-",
+  "date_of_survey":      "13/04/2026",
+
+  "no_of_spans":         "Anupam Cinema side: 10 spans | Gomtipur Road side: 10 spans | Railway portion: 4 spans",
+  "total_length":        "Anupam Cinema Road: 92+6×25+21+13+63 = 339.53 m | Gomtipur Road: 92+5×25+113 = 330 m",
+  "span_length":         "Anupam Cinema side: C/C 25 m, pier width 1.25 m | Gomtipur Road side: C/C 12.5 m, pier width 1.2 m | Railway: 4×25 m = 100 m",
+  "bridge_type":         "Railway Over Bridge (ROB)",
+  "type_of_bridge":      "Railway Over Bridge (ROB)",
+  "superstructure_type": "PSC Girder + Deck Slab (Anupam P8 to A2) | RCC Solid Slab (Gomtipur P5 to BA1) | Steel Truss (Railway portion)",
+  "foundation_type":     "Pile Foundation",
+  "bearing_type_detail": "Strip Seal Expansion Joint",
+  "expansion_joint":     "Strip Seal",
+  "wearing_coat":        "As per approved design",
+  "railing_type":        "-",
+  "deck_level":          "107.575 m (Railway portion)",
+  "pier_length":         "2.5 m (Anupam Cinema side) | 3.0 m (Railway portion)",
+  "substructure_type":   "RCC / Masonry piers",
+  "angle_of_crossing":   "Q",
+  "hydraulic_params":    "Not Applicable",
+  "subsoil":             "As per approved GAD",
+  "date_of_completion":  "09/08/2020",
+  "performance":         "Good",
+
+  "approach_settlement": "Damage in footpath and kerb — existing approach towards Kankaria side",
+  "approach_side_slopes":"Not Accessible",
+  "approach_erosion":    "Not Visible",
+  "approach_slab":       "Good",
+  "approach_geometrics": "Good",
+  "approach_other":      "Existing approach is not accessible from bridge side",
+  "sub_cracks":          "Minor crack in dirt wall at abutment RA1 (Railway portion). Construction defect in placement of girder at pier P5 (Anupam approach). Honeycombing and damage in seismic arrestor, no gap between seismic arrestor and girder at PRP6-BP1 (both Anupam and Gomtipur side).",
+  "sub_other":           "Absent",
+  "bearing_condition":   "Absent",
+  "bearing_displacement":"Absent",
+  "bearing_distortion":  "Absent",
+  "bearing_corrosion":   "Absent",
+  "ss_cracks":           "Absent",
+  "ss_spalling":         "Exposed reinforcement and spalling at bottom of girder in span P9–P10 and span P30–P31. Spalling at bottom of girder in span P41–P42.",
+  "ss_exposed_rebar":    "Exposed reinforcement observed at spans P9–P10, P30–P31, P41–P42.",
+  "ss_delamination":     "Absent",
+
+  "sub_piers_side1":  ["A1", "RP1", "P2", "P3", "P4", "P5", "P6", "P7", "P8L", "P8R"],
+  "sub_piers_side2":  ["BP1", "BP2", "BP3", "BP4", "BP5", "BP6", "BP7", "BP8", "BP9", "BA1"],
+  "super_spans_side1": ["RA1-RP1", "RP1-P2", "P2-P3", "P3-P4", "P4-P5", "P5-P6", "P6-P7", "P7-P8L", "P8L-P8R", "P8R-A2"],
+  "super_spans_side2": ["P5-BP1", "BP1-BP2", "BP2-BP3", "BP3-BP4", "BP4-BP5", "BP5-BP6", "BP6-BP7", "BP7-BP8", "BP8-BP9", "BP9-BA1"],
+
+  "defect_sub1": {
+    "A1":  { "cracks": "Minor crack in dirt wall — RA1 Railway portion" },
+    "P5":  {
+      "honeycombing": "Construction defect — improper placement of girder",
+      "any_other":    "Girder not properly seated on bearing"
+    },
+    "P6":  { "honeycombing": "Damage and honeycombing in seismic arrestor; no gap between seismic arrestor and girder" },
+    "RP1": { "honeycombing": "Observed" },
+    "P2":  { "honeycombing": "Observed" },
+    "P3":  { "honeycombing": "Observed" },
+    "P4":  { "honeycombing": "Observed" },
+    "P7":  { "honeycombing": "Observed" },
+    "P8L": { "honeycombing": "Observed" },
+    "P8R": { "honeycombing": "Observed" }
+  },
+  "defect_sub2": {
+    "BP1": { "honeycombing": "Damage and honeycombing in seismic arrestor; no gap between seismic arrestor and girder (Gomtipur side)" },
+    "BP2": { "honeycombing": "Observed" },
+    "BP3": { "honeycombing": "Observed" },
+    "BP4": { "honeycombing": "Observed" }
+  },
+  "defect_super1": {
+    "RA1-RP1": {
+      "vegetation": "Growth of vegetation in span RA1–RP1 (Railway portion)"
+    },
+    "RP1-P2": {
+      "honeycombing": "Observed",
+      "leakage":      "Breakage of down-take pipe — span RP1 to RP2 (Anupam approach)"
+    },
+    "P2-P3":  { "honeycombing": "Observed" },
+    "P3-P4":  {
+      "honeycombing": "Observed",
+      "any_other":    "Damage in both-direction expansion joint (P3–P9, Anupam side)"
+    },
+    "P4-P5":  { "honeycombing": "Observed" },
+    "P5-P6":  { "honeycombing": "Observed" },
+    "P6-P7":  { "honeycombing": "Observed" },
+    "P7-P8L": { "honeycombing": "Observed" },
+    "P8L-P8R":{
+      "honeycombing": "Observed",
+      "spalling":     "Exposed reinforcement and spalling at bottom of girder (P9–P10)",
+      "exposed_rebar":"Exposed reinforcement at bottom of girder (P9–P10)"
+    }
+  },
+  "defect_super2": {
+    "BP1-BP2": {
+      "spalling":      "Exposed reinforcement and spalling at bottom of girder (P30–P31)",
+      "exposed_rebar": "Exposed reinforcement (P30–P31)"
+    },
+    "BP9-BA1": {
+      "spalling":      "Spalling at bottom of girder (P41–P42)",
+      "exposed_rebar": "Exposed reinforcement (P41–P42)"
+    },
+    "BP2-BP3": { "honeycombing": "Observed" },
+    "BP3-BP4": { "honeycombing": "Observed" }
+  },
+
+  "photos": [
+    "/Users/bansal.umang89/Desktop/CASAD/Pictures/P5Anupam.png",
+    "/Users/bansal.umang89/Desktop/CASAD/Pictures/seismic.png",
+    "/Users/bansal.umang89/Desktop/CASAD/Pictures/seismic2.png",
+    "/Users/bansal.umang89/Desktop/CASAD/Pictures/girderspan p9-p10.png",
+    "/Users/bansal.umang89/Desktop/CASAD/Pictures/spannext.png",
+    "/Users/bansal.umang89/Desktop/CASAD/Pictures/RA1minorcracr.png",
+    "/Users/bansal.umang89/Desktop/CASAD/Pictures/vegRA1RP1.png",
+    "/Users/bansal.umang89/Desktop/CASAD/Pictures/breakage in down take pipe.png",
+    "/Users/bansal.umang89/Desktop/CASAD/Pictures/Span p3top9.png",
+    "/Users/bansal.umang89/Desktop/CASAD/Pictures/footpathkankaria.png",
+    "/Users/bansal.umang89/Desktop/CASAD/Pictures/spallingP41-P42.png"
+  ],
+  "photo_titles": [
+    "Construction defect in placement of girder at pier P5 — Anupam side approach",
+    "Damage and honeycombing in seismic arrestor; no gap between seismic arrestor and girder — PRP6-BP1 Anupam side",
+    "Damage and honeycombing in seismic arrestor; no gap between seismic arrestor and girder — PRP6-BP1 Gomtipur side",
+    "Exposed reinforcement and spalling at bottom of girder — Span P9 to P10",
+    "Exposed reinforcement and spalling at bottom of girder — Span P30 to P31",
+    "Minor crack in dirt wall — Abutment RA1, Railway portion",
+    "Growth of vegetation — Span RA1 to RP1, Railway portion",
+    "Breakage of down-take pipe — Span RP1 to RP2, Anupam side approach",
+    "Damage in both-direction expansion joint — Span P3 to P9, Anupam side",
+    "Damage in footpath and kerb — Existing approach towards Kankaria side",
+    "Spalling at bottom of girder — Span P41 to P42"
+  ],
+  "photo_categories": [
+    "general",
+    "general",
+    "general",
+    "damaged",
+    "damaged",
+    "general",
+    "damaged",
+    "damaged",
+    "damaged",
+    "damaged",
+    "damaged"
+  ],
+  "_photo_notes": {
+    "general = substructure photos (Appendix-C)":  ["P5Anupam", "seismic", "seismic2", "RA1minorcracr"],
+    "damaged = superstructure photos (Appendix-C2)": ["girderspan p9-p10", "spannext", "vegRA1RP1", "breakage", "Span p3top9", "footpathkankaria", "spallingP41-P42"]
+  }
+}

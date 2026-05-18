@@ -114,6 +114,19 @@ Convert informal field notes into a structured JSON object matching the CASAD br
 Notes may be in mixed Hindi/English or fragmented.
 Output ONLY valid JSON — no markdown, no explanation, no preamble.
 
+CRITICAL — Exact value preservation (never override):
+- Copy ALL values EXACTLY as the inspector stated. Do NOT paraphrase, abbreviate, rephrase, or translate technical terms.
+- For span lengths and bridge lengths, ALWAYS preserve the complete mathematical expression as stated, e.g.:
+  "92 + 6 × 25 + 21 + 13 + 63 = 339.53 m (Anupam Cinema Road)"
+  — never simplify to just "339.53 m".
+- For GPS coordinates, preserve FULL decimal precision as stated (e.g. "23.007695" not "23").
+- For angles, preserve the exact symbol/code stated (e.g. "Q" means Q — do NOT convert to "Skew").
+- For no_of_spans, list each side separately: "Anupam Road Side: 10 Nos.\nGomtipur Road Side: 10 Nos.\nRailway Portion: 4 Nos."
+- Leave a field as "" (empty string) if the inspector did NOT mention it — never invent or infer values.
+- Fields that must NEVER be self-filled (leave empty if not explicitly stated by the inspector):
+  carriage_width, footpath_width, total_cost, material_consumed, design_agency, construction_agency,
+  loading_standard, pier_cap_width, abutment_width, scour_level, horizontal_force.
+
 BRIDGE COMPONENT KNOWLEDGE — use this to correctly classify and map observations:
 
 SUPERSTRUCTURE components (map to ss_* fields):
@@ -217,27 +230,36 @@ SCHEMA = {
     "river_name":           "",
     "road_name":            "",
     "chainage":             "",
-    "latitude":             "",
-    "longitude":            "",
+    "latitude":             "",    # FULL decimal precision (e.g. "23.007695")
+    "longitude":            "",    # FULL decimal precision
     "circle":               "",
     "division":             "",
     "sub_division":         "",
-    "no_of_spans":          "",
-    "span_length":          "",
-    "bridge_type":          "",
-    "superstructure_type":  "",
+    "no_of_spans":          "",    # list each side: "Anupam: 10 Nos.\nGomtipur: 10 Nos.\nRailway: 4 Nos."
+    "span_length":          "",    # C/C of piers with pier widths
+    "span_arrangement":     "",    # EXACT mathematical breakdown: "92+6×25+21+13+63=339.53m (Anupam)..."
+    "total_length":         "",    # same as span_arrangement — full expression
+    "bridge_type":          "",    # structural type (PSC Girder / RCC Slab / Steel Truss)
+    "bridge_level_type":    "",    # high level / submersible / ROB — from "type of bridge whether high level..."
+    "type_of_bridge":       "",    # same as bridge_level_type
+    "superstructure_type":  "",    # PSC Girder / RCC Slab / Steel Truss with location suffixes
     "substructure_type":    "",
     "foundation_type":      "",
     "bearing_type_detail":  "",
-    "total_length":         "",
     "approach_length":      "",
     "railing_type":         "",
     "river_training":       "",
     "repair_work":          "",
-    "carriageway_width":    "",
+    "carriage_width":       "",    # ONLY fill if inspector explicitly stated
     "year_of_construction": "",
-    "bridge_level_type":    "",
     "river_perennial":      "",
+    "angle_of_crossing":    "",    # copy EXACTLY (e.g. "Q" stays "Q", not "Skew")
+    "deck_level":           "",    # e.g. "107.575 m (Railway Portion)"
+    "pier_length":          "",    # e.g. "2.5 m (Anupam Cinema side)\n3.0 m (Railway Portion)"
+    "date_of_completion":   "",    # dd/mm/yyyy
+    "surface_utilities":    "",    # electric lines, telephone cables etc.
+    "performance":          "",    # Good / Fair / Poor
+    "prestressing_details": "",    # "As per approved Design" if mentioned
 
     # Section B — Survey
     "date_of_survey": "",
@@ -377,6 +399,20 @@ Extract from bridge details:
 - project_name: the broader project name (e.g. "Bridge Inspection Work Ahmedabad City")
 - project_number: project reference number if mentioned
 - bridge_title: official full bridge name
+
+BRIDGE DETAILS EXTRACTION RULES (critical for Excel Appendix-A accuracy):
+- no_of_spans: list EVERY side separately with exact counts, e.g.:
+  "Anupam Road Side: 10 Nos.\nGomtipur Road Side: 10 Nos.\nRailway Portion: 4 Nos."
+- total_length / span_arrangement: preserve the EXACT mathematical expression — never simplify, e.g.:
+  "92 + 6 × 25 + 21 + 13 + 63 = 339.53 m (Anupam Cinema Road)\n92 + 5 × 25 + 113 = 330 m (Gomtipur Road)"
+  The inspector stated "92 plus 6 number into 25 meter plus..." — keep this expanded form.
+- superstructure_type: list each part with span range, e.g.:
+  "PSC Girder and Deck Slab (RP1 to P8 — Anupam Cinema Side)\nRCC Solid Slab (P5 to BA1 — Gomtipur Side)\nSteel Truss (Railway Portion)"
+- bridge_level_type / type_of_bridge: "High Level" / "ROB" / "Submersible" — NOT the structural type.
+- angle_of_crossing: copy EXACTLY as stated — if inspector says "Q", output "Q" (not "Skew").
+- latitude / longitude: preserve FULL decimal precision exactly as stated.
+- span_length: C/C spacing and pier widths per side (this is DIFFERENT from span_arrangement).
+- date_of_completion: dd/mm/yyyy format, e.g. "09/08/2020"
 '''
 
 

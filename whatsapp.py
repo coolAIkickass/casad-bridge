@@ -94,10 +94,21 @@ def send_message(phone: str, text: str) -> None:
     r.raise_for_status()
 
 
+def _mime_for(path: str) -> str:
+    """Return the correct MIME type based on the file extension."""
+    ext = os.path.splitext(path)[1].lower()
+    return {
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.pdf':  'application/pdf',
+    }.get(ext, 'application/octet-stream')
+
+
 def send_document(phone: str, file_path: str, caption: str = '') -> None:
     """Upload a file to WhatsApp media and send it as a document."""
     headers = {'Authorization': f'Bearer {TOKEN}'}
     filename = os.path.basename(file_path)
+    mime     = _mime_for(file_path)
 
     # Step 1: upload to Meta media endpoint
     with open(file_path, 'rb') as f:
@@ -105,7 +116,7 @@ def send_document(phone: str, file_path: str, caption: str = '') -> None:
             f'{BASE_URL}/media',
             headers=headers,
             data={'messaging_product': 'whatsapp'},
-            files={'file': (filename, f, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')},
+            files={'file': (filename, f, mime)},
         )
     upload_resp.raise_for_status()
     media_id = upload_resp.json()['id']

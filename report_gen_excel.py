@@ -98,25 +98,65 @@ def _fill_title_page(wb, d):
 
 def _fill_appendix_a(wb, d):
     ws = wb['Appendix-A']
+
+    # ── Step 1: wipe ALL variable data cells (column C, rows 4-104) ──────────
+    # This prevents stale data from a previous bridge report leaking into the
+    # new one (the template is reused and may carry old values).
+    from openpyxl.cell.cell import MergedCell
+    for r in range(4, 105):
+        cell = ws.cell(row=r, column=3)   # col C = 3
+        if not isinstance(cell, MergedCell):
+            cell.value = None
+
+    # ── Step 2: write current report values ──────────────────────────────────
     mapping = {
+        # Section 1 — General identity
         'C4':  d.get('bridge_title', d.get('river_name', '-')),
+        'C5':  d.get('bridge_number', '-'),
         'C6':  d.get('river_name', '-'),
         'C7':  d.get('road_name', '-'),
+        'C8':  d.get('road_number', '-'),
         'C9':  _coords(d),
+        'C10': '-',                         # BM / GTS level — rarely provided
         'C11': d.get('division', d.get('circle', '-')),
         'C12': d.get('circle', '-'),
+
+        # Section 2 — Details of Spans
         'C15': d.get('no_of_spans', '-'),
         'C16': d.get('total_length', '-'),
-        # C43 = "Type of Bridge" = structural/superstructure type, NOT a generic label
+        'C17': d.get('angle_of_crossing', '-'),
+        # C18 = high-level / submersible / ROB — use bridge_level_type or type_of_bridge
+        'C18': d.get('bridge_level_type', d.get('type_of_bridge', '-')),
+
+        # Section 5 — Design and Structural Data
+        # C43 = "(b) Type of Bridge (RCC solid slab, T-beam deck slab…)" = STRUCTURAL type
         'C43': d.get('superstructure_type', d.get('bridge_type', '-')),
-        # C44 = "Span arrangement"
+        # C44 = "(c) Span arrangement" — exact text from user (math breakdown if given)
         'C44': d.get('span_arrangement', d.get('span_length', '-')),
+        # C45 = "(d) Carriage width and footpath width" — only if user provided
+        'C45': d.get('carriage_width', '-'),
+        # C46 = "(e) Deck level"
+        'C46': d.get('deck_level', '-'),
         'C50': d.get('foundation_type', '-'),
+        # C52-C53: substructure details
+        'C52': d.get('substructure_type', '-'),
+        'C53': d.get('pier_length', '-'),
+        # C59 = "(i) Type of superstructure" — same structural type, duplicate of C43
         'C59': d.get('superstructure_type', '-'),
+        # C60 = "(ii) Details of Prestressing"
+        'C60': d.get('prestressing_details', 'As per approved Design'),
         'C64': d.get('bearing_type_detail', '-'),
         'C65': d.get('wearing_coat', '-'),
         'C66': d.get('railing_type', '-'),
         'C67': d.get('expansion_joint', '-'),
+
+        # Section 7 — Other Data
+        'C81': _parse_survey_date(d.get('date_of_completion')) if d.get('date_of_completion') else '-',
+        'C82': d.get('surface_utilities', '-'),
+        'C84': d.get('ls_sketch', 'As per approved GAD'),
+
+        # Section 8-9 — Performance & recording date
+        'C92': d.get('performance', '-'),
         'C93': _parse_survey_date(d.get('date_of_survey', '-')),
     }
     for addr, val in mapping.items():

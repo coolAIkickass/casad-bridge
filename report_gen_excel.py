@@ -142,6 +142,13 @@ def _fill_appendix_a(wb, d):
         'C11': d.get('division', d.get('circle', '-')),
         'C12': d.get('circle', '-'),
 
+        # Section 3 — Hydraulic Parameters section header
+        # Row 20 = "3 Hydraulic Parameters:" — write user value or "Not Applicable"
+        'C20': d.get('hydraulic_parameters') or None,
+        # Section 4 — Sub Soil Particulars section header
+        # Row 33 = "4 Sub Soil Particulars:" — write user value or blank
+        'C33': d.get('subsoil_particulars') or None,
+
         # Section 2 — Details of Spans
         # Row 2.1 label: "Number of Spans (Length, center to center of piers
         # and width of piers)" — ONE cell that must combine both fields.
@@ -168,18 +175,18 @@ def _fill_appendix_a(wb, d):
         'C59': d.get('superstructure_type', '-'),
         # C60 = "(ii) Details of Prestressing"
         'C60': d.get('prestressing_details', 'As per approved Design'),
-        'C64': d.get('bearing_type_detail', '-'),
-        'C65': d.get('wearing_coat', '-'),
-        'C66': d.get('railing_type', '-'),
-        'C67': d.get('expansion_joint', '-'),
+        'C64': d.get('bearing_type_detail') or None,
+        'C65': d.get('wearing_coat') or None,
+        'C66': d.get('railing_type') or None,
+        'C67': d.get('expansion_joint') or None,
 
         # Section 7 — Other Data
         'C81': _fmt_date(d.get('date_of_completion')) if d.get('date_of_completion') else '-',
-        'C82': d.get('surface_utilities', '-'),
-        'C84': d.get('ls_sketch', 'As per approved GAD'),
+        'C82': d.get('surface_utilities') or None,
+        'C84': d.get('ls_sketch') or None,  # blank unless user explicitly stated
 
         # Section 8-9 — Performance & recording date
-        'C92': d.get('performance', '-'),
+        'C92': d.get('performance') or None,
         'C93': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else '-',
     }
     for addr, val in mapping.items():
@@ -190,33 +197,49 @@ def _fill_appendix_a(wb, d):
 
 
 def _fill_appendix_b(wb, d):
+    from openpyxl.cell.cell import MergedCell
     ws = wb['Appendix-B']
+
+    # Pre-wipe column C rows 4-75 to remove stale template data.
+    # This is essential: without it, old bridge inspection data (e.g. 'Good' in
+    # all metallic-bearing rows) persists when new session has no bearing data.
+    for r in range(4, 76):
+        cell = ws.cell(row=r, column=3)
+        if not isinstance(cell, MergedCell):
+            cell.value = None
+
     div, cir = d.get('division', '-'), d.get('circle', '-')
+
+    def _v(key):
+        """Return value or None — never write dash placeholders for missing data."""
+        v = d.get(key)
+        return v if v and str(v).strip() not in ('-', '') else None
+
     fields = {
-        # Section 1 — General identity
+        # Section 1 — General identity (always write something)
         'C4':  d.get('bridge_title', d.get('river_name', '-')),
         'C6':  d.get('river_name', '-'),
         'C7':  d.get('road_name', '-'),
-        'C8':  d.get('road_number', '-'),
+        'C8':  d.get('road_number') or None,
         'C9':  _coords(d),
         'C10': div if div == cir else f"{div} / {cir}",
-        'C11': d.get('type_of_bridge', d.get('bridge_type', '-')),
-        'C12': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else '-',
-        # Section 4 — Approaches
-        'C14': d.get('approach_settlement', '-'),
-        'C15': d.get('approach_side_slopes', '-'),
-        'C16': d.get('approach_erosion', '-'),
-        'C17': d.get('approach_slab', '-'),
-        'C18': d.get('approach_geometrics', '-'),
-        'C19': d.get('approach_other', '-'),
-        # Section 8 — Substructure cross-refs
+        'C11': d.get('type_of_bridge', d.get('bridge_type')) or None,
+        'C12': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else None,
+        # Section 4 — Approaches (blank if not provided)
+        'C14': _v('approach_settlement'),
+        'C15': _v('approach_side_slopes'),
+        'C16': _v('approach_erosion'),
+        'C17': _v('approach_slab'),
+        'C18': _v('approach_geometrics'),
+        'C19': _v('approach_other'),
+        # Section 8 — Substructure cross-refs (always present — defect tables always exist)
         'C42': 'Refer Table  1 and 2',
         'C43': 'Refer Table  1 and 2',
         'C44': 'Refer Table  1 and 2',
         'C45': 'Refer Table  1 and 2',
         'C46': 'Refer Table  1 and 2',
-        # Section 9 — Bearing/pedestal cracks
-        'C52': d.get('sub_cracks', '-'),
+        # Section 9 — Bearing/pedestal cracks (blank if not provided)
+        'C52': _v('sub_cracks'),
         # Section 10 — Superstructure cross-refs
         'C59': 'Refer Table  3 and 4',
         'C61': 'Refer Table  3 and 4',
@@ -226,7 +249,7 @@ def _fill_appendix_b(wb, d):
     }
     for addr, val in fields.items():
         try:
-            _cell(ws, addr, val or '-')
+            _cell(ws, addr, val)
         except Exception:
             pass
 
@@ -239,35 +262,33 @@ def _fill_defect_table(ws, elements: list, matrix: dict,
                        start_col: int, remarks_col: int):
     """Fill one defect table.
 
-    Clears only the columns that will actually be written (start_col through
-    start_col+len(elements)-1) rather than clearing all the way to remarks_col,
-    which would destroy Remarks headers or merged 'Not Accessible' blocks.
+    ALWAYS clears the data region first — prevents stale template data from
+    surviving even when 0 inspection data is provided (user gave no defects).
+
+    Writes blank (None) instead of 'Absent' for unobserved defects.
+    Only actual observations are written; cells with no data remain blank.
     """
-    if not elements:
-        return
-
-    last_data_col = start_col + len(elements) - 1
-
-    # Clear only columns occupied by the new element data
-    for col_i in range(start_col, last_data_col + 1):
+    # Step 1: Always clear — even when elements is empty — to remove old data.
+    clear_end = (start_col + len(elements)) if elements else remarks_col
+    for col_i in range(start_col, clear_end):
         _safe_write(ws, 3, col_i, None)
         for row in range(4, 15):
             _safe_write(ws, row, col_i, None)
 
-    # Write element IDs in row 3
+    if not elements:
+        return
+
+    # Step 2: Write element IDs in row 3
     for i, elem_id in enumerate(elements):
         _safe_write(ws, 3, start_col + i, elem_id)
 
-    # Write defect observations
+    # Step 3: Write only actual observations — leave blank otherwise
     for defect_key, row_num in DEFECT_ROW.items():
         for i, elem_id in enumerate(elements):
-            obs = (matrix.get(elem_id, {}) or {}).get(defect_key)
-            # Use 'Absent' only when the element is explicitly in the matrix
-            # but lacks this defect.  Leave unwritten elements as-is (None).
-            if elem_id in matrix:
-                _safe_write(ws, row_num, start_col + i, obs if obs else 'Absent')
-            else:
-                _safe_write(ws, row_num, start_col + i, 'Absent')
+            obs = (matrix.get(elem_id, {}) or {}).get(defect_key, '')
+            # Skip 'Absent' and empty — leave cell blank (already cleared in step 1)
+            if obs and str(obs).strip().lower() != 'absent':
+                _safe_write(ws, row_num, start_col + i, obs)
 
 
 def _fill_defect_tables(wb, d):
@@ -316,16 +337,16 @@ def _fill_defect_tables(wb, d):
         _merge_write(ws3, 4, 5, 12, 7, concrete_obs)
 
         # Row 13 vegetation — merged E13:G13
-        veg = rly_defects.get('vegetation', 'Absent')
-        _merge_write(ws3, 13, 5, 13, 7, veg or 'Absent')
+        veg = rly_defects.get('vegetation') or None
+        _merge_write(ws3, 13, 5, 13, 7, veg)
 
         # Row 14 any_other — merged E14:G14 (corrosion/bolt defects for steel truss).
         # If 'any_other' is absent but 'rust_marks' has content, use rust_marks
         # (the AI occasionally stores corrosion data under rust_marks for steel spans).
         other = (rly_defects.get('any_other')
                  or rly_defects.get('rust_marks')
-                 or 'Absent')
-        _merge_write(ws3, 14, 5, 14, 7, other or 'Absent')
+                 or None)
+        _merge_write(ws3, 14, 5, 14, 7, other)
 
         # 3. Road spans starting at col H(8)
         for i, span_id in enumerate(road_spans):
@@ -333,7 +354,8 @@ def _fill_defect_tables(wb, d):
             _safe_write(ws3, 3, col, span_id)
             for defect_key, row_num in DEFECT_ROW.items():
                 obs = (matrix3.get(span_id, {}) or {}).get(defect_key)
-                val = obs if obs else 'Absent'
+                # Write blank (None) for unobserved defects — never write 'Absent'
+                val = obs if obs and str(obs).strip().lower() != 'absent' else None
                 _safe_write(ws3, row_num, col, val)
 
     # ── Table 4: Super-structure Side 2 ────────────────────────────────────

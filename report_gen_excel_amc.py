@@ -97,31 +97,29 @@ def _detect_remarks_col(ws):
 
 
 def _fill_defect_table(ws, elements: list, matrix: dict, start_col: int, remarks_col: int):
-    """Fill one defect table sheet with pier/span IDs and observations.
+    """Fill one defect table sheet.
 
-    elements   : list of pier or span ID strings (e.g. ['A1','P1','P2',...])
-    matrix     : {element_id: {defect_key: observation_string}}
-    start_col  : 1-based column index where element IDs start (row 3)
-    remarks_col: 1-based column index of the Remarks column (preserved, not overwritten)
+    ALWAYS clears the data region first to remove stale template data.
+    Writes blank instead of 'Absent' for unobserved defects.
     """
-    if not elements:
-        return
-
-    # Clear existing header and data cells between start_col and remarks_col-1
-    for col_i in range(start_col, remarks_col):
+    # Always clear — even when elements is empty
+    clear_end = (start_col + len(elements)) if elements else remarks_col
+    for col_i in range(start_col, clear_end):
         _safe_write(ws, 3, col_i, None)
         for row in range(4, 15):
             _safe_write(ws, row, col_i, None)
 
-    # Write new element IDs in row 3
+    if not elements:
+        return
+
     for i, elem_id in enumerate(elements):
         _safe_write(ws, 3, start_col + i, elem_id)
 
-    # Write defect observations rows 4-14
     for defect_key, row_num in DEFECT_ROW.items():
         for i, elem_id in enumerate(elements):
-            obs = (matrix.get(elem_id, {}) or {}).get(defect_key, 'Absent')
-            _safe_write(ws, row_num, start_col + i, obs or 'Absent')
+            obs = (matrix.get(elem_id, {}) or {}).get(defect_key, '')
+            if obs and str(obs).strip().lower() != 'absent':
+                _safe_write(ws, row_num, start_col + i, obs)
 
 
 def _fill_defect_tables(wb, d):
@@ -206,6 +204,11 @@ def _fill_appendix_a(wb, d):
         'C11': d.get('division', d.get('circle', '-')),
         'C12': d.get('circle', '-'),
 
+        # Section 3 — Hydraulic Parameters section header
+        'C20': d.get('hydraulic_parameters') or None,
+        # Section 4 — Sub Soil Particulars section header
+        'C33': d.get('subsoil_particulars') or None,
+
         # ── Section 2 — Details of Spans (rows 15-18) ────────────────────────
         # Row 14 = "Details of Spans:" section header — do NOT write here.
         # Row 2.1 label: "Number of Spans (Length, c/c of piers and width of
@@ -237,76 +240,72 @@ def _fill_appendix_a(wb, d):
         # C60 = row-(j)(ii) "Details of Prestressing"
         'C60': d.get('prestressing_details', 'As per approved Design'),
         # C64 = row-(m) "Type of bearings"
-        'C64': d.get('bearing_type_detail', '-'),
-        'C65': d.get('wearing_coat', '-'),
-        'C66': d.get('railing_type', '-'),
-        'C67': d.get('expansion_joint', '-'),
+        'C64': d.get('bearing_type_detail') or None,
+        'C65': d.get('wearing_coat') or None,
+        'C66': d.get('railing_type') or None,
+        'C67': d.get('expansion_joint') or None,
 
         # ── Section 7 — Other Data (rows 81-84) ──────────────────────────────
         'C81': _fmt_date(d.get('date_of_completion')) if d.get('date_of_completion') else '-',
-        'C82': d.get('surface_utilities', '-'),
-        'C84': d.get('ls_sketch', 'As per approved GAD'),
+        'C82': d.get('surface_utilities') or None,
+        'C84': d.get('ls_sketch') or None,
 
         # ── Section 8-9 — Performance & survey date ───────────────────────────
-        'C92': d.get('performance', '-'),
+        'C92': d.get('performance') or None,
         'C93': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else '-',
     }
     for addr, val in mapping.items():
         try:
-            _cell(ws, addr, val or '-')
+            _cell(ws, addr, val)
         except Exception:
             pass
 
 
 def _fill_appendix_b(wb, d):
-    """Fill Appendix-B — AMC row structure verified against
-    casad_amc_template.xlsx (2026-05-18).  Both AMC and R&B templates share
-    identical row numbers in Appendix-B.  Earlier code had three families of
-    wrong row numbers fixed here.
-    """
+    """Fill Appendix-B — AMC version. Pre-wiped to prevent stale template data."""
+    from openpyxl.cell.cell import MergedCell
     ws = wb['Appendix-B']
+
+    # Pre-wipe column C rows 4-75
+    for r in range(4, 76):
+        cell = ws.cell(row=r, column=3)
+        if not isinstance(cell, MergedCell):
+            cell.value = None
+
     lat = d.get('latitude', '-')
     lon = d.get('longitude', '-')
     div = d.get('division', '-')
     cir = d.get('circle', '-')
-    # Column C = Observations
+
+    def _v(key):
+        v = d.get(key)
+        return v if v and str(v).strip() not in ('-', '') else None
+
     fields = {
-        # ── Section 1 — General identity ────────────────────────────────────
         'C4':  d.get('bridge_title', d.get('river_name', '-')),
         'C6':  d.get('river_name', '-'),
         'C7':  d.get('road_name', '-'),
-        'C8':  d.get('road_number', '-'),
+        'C8':  d.get('road_number') or None,
         'C9':  f"{lat}° , {lon}°",
         'C10': div if div == cir else f"{div} / {cir}",
-        'C11': d.get('type_of_bridge', d.get('bridge_type', '-')),
-        'C12': d.get('date_of_survey', '-'),   # raw string 'dd/mm/yyyy'
-
-        # ── Section 4 — Approaches (rows 14-19) ─────────────────────────────
-        # BUG FIXED: old code used C16-C21; template rows are C14-C19.
-        'C14': d.get('approach_settlement', '-'),
-        'C15': d.get('approach_side_slopes', '-'),
-        'C16': d.get('approach_erosion', '-'),
-        'C17': d.get('approach_slab', '-'),
-        'C18': d.get('approach_geometrics', '-'),
-        'C19': d.get('approach_other', '-'),
-
-        # ── Section 8 — Substructure (rows 42-46) ───────────────────────────
-        # BUG FIXED: C43 = row 8.1 "drainage of backfill" ≠ sub_cracks.
-        # General cross-reference for inspection tables:
+        'C11': d.get('type_of_bridge', d.get('bridge_type')) or None,
+        'C12': d.get('date_of_survey', '-'),
+        # Approaches (blank if not provided)
+        'C14': _v('approach_settlement'),
+        'C15': _v('approach_side_slopes'),
+        'C16': _v('approach_erosion'),
+        'C17': _v('approach_slab'),
+        'C18': _v('approach_geometrics'),
+        'C19': _v('approach_other'),
+        # Substructure cross-refs
         'C42': 'Refer Table  1 and 2',
         'C43': 'Refer Table  1 and 2',
         'C44': 'Refer Table  1 and 2',
         'C45': 'Refer Table  1 and 2',
         'C46': 'Refer Table  1 and 2',
-
-        # ── Section 9 — Bearings ─────────────────────────────────────────────
-        # Row 9.1.4 "Report cracks in supporting member (pedestal, pier cap)"
-        # BUG FIXED: was at C43; correct row is C52.
-        'C52': d.get('sub_cracks', '-'),
-
-        # ── Section 10 — Superstructure (rows 59-64) ─────────────────────────
-        # BUG FIXED: old code wrote ss_* fields to C55-C57 (elastomeric-bearing
-        # section rows).  Superstructure section starts at C59.
+        # Bearing/pedestal cracks
+        'C52': _v('sub_cracks'),
+        # Superstructure cross-refs
         'C59': 'Refer Table  3 and 4',
         'C61': 'Refer Table  3 and 4',
         'C62': 'Refer Table  3 and 4',
@@ -315,7 +314,7 @@ def _fill_appendix_b(wb, d):
     }
     for addr, val in fields.items():
         try:
-            _cell(ws, addr, val or '-')
+            _cell(ws, addr, val)
         except Exception:
             pass
 

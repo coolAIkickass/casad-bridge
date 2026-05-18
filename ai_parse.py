@@ -116,9 +116,11 @@ Output ONLY valid JSON — no markdown, no explanation, no preamble.
 
 CRITICAL — Exact value preservation (never override):
 - Copy ALL values EXACTLY as the inspector stated. Do NOT paraphrase, abbreviate, rephrase, or translate technical terms.
-- For span lengths and bridge lengths, ALWAYS preserve the complete mathematical expression as stated, e.g.:
-  "92 + 6 × 25 + 21 + 13 + 63 = 339.53 m (Anupam Cinema Road)"
-  — never simplify to just "339.53 m".
+- For span lengths and bridge lengths, ALWAYS preserve the COMPLETE mathematical expression EXACTLY as stated — including all addends before the = sign.
+  CORRECT: "92 + 6 × 25 + 21 + 13 + 63 = 339.53 m (Anupam Cinema Road)"
+  WRONG:   "339.53 m (Anupam Cinema Road)"  ← stripping the math is FORBIDDEN
+  WRONG:   "92+6x25+21+13+63=339.53m"       ← must use × not x, preserve spaces
+- total_length and span_arrangement must ALWAYS contain the full expression with all terms, never just the result.
 - For GPS coordinates, preserve FULL decimal precision as stated (e.g. "23.007695" not "23").
 - For angles, preserve the exact symbol/code stated (e.g. "Q" means Q — do NOT convert to "Skew").
 - For no_of_spans, list each side separately: "Anupam Road Side: 10 Nos.\nGomtipur Road Side: 10 Nos.\nRailway Portion: 4 Nos."
@@ -160,6 +162,12 @@ BEARINGS (map to bearing_* fields):
 - Bearing pedestal: concrete block hosting the bearing on top of pier cap
 Key defects: displacement (lateral shift), distortion (bulging/deformation), corrosion (rust on metallic bearings)
 
+CRITICAL — Field assignment rules (common confusion points):
+- bearing_type_detail: ONLY the type of bearing (e.g. "Elastomeric Bearing", "POT-PTFE Bearing", "Metallic Bearing"). NEVER put expansion joint info here.
+- expansion_joint: ONLY the expansion joint type (e.g. "Strip Seal", "Compression Seal"). NEVER put bearing info here.
+- hydraulic_parameters: write "Not Applicable" for Railway Over Bridges (ROB) or bridges without waterway. Write actual HFL/discharge data if given.
+- subsoil_particulars: write "As per approved GAD" if inspector says so, or actual soil description.
+
 APPROACH (map to approach_* fields):
 - Approach slab / road: the road section immediately before/after the bridge
 - Slope protection: erosion protection on embankment sides near bridge ends
@@ -179,10 +187,10 @@ DEFECT CLASSIFICATION GUIDE:
 
 Default values for missing information:
 - "Not Visible" for foundation observation fields
-- "Absent" for superstructure / substructure defect fields
-- "-" for miscellaneous / other fields
-- "NA" for bearing fields when not applicable
-- "NIL" for recommendation fields where no issue was found
+- "" (empty string, NOT "Absent") for ALL defect fields — if inspector did NOT mention a defect for a pier/span, leave it EMPTY. Do NOT write "Absent". The report system will leave those cells blank.
+- "" (empty string) for all other missing fields
+- NEVER use "Absent", "NIL", "NA", "-" as fill-in values for fields the inspector did not mention.
+- EXCEPTION: if inspector explicitly says "no cracks" / "no defects observed" / "absent", then write "Absent" for that specific field only.
 
 CRITICAL — Structural component accuracy:
 - Always use the EXACT component name the inspector mentioned. Do not generalise, substitute, or infer.
@@ -254,6 +262,8 @@ SCHEMA = {
     "year_of_construction": "",
     "river_perennial":      "",
     "angle_of_crossing":    "",    # copy EXACTLY (e.g. "Q" stays "Q", not "Skew")
+    "hydraulic_parameters":  "",    # "Not Applicable" for ROBs / actual value if given
+    "subsoil_particulars":   "",    # "As per approved GAD" / actual description
     "deck_level":           "",    # e.g. "107.575 m (Railway Portion)"
     "pier_length":          "",    # e.g. "2.5 m (Anupam Cinema side)\n3.0 m (Railway Portion)"
     "date_of_completion":   "",    # dd/mm/yyyy
@@ -390,7 +400,7 @@ Extract pier and span IDs from the bridge details and inspection messages:
 For defect matrices (defect_sub1, defect_sub2, defect_super1, defect_super2):
 - Build a dict: {pier_or_span_id: {defect_key: observation_string}}
 - Defect keys: cracks, leaching, honeycombing, exposed_rebar, leakage, spalling, rust_marks, shuttering, delamination, vegetation, any_other
-- For any pier/span not mentioned for a specific defect, use "Absent"
+- For any pier/span not mentioned for a specific defect, use "" (empty string — do NOT write "Absent")
 - If a defect IS observed at a pier/span, write the specific description
 - If only one side is mentioned, leave side2 empty list
 
@@ -412,6 +422,9 @@ BRIDGE DETAILS EXTRACTION RULES (critical for Excel Appendix-A accuracy):
 - angle_of_crossing: copy EXACTLY as stated — if inspector says "Q", output "Q" (not "Skew").
 - latitude / longitude: preserve FULL decimal precision exactly as stated.
 - span_length: C/C spacing and pier widths per side (this is DIFFERENT from span_arrangement).
+- hydraulic_parameters: if inspector says "hydraulic parameters not applicable" or similar, output "Not Applicable". For ROBs, this is always "Not Applicable".
+- subsoil_particulars: if inspector says "as per approved GAD" or "as per approved design", output exactly that phrase. Leave empty if not mentioned.
+- bearing_type_detail: list each bearing type with its location. e.g. "Elastomeric Bearing (Anupam Cinema + Gomtipur Side)\nPOT-PTFE Bearing (Railway Portion)". NEVER put expansion joint text here.
 - date_of_completion: dd/mm/yyyy format, e.g. "09/08/2020"
 '''
 
@@ -681,7 +694,7 @@ def parse_inspection_excel(session: dict) -> dict:
         "matching damage photos, e.g. \"Observed (Photo No.-1), (Photo No.-3)\". "
         "Only reference damage photos (those with a non-null reference). "
         "Do NOT add references to Absent / Not Visible / NIL / NA fields.\n\n"
-        "For defect matrices: extract per-pier/span observations. Use 'Absent' for any element not mentioned for a given defect type.\n\n"
+        "For defect matrices: extract per-pier/span observations. Use \"\" (empty string) for any element not mentioned for a given defect type — do NOT write 'Absent'.\n\n"
     )
 
     # Use streaming — required by Anthropic SDK for requests that may exceed

@@ -211,30 +211,32 @@ def _fill_appendix_c(wb, d):
 
 def _fill_appendix_c_captions(wb, d):
     """Write photo caption list to Appendix-c sheet."""
+    from openpyxl.cell.cell import MergedCell
     ws = wb['Appendix-c']
     photos     = d.get('photos', [])
     titles     = d.get('photo_titles', [])
     categories = d.get('photo_categories', [])
 
-    # Clear existing content below row 1
+    # Clear existing content below row 1 (skip MergedCells)
     for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
         for cell in row:
-            cell.value = None
+            if not isinstance(cell, MergedCell):
+                cell.value = None
 
     row = 2
-    ws.cell(row=row, column=2, value='SUB STRUCTURE')
+    _safe_write(ws, row, 2, 'SUB STRUCTURE')
     row += 1
     for i, (path, title, cat) in enumerate(zip(photos, titles, categories), 1):
         if cat not in ('damage', 'damaged'):
-            ws.cell(row=row, column=2, value=f'{i}. {title}')
+            _safe_write(ws, row, 2, f'{i}. {title}')
             row += 1
 
     row += 1
-    ws.cell(row=row, column=2, value='SUPER STRUCTURE')
+    _safe_write(ws, row, 2, 'SUPER STRUCTURE')
     row += 1
     for i, (path, title, cat) in enumerate(zip(photos, titles, categories), 1):
         if cat in ('damage', 'damaged'):
-            ws.cell(row=row, column=2, value=f'{i}. {title}')
+            _safe_write(ws, row, 2, f'{i}. {title}')
             row += 1
 
 def build_excel(report_json: dict) -> str:

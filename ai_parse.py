@@ -1,9 +1,39 @@
 # ai_parse.py — Claude API: field notes → structured JSON
-import json, os
+import json, os, time
 import anthropic
 from mark_image import get_defect_coords
 
 client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+
+# Claude Haiku rate limit: 5 req/min → 1 req per 13s (with small buffer)
+_COORD_DELAY_SEC = 13
+
+def _detect_defect_coords(photo_paths, photo_descriptions, cats):
+    """Detect defect bounding coords for damage photos — sequential with rate-limit delay.
+
+    Processes one photo every 13 seconds to stay within the 5 req/min Claude Haiku
+    limit. For 80 damage photos this takes ~17 min, which is acceptable.
+    Returns: dict {path: (x, y) or None}
+    """
+    photo_coords = {path: None for path in photo_paths}
+    jobs = [
+        (path, desc)
+        for path, desc, cat in zip(photo_paths, photo_descriptions, cats)
+        if cat in ('damage', 'damaged') and desc and os.path.exists(path)
+    ]
+    print(f"DEFECT COORDS: {len(jobs)} damage photos to process (~{len(jobs)*_COORD_DELAY_SEC//60} min)", flush=True)
+    for i, (path, desc) in enumerate(jobs):
+        if i > 0:
+            time.sleep(_COORD_DELAY_SEC)
+        try:
+            with open(path, 'rb') as f:
+                img_bytes = f.read()
+            coords = get_defect_coords(img_bytes, desc)
+            photo_coords[path] = coords
+            print(f"DEFECT COORDS [{i+1}/{len(jobs)}]: {coords} for: {desc[:60]}", flush=True)
+        except Exception as e:
+            print(f"DEFECT COORDS FAILED [{i+1}/{len(jobs)}]: {e}", flush=True)
+    return photo_coords
 
 SYSTEM_PROMPT = '''
 You are a structural engineering report assistant for CASAD Consultants with deep knowledge of bridge components.
@@ -470,35 +500,13 @@ def parse_inspection(session: dict) -> dict:
 
     result['photo_categories'] = cats
 
-    # Locate defects in damage photos — run in parallel, return coords (no image modification)
-    import concurrent.futures
-
-    def _locate_one(args):
-        path, desc = args
-        try:
-            with open(path, 'rb') as f:
-                img_bytes = f.read()
-            return (path, get_defect_coords(img_bytes, desc))
-        except Exception as e:
-            print(f"DEFECT LOCATE FAILED for {path}: {e}")
-            return (path, None)
-
-    locate_jobs = [
-        (path, desc)
-        for path, desc, cat in zip(photo_paths, photo_descriptions, cats)
-        if cat in ('damage', 'damaged') and desc and os.path.exists(path)
-    ]
-    photo_coords = {path: None for path in photo_paths}
-    if locate_jobs:
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            for path, coords in pool.map(_locate_one, locate_jobs):
-                photo_coords[path] = coords
-
+    # Locate defect coordinates in damage photos — sequential, rate-limit safe
+    photo_coords = _detect_defect_coords(photo_paths, photo_descriptions, cats)
     result['photo_coords'] = [photo_coords.get(p) for p in photo_paths]
 
-    print(f"PHOTOS injected: {photo_paths}")
-    print(f"TITLES: {result['photo_titles']}")
-    print(f"CATEGORIES: {result['photo_categories']}")
+    print(f"PHOTOS injected: {photo_paths}", flush=True)
+    print(f"TITLES: {result['photo_titles']}", flush=True)
+    print(f"CATEGORIES: {result['photo_categories']}", flush=True)
     return result
 
 
@@ -598,35 +606,13 @@ def parse_inspection_excel(session: dict) -> dict:
 
     result['photo_categories'] = cats
 
-    # Locate defects in damage photos — run in parallel, return coords (no image modification)
-    import concurrent.futures
-
-    def _locate_one(args):
-        path, desc = args
-        try:
-            with open(path, 'rb') as f:
-                img_bytes = f.read()
-            return (path, get_defect_coords(img_bytes, desc))
-        except Exception as e:
-            print(f"DEFECT LOCATE FAILED for {path}: {e}")
-            return (path, None)
-
-    locate_jobs = [
-        (path, desc)
-        for path, desc, cat in zip(photo_paths, photo_descriptions, cats)
-        if cat in ('damage', 'damaged') and desc and os.path.exists(path)
-    ]
-    photo_coords = {path: None for path in photo_paths}
-    if locate_jobs:
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            for path, coords in pool.map(_locate_one, locate_jobs):
-                photo_coords[path] = coords
-
+    # Locate defect coordinates in damage photos — sequential, rate-limit safe
+    photo_coords = _detect_defect_coords(photo_paths, photo_descriptions, cats)
     result['photo_coords'] = [photo_coords.get(p) for p in photo_paths]
 
-    print(f"EXCEL PHOTOS injected: {photo_paths}")
-    print(f"TITLES: {result['photo_titles']}")
-    print(f"CATEGORIES: {result['photo_categories']}")
+    print(f"EXCEL PHOTOS injected: {photo_paths}", flush=True)
+    print(f"TITLES: {result['photo_titles']}", flush=True)
+    print(f"CATEGORIES: {result['photo_categories']}", flush=True)
     return result
 
 

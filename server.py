@@ -220,7 +220,7 @@ def webhook():
     if state == 'confirm_generate':
         if content_lower == '6':
             set_session_state(phone, 'menu')
-            send_message(phone, "Generating your report now... I'll send it in a few minutes. 📄")
+            send_message(phone, "Generating your report now... I'll share it in a few minutes. 📄\n\n_Note: It takes 1 min / 5 photos to process._")
             threading.Thread(target=_generate_report, args=(phone,), daemon=True).start()
             return 'OK', 200
         elif content_lower == '1':
@@ -250,7 +250,7 @@ def webhook():
                 )
                 set_session_state(phone, 'confirm_generate')
                 return 'OK', 200
-            send_message(phone, "Generating your report now... I'll send it in a few minutes. 📄")
+            send_message(phone, "Generating your report now... I'll share it in a few minutes. 📄\n\n_Note: It takes 1 min / 5 photos to process._")
             threading.Thread(target=_generate_report, args=(phone,), daemon=True).start()
             return 'OK', 200
 

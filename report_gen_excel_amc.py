@@ -37,6 +37,25 @@ def _col_letter(n):
         result = chr(65 + rem) + result
     return result
 
+def _safe_write(ws, row: int, col: int, value):
+    """Write to a cell, unmerging its range first if it is a MergedCell."""
+    from openpyxl.cell.cell import MergedCell
+    from openpyxl.utils import range_boundaries
+    cell = ws.cell(row=row, column=col)
+    if isinstance(cell, MergedCell):
+        for rng in list(ws.merged_cells.ranges):
+            min_col, min_row, max_col, max_row = range_boundaries(str(rng))
+            if min_row <= row <= max_row and min_col <= col <= max_col:
+                ws.unmerge_cells(str(rng))
+                break
+    ws.cell(row=row, column=col).value = value
+
+def _cell(ws, addr, value):
+    """Write to a named cell address (e.g. 'C4'), unmerging if needed."""
+    from openpyxl.utils import coordinate_to_tuple
+    row, col = coordinate_to_tuple(addr)
+    _safe_write(ws, row, col, value)
+
 
 def _find_sheet(wb, keyword):
     """Find the first sheet whose name contains keyword (case-insensitive)."""
@@ -73,22 +92,19 @@ def _fill_defect_table(ws, elements: list, matrix: dict, start_col: int, remarks
 
     # Clear existing header and data cells between start_col and remarks_col-1
     for col_i in range(start_col, remarks_col):
-        col_letter = _col_letter(col_i)
-        ws[f'{col_letter}3'] = None
+        _safe_write(ws, 3, col_i, None)
         for row in range(4, 15):
-            ws[f'{col_letter}{row}'] = None
+            _safe_write(ws, row, col_i, None)
 
     # Write new element IDs in row 3
     for i, elem_id in enumerate(elements):
-        col_letter = _col_letter(start_col + i)
-        ws[f'{col_letter}3'] = elem_id
+        _safe_write(ws, 3, start_col + i, elem_id)
 
     # Write defect observations rows 4-14
     for defect_key, row_num in DEFECT_ROW.items():
         for i, elem_id in enumerate(elements):
-            col_letter = _col_letter(start_col + i)
             obs = (matrix.get(elem_id, {}) or {}).get(defect_key, 'Absent')
-            ws[f'{col_letter}{row_num}'] = obs or 'Absent'
+            _safe_write(ws, row_num, start_col + i, obs or 'Absent')
 
 
 def _fill_defect_tables(wb, d):
@@ -134,14 +150,14 @@ def _fill_defect_tables(wb, d):
 
 def _fill_title_page(wb, d):
     ws = wb['TITLE PAGE']
-    ws['A2'] = f"CLIENT: {_safe(d, 'client_name', 'AHMEDABAD MUNICIPAL CORPORATION')}"
-    ws['C3'] = _safe(d, 'project_name', 'Bridge Inspection Work Ahmedabad City')
-    ws['C4'] = f'"{_safe(d, "bridge_title", d.get("river_name", ""))}"'
-    ws['A5'] = f"Project No.: {_safe(d, 'project_number', '-')}"
-    ws['A8'] = 'R0'
-    ws['B8'] = date.today()
-    ws['D8'] = 'Preliminary Inspection Report'
-    ws['E8'] = 'CASAD'
+    _cell(ws, 'A2', f"CLIENT: {_safe(d, 'client_name', 'AHMEDABAD MUNICIPAL CORPORATION')}")
+    _cell(ws, 'C3', _safe(d, 'project_name', 'Bridge Inspection Work Ahmedabad City'))
+    _cell(ws, 'C4', f'"{_safe(d, "bridge_title", d.get("river_name", ""))}"')
+    _cell(ws, 'A5', f"Project No.: {_safe(d, 'project_number', '-')}")
+    _cell(ws, 'A8', 'R0')
+    _cell(ws, 'B8', date.today())
+    _cell(ws, 'D8', 'Preliminary Inspection Report')
+    _cell(ws, 'E8', 'CASAD')
 
 
 def _fill_appendix_a(wb, d):
@@ -160,9 +176,9 @@ def _fill_appendix_a(wb, d):
         'C45': d.get('span_length', '-'),
         'C61': d.get('superstructure_type', '-'),
     }
-    for cell, val in mapping.items():
+    for addr, val in mapping.items():
         try:
-            ws[cell] = val or '-'
+            _cell(ws, addr, val or '-')
         except Exception:
             pass
 
@@ -195,9 +211,9 @@ def _fill_appendix_b(wb, d):
         'C56': d.get('ss_spalling', '-'),
         'C57': d.get('ss_exposed_rebar', '-'),
     }
-    for cell, val in fields.items():
+    for addr, val in fields.items():
         try:
-            ws[cell] = val or '-'
+            _cell(ws, addr, val or '-')
         except Exception:
             pass
 

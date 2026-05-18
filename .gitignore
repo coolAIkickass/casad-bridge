@@ -1,3 +1,4 @@
 .env
 *.db
 media/
+# Excel templates are committed as slim versions (images stripped)

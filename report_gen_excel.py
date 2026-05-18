@@ -17,42 +17,47 @@ def _safe(d, key, default='-'):
     v = d.get(key)
     return str(v) if v else default
 
+def _cell(ws, addr, value):
+    """Write to a named cell address (e.g. 'C4'), unmerging if needed."""
+    from openpyxl.utils import coordinate_to_tuple
+    row, col = coordinate_to_tuple(addr)
+    _safe_write(ws, row, col, value)
+
 def _fill_title_page(wb, d):
     ws = wb['TITLE PAGE']
-    ws['A2'] = f"CLIENT: {_safe(d, 'client_name', 'CASAD CONSULTANTS PVT. LTD.')}"
-    ws['C4'] = _safe(d, 'project_name', 'Bridge Inspection Work')
-    ws['C5'] = f'"{_safe(d, "bridge_title", d.get("river_name", ""))}"'
-    ws['A6'] = f"Project No.: {_safe(d, 'project_number', '-')}"
-    # Revision history row (R0 = today)
+    _cell(ws, 'A2', f"CLIENT: {_safe(d, 'client_name', 'CASAD CONSULTANTS PVT. LTD.')}")
+    _cell(ws, 'C4', _safe(d, 'project_name', 'Bridge Inspection Work'))
+    _cell(ws, 'C5', f'"{_safe(d, "bridge_title", d.get("river_name", ""))}"')
+    _cell(ws, 'A6', f"Project No.: {_safe(d, 'project_number', '-')}")
     from datetime import date
-    ws['A10'] = 'R0'
-    ws['B10'] = date.today()
-    ws['D10'] = 'Preliminary Inspection Report'
-    ws['E10'] = 'CASAD'
+    _cell(ws, 'A10', 'R0')
+    _cell(ws, 'B10', date.today())
+    _cell(ws, 'D10', 'Preliminary Inspection Report')
+    _cell(ws, 'E10', 'CASAD')
 
 def _fill_appendix_a(wb, d):
     ws = wb['Appendix-A']
     mapping = {
-        'C4':  ('river_name', d.get('river_name', '-')),  # bridge name ~ river
-        'C6':  ('river_name', d.get('river_name', '-')),
-        'C7':  ('road_name', d.get('road_name', '-')),
-        'C9':  ('lat_lon', f"{d.get('latitude','-')} , {d.get('longitude','-')}"),
-        'C11': ('division', d.get('division', d.get('circle', '-'))),
-        'C12': ('circle', d.get('circle', '-')),
-        'C15': ('no_of_spans', d.get('no_of_spans', '-')),
-        'C16': ('total_length', d.get('total_length', '-')),
-        'C43': ('bridge_type', d.get('bridge_type', '-')),
-        'C44': ('span_length', d.get('span_length', '-')),
-        'C50': ('foundation_type', d.get('foundation_type', '-')),
-        'C59': ('superstructure_type', d.get('superstructure_type', '-')),
-        'C64': ('bearing_type_detail', d.get('bearing_type_detail', '-')),
-        'C65': ('wearing_coat', d.get('wearing_coat', '-')),
-        'C66': ('railing_type', d.get('railing_type', '-')),
-        'C67': ('expansion_joint', d.get('expansion_joint', '-')),
-        'C93': ('date_of_survey', d.get('date_of_survey', '-')),
+        'C4':  d.get('river_name', '-'),
+        'C6':  d.get('river_name', '-'),
+        'C7':  d.get('road_name', '-'),
+        'C9':  f"{d.get('latitude','-')} , {d.get('longitude','-')}",
+        'C11': d.get('division', d.get('circle', '-')),
+        'C12': d.get('circle', '-'),
+        'C15': d.get('no_of_spans', '-'),
+        'C16': d.get('total_length', '-'),
+        'C43': d.get('bridge_type', '-'),
+        'C44': d.get('span_length', '-'),
+        'C50': d.get('foundation_type', '-'),
+        'C59': d.get('superstructure_type', '-'),
+        'C64': d.get('bearing_type_detail', '-'),
+        'C65': d.get('wearing_coat', '-'),
+        'C66': d.get('railing_type', '-'),
+        'C67': d.get('expansion_joint', '-'),
+        'C93': d.get('date_of_survey', '-'),
     }
-    for cell, (_, val) in mapping.items():
-        ws[cell] = val
+    for addr, val in mapping.items():
+        _cell(ws, addr, val)
 
 def _fill_appendix_b(wb, d):
     ws = wb['Appendix-B']
@@ -79,9 +84,9 @@ def _fill_appendix_b(wb, d):
         'C55': d.get('wearing_coat', '-'),
         'C56': d.get('expansion_joint', '-'),
     }
-    for cell, val in fields.items():
+    for addr, val in fields.items():
         try:
-            ws[cell] = val or '-'
+            _cell(ws, addr, val or '-')
         except Exception:
             pass
 
@@ -92,6 +97,20 @@ def _col_letter(n):
         n, rem = divmod(n - 1, 26)
         result = chr(65 + rem) + result
     return result
+
+def _safe_write(ws, row: int, col: int, value):
+    """Write to a cell, unmerging its range first if it is a MergedCell."""
+    from openpyxl.cell.cell import MergedCell
+    from openpyxl.utils import range_boundaries
+    cell = ws.cell(row=row, column=col)
+    if isinstance(cell, MergedCell):
+        # Find the merge range that contains this cell and dissolve it
+        for rng in list(ws.merged_cells.ranges):
+            min_col, min_row, max_col, max_row = range_boundaries(str(rng))
+            if min_row <= row <= max_row and min_col <= col <= max_col:
+                ws.unmerge_cells(str(rng))
+                break
+    ws.cell(row=row, column=col).value = value
 
 def _fill_defect_table(ws, elements: list, matrix: dict,
                         start_col: int, remarks_col: int):
@@ -107,22 +126,19 @@ def _fill_defect_table(ws, elements: list, matrix: dict,
 
     # Clear existing header and data cells between start_col and remarks_col-1
     for col_i in range(start_col, remarks_col):
-        col_letter = _col_letter(col_i)
-        ws[f'{col_letter}3'] = None  # clear header
+        _safe_write(ws, 3, col_i, None)
         for row in range(4, 15):
-            ws[f'{col_letter}{row}'] = None
+            _safe_write(ws, row, col_i, None)
 
     # Write new element IDs in row 3
     for i, elem_id in enumerate(elements):
-        col_letter = _col_letter(start_col + i)
-        ws[f'{col_letter}3'] = elem_id
+        _safe_write(ws, 3, start_col + i, elem_id)
 
     # Write defect observations
     for defect_key, row_num in DEFECT_ROW.items():
         for i, elem_id in enumerate(elements):
-            col_letter = _col_letter(start_col + i)
             obs = (matrix.get(elem_id, {}) or {}).get(defect_key, 'Absent')
-            ws[f'{col_letter}{row_num}'] = obs or 'Absent'
+            _safe_write(ws, row_num, start_col + i, obs or 'Absent')
 
 def _fill_defect_tables(wb, d):
     # Table 1: Sub-structure Side 1 (piers start col E=5, remarks col O=15)

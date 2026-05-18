@@ -228,15 +228,17 @@ def _fill_appendix_c(wb, d):
         print("AMC PHOTO: Appendix-C sheet not found, skipping photos.")
         return
 
-    photos     = d.get('photos', [])
-    titles     = d.get('photo_titles', [])
-    categories = d.get('photo_categories', [])
+    photos      = d.get('photos', [])
+    titles      = d.get('photo_titles', [])
+    categories  = d.get('photo_categories', [])
+    coords_list = list(d.get('photo_coords', [])) + [None] * len(photos)
 
     # Pad lists to equal length
     max_len    = max(len(photos), len(titles), len(categories)) if any([photos, titles, categories]) else 0
     photos     = (photos     + [''] * max_len)[:max_len]
     titles     = (titles     + [''] * max_len)[:max_len]
     categories = (categories + [''] * max_len)[:max_len]
+    coords_list = coords_list[:max_len]
 
     # Caption style matching original
     CAPTION_FILL   = PatternFill(patternType='solid', fgColor='FCE4D6')
@@ -256,15 +258,23 @@ def _fill_appendix_c(wb, d):
                 pass
 
     row = 3
-    for path, title, cat in zip(photos, titles, categories):
+    for path, title, cat, coords in zip(photos, titles, categories, coords_list):
         if not path or not os.path.exists(path):
             continue
         try:
             from PIL import Image as PILImage
+            # Import circle helpers from report_gen_excel
+            try:
+                from report_gen_excel import _has_red_markers, _draw_red_circle
+            except ImportError:
+                _has_red_markers = lambda p: False
+                _draw_red_circle = lambda img, x, y: img
             with PILImage.open(path) as img:
                 img.load()
                 if img.mode in ('RGBA', 'P', 'LA'):
                     img = img.convert('RGB')
+                if coords and not _has_red_markers(path):
+                    img = _draw_red_circle(img, coords[0], coords[1])
                 w, h = img.size
                 max_w, max_h = 600, 420
                 scale       = min(max_w / w, max_h / h)

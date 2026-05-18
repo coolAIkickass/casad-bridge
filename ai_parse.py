@@ -8,6 +8,79 @@ client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
 # Claude Haiku rate limit: 5 req/min → 1 req per 13s (with small buffer)
 _COORD_DELAY_SEC = 13
 
+def _safe_json_parse(raw: str) -> dict:
+    """Parse JSON from Claude, repairing common truncation issues.
+
+    Claude occasionally truncates output even with generous max_tokens when the
+    response is very large. This function tries:
+      1. Direct json.loads (normal case)
+      2. json_repair library if installed
+      3. Close any open brackets/strings caused by truncation
+    """
+    # 1 — happy path
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # 2 — json_repair library (pip install json-repair)
+    try:
+        import json_repair
+        obj = json_repair.repair_json(raw, return_objects=True)
+        if isinstance(obj, dict):
+            print("JSON repaired via json_repair library")
+            return obj
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"json_repair failed: {e}")
+
+    # 3 — manual repair: close unclosed strings, brackets, braces
+    try:
+        stack = []
+        in_string = False
+        escape = False
+        out = []
+        for ch in raw:
+            out.append(ch)
+            if escape:
+                escape = False
+                continue
+            if ch == '\\' and in_string:
+                escape = True
+                continue
+            if ch == '"':
+                if in_string:
+                    in_string = False
+                else:
+                    in_string = True
+                continue
+            if not in_string:
+                if ch == '{':
+                    stack.append('}')
+                elif ch == '[':
+                    stack.append(']')
+                elif ch in ('}', ']'):
+                    if stack and stack[-1] == ch:
+                        stack.pop()
+
+        # Close any unterminated string
+        if in_string:
+            out.append('"')
+        # Close any unclosed structures (innermost first)
+        out.extend(reversed(stack))
+
+        repaired = ''.join(out)
+        result = json.loads(repaired)
+        print(f"JSON repaired manually: closed {len(stack)} open bracket(s)")
+        return result
+    except Exception as e:
+        raise ValueError(
+            f"Claude JSON could not be parsed or repaired: {e}\n"
+            f"First 300 chars: {raw[:300]}"
+        )
+
+
 def _detect_defect_coords(photo_paths, photo_descriptions, cats):
     """Detect defect bounding coords for damage photos — sequential with rate-limit delay.
 
@@ -465,7 +538,7 @@ def parse_inspection(session: dict) -> dict:
 
     response = client.messages.create(
         model='claude-sonnet-4-5',
-        max_tokens=4096,
+        max_tokens=16384,
         system=SYSTEM_PROMPT,
         messages=[{'role': 'user', 'content': user_content}]
     )
@@ -483,7 +556,7 @@ def parse_inspection(session: dict) -> dict:
         print("ERROR: Claude returned empty response")
         raise ValueError("Claude returned empty response — check field notes content")
 
-    result = json.loads(raw)
+    result = _safe_json_parse(raw)
     result['photos']         = photo_paths
     result['photo_captions'] = photo_captions
     result['_messages']      = messages   # passed to build_docx for BLOB restoration
@@ -571,7 +644,7 @@ def parse_inspection_excel(session: dict) -> dict:
 
     response = client.messages.create(
         model='claude-sonnet-4-5',
-        max_tokens=4096,
+        max_tokens=16384,
         system=SYSTEM_PROMPT + EXCEL_EXTRA_PROMPT,
         messages=[{'role': 'user', 'content': user_content}]
     )
@@ -589,7 +662,7 @@ def parse_inspection_excel(session: dict) -> dict:
         print("ERROR: Claude returned empty response")
         raise ValueError("Claude returned empty response — check field notes content")
 
-    result = json.loads(raw)
+    result = _safe_json_parse(raw)
     result['photos']         = photo_paths
     result['photo_captions'] = photo_captions
     result['_messages']      = messages   # passed to build_docx for BLOB restoration

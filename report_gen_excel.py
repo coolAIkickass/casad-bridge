@@ -195,20 +195,55 @@ def _fill_defect_tables(wb, d):
     if spans2:
         _fill_defect_table(wb['Table 4'], spans2, matrix4, start_col=5, remarks_col=15)
 
+def _has_red_markers(path: str) -> bool:
+    """Return True if the image already has significant red circle/mark content."""
+    try:
+        from PIL import Image as _PIL
+        img = _PIL.open(path).convert('RGB').resize((120, 120))
+        px = list(img.getdata())
+        red = sum(1 for r, g, b in px if r > 170 and g < 90 and b < 90)
+        return red / len(px) > 0.003   # 0.3 % threshold
+    except Exception:
+        return False
+
+
+def _draw_red_circle(img, x_pct: float, y_pct: float):
+    """Draw a red circle on a PIL image at the relative defect position."""
+    from PIL import ImageDraw
+    w, h   = img.size
+    cx     = int(x_pct * w)
+    cy     = int(y_pct * h)
+    r      = max(18, int(min(w, h) * 0.07))   # 7% of smaller dimension
+    width  = max(3,  int(min(w, h) * 0.012))  # ~1.2% stroke
+    draw   = ImageDraw.Draw(img)
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline='red', width=width)
+    return img
+
+
 def _fill_appendix_c(wb, d):
     """Insert photos into Appendix-C sheets, matching original template style."""
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
     from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
     from openpyxl.utils.units import pixels_to_points
 
-    photos     = d.get('photos', [])
-    categories = d.get('photo_categories', [])
-    titles     = d.get('photo_titles', [])
+    photos      = d.get('photos', [])
+    categories  = d.get('photo_categories', [])
+    titles      = d.get('photo_titles', [])
+    coords_list = d.get('photo_coords', [])
 
-    sub_photos   = [(p, t) for p, c, t in zip(photos, categories, titles + [''] * len(photos))
-                    if c not in ('damage', 'damaged')]
-    super_photos = [(p, t) for p, c, t in zip(photos, categories, titles + [''] * len(photos))
-                    if c in ('damage', 'damaged')]
+    # Pad coords_list so it matches photos length
+    coords_list = list(coords_list) + [None] * len(photos)
+
+    sub_photos   = [(p, t, c) for p, cat, t, c in
+                    zip(photos, categories,
+                        titles + [''] * len(photos),
+                        coords_list)
+                    if cat not in ('damage', 'damaged')]
+    super_photos = [(p, t, c) for p, cat, t, c in
+                    zip(photos, categories,
+                        titles + [''] * len(photos),
+                        coords_list)
+                    if cat in ('damage', 'damaged')]
 
     # Caption style matching original: light peach fill, Times New Roman 11pt bold, centred, thin border
     CAPTION_FILL   = PatternFill(patternType='solid', fgColor='FCE4D6')   # accent2 ~60% tint
@@ -231,7 +266,7 @@ def _fill_appendix_c(wb, d):
                     pass
 
         row = 3  # first photo starts at row 3
-        for path, title in photo_list:
+        for path, title, coords in photo_list:
             if not path or not os.path.exists(path):
                 continue
             try:
@@ -240,6 +275,9 @@ def _fill_appendix_c(wb, d):
                     img.load()
                     if img.mode in ('RGBA', 'P', 'LA'):
                         img = img.convert('RGB')
+                    # Draw red circle if AI detected coords AND photo has no pre-drawn circle
+                    if coords and not _has_red_markers(path):
+                        img = _draw_red_circle(img, coords[0], coords[1])
                     w, h = img.size
                     # Scale to fill the sheet width (~600px wide × 420px tall max)
                     max_w, max_h = 600, 420

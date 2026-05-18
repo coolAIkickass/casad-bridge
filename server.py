@@ -143,17 +143,34 @@ def webhook():
         send_message(phone, "I am glad I could be of use to you! 😊 See you again!")
         return 'OK', 200
 
+    status = get_session_status(phone)
+
     # ── Exit / restart (any state) ────────────────────────────────────────────
     if content_lower in ('7', 'exit', 'restart', 'new'):
-        reset_session(phone)
+        # If no active session or empty session, exit immediately
+        if status not in ('active',):
+            reset_session(phone)
+            send_message(phone, "Done, hope you have a great day ahead 👋. To start again, send 'hi'.")
+            return 'OK', 200
+        # Active session with data — ask for confirmation
+        state_now, _ = get_session_state(phone)
+        set_session_state(phone, 'confirm_exit')
         send_message(phone,
-            "Done, hope you have a great day ahead 👋. To start again, send 'hi'.")
+            "⚠️ *Are you sure you want to exit?*\n\n"
+            "All data shared in this session will be lost and you'll need to start over.\n\n"
+            "• Reply *YES* to exit\n"
+            "• Reply *NO* to continue where you left off")
         return 'OK', 200
-
-    status = get_session_status(phone)
 
     # ── New or completed session ───────────────────────────────────────────────
     if status is None or status == 'done':
+        # If user typed 'done' but session was lost (e.g. Render restart wiped SQLite),
+        # recover gracefully — don't restart the whole flow mid-inspection.
+        if content_lower == 'done':
+            send_message(phone,
+                "⚠️ Your session was reset (server restart). Please start a new inspection by sending *hi*.")
+            return 'OK', 200
+
         reset_session(phone)
         msg['category'] = 'system'
         store_message(msg)           # creates the session row in DB
@@ -167,6 +184,18 @@ def webhook():
 
     state, photo_count = get_session_state(phone)
     print(f"[STATE] phone={phone} state={state} photos={photo_count}", flush=True)
+
+    # ── Confirm exit state ────────────────────────────────────────────────────
+    if state == 'confirm_exit':
+        if content_lower == 'yes':
+            reset_session(phone)
+            send_message(phone, "Done, hope you have a great day ahead 👋. To start again, send 'hi'.")
+        elif content_lower == 'no':
+            set_session_state(phone, 'menu')
+            send_message(phone, "Welcome back! Continuing where you left off.\n\n" + MENU_MSG)
+        else:
+            send_message(phone, "Please reply *YES* to exit or *NO* to continue.")
+        return 'OK', 200
 
     # ── Format selection state ─────────────────────────────────────────────────
     if state == 'format_select':

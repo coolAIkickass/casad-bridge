@@ -11,8 +11,7 @@ from whatsapp import parse_payload, download_media, send_message, send_document
 from transcribe import transcribe_audio
 from ai_parse import parse_inspection, parse_inspection_excel, parse_inspection_amc
 from report_gen import build_docx
-from report_gen_excel import build_excel
-from report_gen_excel_amc import build_excel_amc
+# Excel generators imported lazily inside _generate_report to avoid startup failures
 
 load_dotenv()
 
@@ -103,6 +102,8 @@ app = Flask(__name__)
 
 with app.app_context():
     init_db()
+
+print("CASAD SERVER STARTED OK", flush=True)
 
 
 @app.route('/webhook', methods=['GET', 'POST'])
@@ -283,10 +284,12 @@ def _generate_report(phone: str) -> None:
         fmt     = get_report_format(phone)
         session = get_session(phone)
         if fmt == 'excel_rb':
+            from report_gen_excel import build_excel
             report_json = parse_inspection_excel(session)
             out_path    = build_excel(report_json)
             caption     = f"CASAD Bridge Inspection Report (R&B) — {report_json.get('bridge_title', report_json.get('river_name', ''))}"
         elif fmt == 'excel_amc':
+            from report_gen_excel_amc import build_excel_amc
             report_json = parse_inspection_amc(session)
             out_path    = build_excel_amc(report_json)
             caption     = f"CASAD Bridge Inspection Report (AMC) — {report_json.get('bridge_title', report_json.get('river_name', ''))}"

@@ -24,7 +24,7 @@ def _safe(d, key, default='-'):
 
 
 def _parse_survey_date(val):
-    """Parse 'dd/mm/yyyy' string to a datetime object for Excel date cells."""
+    """Parse 'dd/mm/yyyy' string to a datetime object (internal use only)."""
     if isinstance(val, (datetime, date)):
         return val
     for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y'):
@@ -32,7 +32,28 @@ def _parse_survey_date(val):
             return datetime.strptime(str(val), fmt)
         except (ValueError, TypeError):
             pass
-    return val   # fallback: write as-is
+    return val   # fallback: return as-is
+
+
+def _fmt_date(val) -> str:
+    """Return date as 'dd/mm/yyyy' string — NEVER a datetime object.
+
+    openpyxl writes a bare datetime as an Excel serial number unless the cell
+    already has a date number-format applied (which our templates don't
+    guarantee).  Always use this function for date cells in the report.
+    """
+    dt = _parse_survey_date(val)
+    if isinstance(dt, (datetime, date)):
+        return dt.strftime('%d/%m/%Y')
+    if val in (None, '', '-'):
+        return '-'
+    return str(val)
+
+
+def _combine_fields(*parts, sep='\n') -> str:
+    """Join non-empty / non-dash parts with *sep*.  Returns '-' if nothing."""
+    filtered = [str(p) for p in parts if p and str(p) not in ('-', '')]
+    return sep.join(filtered) if filtered else '-'
 
 
 def _coords(d) -> str:
@@ -122,7 +143,9 @@ def _fill_appendix_a(wb, d):
         'C12': d.get('circle', '-'),
 
         # Section 2 — Details of Spans
-        'C15': d.get('no_of_spans', '-'),
+        # Row 2.1 label: "Number of Spans (Length, center to center of piers
+        # and width of piers)" — ONE cell that must combine both fields.
+        'C15': _combine_fields(d.get('no_of_spans', ''), d.get('span_length', '')),
         'C16': d.get('total_length', '-'),
         'C17': d.get('angle_of_crossing', '-'),
         # C18 = high-level / submersible / ROB — use bridge_level_type or type_of_bridge
@@ -151,13 +174,13 @@ def _fill_appendix_a(wb, d):
         'C67': d.get('expansion_joint', '-'),
 
         # Section 7 — Other Data
-        'C81': _parse_survey_date(d.get('date_of_completion')) if d.get('date_of_completion') else '-',
+        'C81': _fmt_date(d.get('date_of_completion')) if d.get('date_of_completion') else '-',
         'C82': d.get('surface_utilities', '-'),
         'C84': d.get('ls_sketch', 'As per approved GAD'),
 
         # Section 8-9 — Performance & recording date
         'C92': d.get('performance', '-'),
-        'C93': _parse_survey_date(d.get('date_of_survey', '-')),
+        'C93': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else '-',
     }
     for addr, val in mapping.items():
         try:
@@ -178,7 +201,7 @@ def _fill_appendix_b(wb, d):
         'C9':  _coords(d),
         'C10': div if div == cir else f"{div} / {cir}",
         'C11': d.get('type_of_bridge', d.get('bridge_type', '-')),
-        'C12': _parse_survey_date(d.get('date_of_survey', '-')),
+        'C12': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else '-',
         # Section 4 — Approaches
         'C14': d.get('approach_settlement', '-'),
         'C15': d.get('approach_side_slopes', '-'),

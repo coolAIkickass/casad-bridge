@@ -10,7 +10,7 @@
 #   - Single photo sheet: "Appendix-C-"
 
 import os, re, io
-from datetime import date
+from datetime import date, datetime
 import openpyxl
 from openpyxl.drawing.image import Image as XLImage
 
@@ -27,6 +27,31 @@ DEFECT_ROW = {
 def _safe(d, key, default='-'):
     v = d.get(key)
     return str(v) if v is not None else default   # keeps 0 / False / '0'
+
+
+def _fmt_date(val) -> str:
+    """Return date as 'dd/mm/yyyy' string — never a datetime object.
+
+    Writing a bare datetime via openpyxl produces an Excel serial number unless
+    the target cell already carries a date number-format (which our templates
+    don't guarantee).  Always use this for date cells.
+    """
+    if isinstance(val, (datetime, date)):
+        return val.strftime('%d/%m/%Y')
+    for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y'):
+        try:
+            return datetime.strptime(str(val), fmt).strftime('%d/%m/%Y')
+        except (ValueError, TypeError):
+            pass
+    if val in (None, '', '-'):
+        return '-'
+    return str(val)
+
+
+def _combine_fields(*parts, sep='\n') -> str:
+    """Join non-empty / non-dash parts. Returns '-' when nothing to combine."""
+    filtered = [str(p) for p in parts if p and str(p) not in ('-', '')]
+    return sep.join(filtered) if filtered else '-'
 
 
 def _safe_write(ws, row: int, col: int, value):
@@ -153,7 +178,10 @@ def _fill_title_page(wb, d):
 
 
 def _fill_appendix_a(wb, d):
-    """Fill Appendix-A — mirrors R&B layout with AMC-specific row offsets."""
+    """Fill Appendix-A — AMC template row structure verified against
+    casad_amc_template.xlsx (2026-05-18).  Row numbers match the R&B template
+    exactly; earlier code had several off-by-one errors.
+    """
     from openpyxl.cell.cell import MergedCell
     ws = wb['Appendix-A']
 
@@ -167,28 +195,61 @@ def _fill_appendix_a(wb, d):
     lat = d.get('latitude', '-')
     lon = d.get('longitude', '-')
     mapping = {
+        # ── Section 1 — General identity (rows 4-12) ─────────────────────────
         'C4':  d.get('bridge_title', d.get('river_name', '-')),
+        'C5':  d.get('bridge_number', '-'),
         'C6':  d.get('river_name', '-'),
         'C7':  d.get('road_name', '-'),
         'C8':  d.get('road_number', '-'),
         'C9':  f"{lat}° , {lon}°",
+        'C10': '-',          # BM / GTS level — rarely provided
         'C11': d.get('division', d.get('circle', '-')),
         'C12': d.get('circle', '-'),
-        'C14': d.get('no_of_spans', '-'),
-        'C15': d.get('total_length', '-'),
-        # Type of Bridge (structural type)
-        'C44': d.get('superstructure_type', d.get('bridge_type', '-')),
-        # Span arrangement
-        'C45': d.get('span_arrangement', d.get('span_length', '-')),
-        # Foundation
+
+        # ── Section 2 — Details of Spans (rows 15-18) ────────────────────────
+        # Row 14 = "Details of Spans:" section header — do NOT write here.
+        # Row 2.1 label: "Number of Spans (Length, c/c of piers and width of
+        # piers)" — one cell combining no_of_spans + span_length.
+        'C15': _combine_fields(d.get('no_of_spans', ''), d.get('span_length', '')),
+        'C16': d.get('total_length', '-'),
+        'C17': d.get('angle_of_crossing', '-'),
+        'C18': d.get('bridge_level_type', d.get('type_of_bridge', '-')),
+
+        # ── Section 5 — Design and Structural Data (rows 43-67) ──────────────
+        # BUG FIXED: was C44/C45 — both shifted one row too low.
+        # C43 = row-(b) "Type of Bridge (RCC solid slab, T-beam, etc.)"
+        'C43': d.get('superstructure_type', d.get('bridge_type', '-')),
+        # C44 = row-(c) "Span arrangement"
+        'C44': d.get('span_arrangement', d.get('span_length', '-')),
+        # C45 = row-(d) "Carriage width and footpath width"
+        'C45': d.get('carriage_width', '-'),
+        # C46 = row-(e) "Deck level (from F.R.L.)"
+        'C46': d.get('deck_level', '-'),
+        # C50 = row-(h) "Type of Foundations with salient details"
         'C50': d.get('foundation_type', '-'),
-        # Superstructure detail
-        'C61': d.get('superstructure_type', '-'),
-        # Bearing / wearing coat / railing / expansion joint
+        # C52 = row-(i)(i) "Masonry, Mass Concrete, RCC"
+        'C52': d.get('substructure_type', '-'),
+        # C53 = row-(i)(ii) "Straight length of pier"
+        'C53': d.get('pier_length', '-'),
+        # BUG FIXED: was C61 (articulation row) — must be C59.
+        # C59 = row-(j)(i) "Type of superstructure"
+        'C59': d.get('superstructure_type', '-'),
+        # C60 = row-(j)(ii) "Details of Prestressing"
+        'C60': d.get('prestressing_details', 'As per approved Design'),
+        # C64 = row-(m) "Type of bearings"
         'C64': d.get('bearing_type_detail', '-'),
         'C65': d.get('wearing_coat', '-'),
         'C66': d.get('railing_type', '-'),
         'C67': d.get('expansion_joint', '-'),
+
+        # ── Section 7 — Other Data (rows 81-84) ──────────────────────────────
+        'C81': _fmt_date(d.get('date_of_completion')) if d.get('date_of_completion') else '-',
+        'C82': d.get('surface_utilities', '-'),
+        'C84': d.get('ls_sketch', 'As per approved GAD'),
+
+        # ── Section 8-9 — Performance & survey date ───────────────────────────
+        'C92': d.get('performance', '-'),
+        'C93': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else '-',
     }
     for addr, val in mapping.items():
         try:
@@ -198,7 +259,11 @@ def _fill_appendix_a(wb, d):
 
 
 def _fill_appendix_b(wb, d):
-    """Fill Appendix-B — AMC version has 3 columns (Sr.No, Details, Observations)."""
+    """Fill Appendix-B — AMC row structure verified against
+    casad_amc_template.xlsx (2026-05-18).  Both AMC and R&B templates share
+    identical row numbers in Appendix-B.  Earlier code had three families of
+    wrong row numbers fixed here.
+    """
     ws = wb['Appendix-B']
     lat = d.get('latitude', '-')
     lon = d.get('longitude', '-')
@@ -206,29 +271,47 @@ def _fill_appendix_b(wb, d):
     cir = d.get('circle', '-')
     # Column C = Observations
     fields = {
+        # ── Section 1 — General identity ────────────────────────────────────
         'C4':  d.get('bridge_title', d.get('river_name', '-')),
         'C6':  d.get('river_name', '-'),
         'C7':  d.get('road_name', '-'),
+        'C8':  d.get('road_number', '-'),
         'C9':  f"{lat}° , {lon}°",
         'C10': div if div == cir else f"{div} / {cir}",
         'C11': d.get('type_of_bridge', d.get('bridge_type', '-')),
-        'C12': d.get('date_of_survey', '-'),
-        # Approaches
-        'C16': d.get('approach_settlement', '-'),
-        'C17': d.get('approach_side_slopes', '-'),
-        'C18': d.get('approach_erosion', '-'),
-        'C19': d.get('approach_slab', '-'),
-        'C20': d.get('approach_geometrics', '-'),
-        'C21': d.get('approach_other', '-'),
-        # Substructure
-        'C43': d.get('sub_cracks', '-'),
-        'C44': d.get('sub_other', '-'),
-        # Bearings
-        'C48': d.get('bearing_condition', '-'),
-        # Superstructure
-        'C55': d.get('ss_cracks', '-'),
-        'C56': d.get('ss_spalling', '-'),
-        'C57': d.get('ss_exposed_rebar', '-'),
+        'C12': d.get('date_of_survey', '-'),   # raw string 'dd/mm/yyyy'
+
+        # ── Section 4 — Approaches (rows 14-19) ─────────────────────────────
+        # BUG FIXED: old code used C16-C21; template rows are C14-C19.
+        'C14': d.get('approach_settlement', '-'),
+        'C15': d.get('approach_side_slopes', '-'),
+        'C16': d.get('approach_erosion', '-'),
+        'C17': d.get('approach_slab', '-'),
+        'C18': d.get('approach_geometrics', '-'),
+        'C19': d.get('approach_other', '-'),
+
+        # ── Section 8 — Substructure (rows 42-46) ───────────────────────────
+        # BUG FIXED: C43 = row 8.1 "drainage of backfill" ≠ sub_cracks.
+        # General cross-reference for inspection tables:
+        'C42': 'Refer Table  1 and 2',
+        'C43': 'Refer Table  1 and 2',
+        'C44': 'Refer Table  1 and 2',
+        'C45': 'Refer Table  1 and 2',
+        'C46': 'Refer Table  1 and 2',
+
+        # ── Section 9 — Bearings ─────────────────────────────────────────────
+        # Row 9.1.4 "Report cracks in supporting member (pedestal, pier cap)"
+        # BUG FIXED: was at C43; correct row is C52.
+        'C52': d.get('sub_cracks', '-'),
+
+        # ── Section 10 — Superstructure (rows 59-64) ─────────────────────────
+        # BUG FIXED: old code wrote ss_* fields to C55-C57 (elastomeric-bearing
+        # section rows).  Superstructure section starts at C59.
+        'C59': 'Refer Table  3 and 4',
+        'C61': 'Refer Table  3 and 4',
+        'C62': 'Refer Table  3 and 4',
+        'C63': 'Refer Table  3 and 4',
+        'C64': 'Refer Table  3 and 4',
     }
     for addr, val in fields.items():
         try:

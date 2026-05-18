@@ -26,16 +26,8 @@ DEFECT_ROW = {
 
 def _safe(d, key, default='-'):
     v = d.get(key)
-    return str(v) if v else default
+    return str(v) if v is not None else default   # keeps 0 / False / '0'
 
-
-def _col_letter(n):
-    """Convert 1-based column index to Excel letter (A, B, ... Z, AA, ...)."""
-    result = ''
-    while n > 0:
-        n, rem = divmod(n - 1, 26)
-        result = chr(65 + rem) + result
-    return result
 
 def _safe_write(ws, row: int, col: int, value):
     """Write to a cell, unmerging its range first if it is a MergedCell."""
@@ -161,20 +153,33 @@ def _fill_title_page(wb, d):
 
 
 def _fill_appendix_a(wb, d):
-    """Fill Appendix-A — same structure as R&B (4 cols, same row layout)."""
+    """Fill Appendix-A — mirrors R&B layout with AMC-specific row offsets."""
     ws = wb['Appendix-A']
+    lat = d.get('latitude', '-')
+    lon = d.get('longitude', '-')
     mapping = {
         'C4':  d.get('bridge_title', d.get('river_name', '-')),
+        'C6':  d.get('river_name', '-'),
         'C7':  d.get('road_name', '-'),
         'C8':  d.get('road_number', '-'),
-        'C9':  f"{d.get('latitude', '-')} , {d.get('longitude', '-')}",
-        'C11': d.get('division', '-'),
+        'C9':  f"{lat}° , {lon}°",
+        'C11': d.get('division', d.get('circle', '-')),
         'C12': d.get('circle', '-'),
         'C14': d.get('no_of_spans', '-'),
         'C15': d.get('total_length', '-'),
-        'C44': d.get('bridge_type', '-'),
-        'C45': d.get('span_length', '-'),
+        # Type of Bridge (structural type)
+        'C44': d.get('superstructure_type', d.get('bridge_type', '-')),
+        # Span arrangement
+        'C45': d.get('span_arrangement', d.get('span_length', '-')),
+        # Foundation
+        'C50': d.get('foundation_type', '-'),
+        # Superstructure detail
         'C61': d.get('superstructure_type', '-'),
+        # Bearing / wearing coat / railing / expansion joint
+        'C64': d.get('bearing_type_detail', '-'),
+        'C65': d.get('wearing_coat', '-'),
+        'C66': d.get('railing_type', '-'),
+        'C67': d.get('expansion_joint', '-'),
     }
     for addr, val in mapping.items():
         try:
@@ -186,12 +191,17 @@ def _fill_appendix_a(wb, d):
 def _fill_appendix_b(wb, d):
     """Fill Appendix-B — AMC version has 3 columns (Sr.No, Details, Observations)."""
     ws = wb['Appendix-B']
+    lat = d.get('latitude', '-')
+    lon = d.get('longitude', '-')
+    div = d.get('division', '-')
+    cir = d.get('circle', '-')
     # Column C = Observations
     fields = {
         'C4':  d.get('bridge_title', d.get('river_name', '-')),
+        'C6':  d.get('river_name', '-'),
         'C7':  d.get('road_name', '-'),
-        'C9':  f"{d.get('latitude', '-')} , {d.get('longitude', '-')}",
-        'C10': d.get('division', '-') if d.get('division') == d.get('circle') else f"{d.get('division','-')} / {d.get('circle','-')}",
+        'C9':  f"{lat}° , {lon}°",
+        'C10': div if div == cir else f"{div} / {cir}",
         'C11': d.get('type_of_bridge', d.get('bridge_type', '-')),
         'C12': d.get('date_of_survey', '-'),
         # Approaches
@@ -218,15 +228,31 @@ def _fill_appendix_b(wb, d):
             pass
 
 
+def _has_red_markers(path: str) -> bool:
+    """Return True if the image already has prominent hand-drawn red circles (2% threshold)."""
+    try:
+        from PIL import Image as _PIL
+        img = _PIL.open(path).convert('RGB').resize((120, 120))
+        px  = list(img.getdata())
+        red = sum(1 for r, g, b in px if r > 170 and g < 90 and b < 90)
+        return red / len(px) > 0.02
+    except Exception:
+        return False
+
+
 def _fill_appendix_c(wb, d):
-    """Insert photos into the single Appendix-C- sheet (AMC format)."""
+    """Insert photos into the single Appendix-C- sheet (AMC format).
+
+    Photos are inserted WITHOUT burning circles — editable ovals are injected
+    as Excel AutoShapes after save.  Returns oval descriptor list.
+    """
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
     from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
 
     ws = _find_sheet(wb, 'appendix-c')
     if ws is None:
         print("AMC PHOTO: Appendix-C sheet not found, skipping photos.")
-        return
+        return []
 
     photos      = d.get('photos', [])
     titles      = d.get('photo_titles', [])
@@ -234,13 +260,12 @@ def _fill_appendix_c(wb, d):
     coords_list = list(d.get('photo_coords', [])) + [None] * len(photos)
 
     # Pad lists to equal length
-    max_len    = max(len(photos), len(titles), len(categories)) if any([photos, titles, categories]) else 0
-    photos     = (photos     + [''] * max_len)[:max_len]
-    titles     = (titles     + [''] * max_len)[:max_len]
-    categories = (categories + [''] * max_len)[:max_len]
+    max_len     = max(len(photos), len(titles), len(categories)) if any([photos, titles, categories]) else 0
+    photos      = (photos      + [''] * max_len)[:max_len]
+    titles      = (titles      + [''] * max_len)[:max_len]
+    categories  = (categories  + [''] * max_len)[:max_len]
     coords_list = coords_list[:max_len]
 
-    # Caption style matching original
     CAPTION_FILL   = PatternFill(patternType='solid', fgColor='FCE4D6')
     CAPTION_FONT   = Font(name='Times New Roman', size=11, bold=True)
     CAPTION_ALIGN  = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -248,7 +273,6 @@ def _fill_appendix_c(wb, d):
     CAPTION_BORDER = Border(top=_thin, left=_thin, right=_thin, bottom=_thin)
 
     ws._images.clear()
-    # Clear existing caption merges (keep header row merges)
     for rng in list(ws.merged_cells.ranges):
         r = str(rng)
         if 'B2' not in r and 'A1' not in r:
@@ -257,50 +281,56 @@ def _fill_appendix_c(wb, d):
             except Exception:
                 pass
 
+    ovals     = []
+    shape_ctr = 200   # start higher than R&B module to avoid ID collision
+
     row = 3
     for path, title, cat, coords in zip(photos, titles, categories, coords_list):
         if not path or not os.path.exists(path):
             continue
         try:
             from PIL import Image as PILImage
-            # Import circle helpers from report_gen_excel
-            try:
-                from report_gen_excel import _has_red_markers, _draw_red_circle
-            except ImportError:
-                _has_red_markers = lambda p: False
-                _draw_red_circle = lambda img, x, y: img
             with PILImage.open(path) as img:
                 img.load()
                 if img.mode in ('RGBA', 'P', 'LA'):
                     img = img.convert('RGB')
-                if coords and not _has_red_markers(path):
-                    img = _draw_red_circle(img, coords[0], coords[1])
-                w, h = img.size
-                max_w, max_h = 600, 420
-                scale       = min(max_w / w, max_h / h)
-                new_w       = int(w * scale)
-                new_h       = int(h * scale)
-                img_res     = img.resize((new_w, new_h), PILImage.LANCZOS)
-                buf = io.BytesIO()
-                img_res.save(buf, format='JPEG', quality=90)
+                # No burned-in circle — editable oval injected after save
+                w, h    = img.size
+                scale   = min(600 / w, 420 / h)
+                new_w   = int(w * scale)
+                new_h   = int(h * scale)
+                buf     = io.BytesIO()
+                img.resize((new_w, new_h), PILImage.LANCZOS).save(buf, format='JPEG', quality=90)
             buf.seek(0)
+
+            ph_from_row = row - 1
+            ph_to_row   = row + 19
 
             xl_img        = XLImage(buf)
             xl_img.width  = new_w
             xl_img.height = new_h
-
-            from_row = row - 1
-            to_row   = row + 19
-
             anchor        = TwoCellAnchor()
-            anchor._from  = AnchorMarker(col=0, row=from_row, colOff=0, rowOff=0)
-            anchor.to     = AnchorMarker(col=8, row=to_row,   colOff=0, rowOff=0)
+            anchor._from  = AnchorMarker(col=0, row=ph_from_row, colOff=0, rowOff=0)
+            anchor.to     = AnchorMarker(col=8, row=ph_to_row,   colOff=0, rowOff=0)
             anchor.editAs = 'oneCell'
             xl_img.anchor = anchor
             ws.add_image(xl_img)
 
-            # Caption row
-            cap_row = to_row + 2
+            # Schedule editable oval if defect coords available
+            if coords and not _has_red_markers(path):
+                x_pct, y_pct = coords
+                span_cols = 8
+                span_rows = ph_to_row - ph_from_row   # 20
+                r_cols = max(1, int(span_cols * 0.07))
+                r_rows = max(1, int(span_rows * 0.07))
+                oval_fc = max(0, int(x_pct * span_cols) - r_cols)
+                oval_tc = min(span_cols, int(x_pct * span_cols) + r_cols)
+                oval_fr = ph_from_row + max(0, int(y_pct * span_rows) - r_rows)
+                oval_tr = ph_from_row + min(span_rows, int(y_pct * span_rows) + r_rows)
+                shape_ctr += 1
+                ovals.append((ws.title, oval_fc, oval_fr, oval_tc, oval_tr, shape_ctr))
+
+            cap_row = ph_to_row + 2
             try:
                 ws.merge_cells(start_row=cap_row, start_column=1,
                                end_row=cap_row, end_column=8)
@@ -318,6 +348,8 @@ def _fill_appendix_c(wb, d):
         except Exception as e:
             print(f"AMC PHOTO INSERT FAILED {path}: {e}")
 
+    return ovals
+
 
 def build_excel_amc(report_json: dict) -> str:
     """Fill CASAD AMC Excel template with report_json and return saved file path."""
@@ -327,7 +359,7 @@ def build_excel_amc(report_json: dict) -> str:
     _fill_appendix_a(wb, report_json)
     _fill_appendix_b(wb, report_json)
     _fill_defect_tables(wb, report_json)
-    _fill_appendix_c(wb, report_json)
+    ovals = _fill_appendix_c(wb, report_json)
 
     bridge   = re.sub(r'[^\w\-]', '_', report_json.get('bridge_title', report_json.get('river_name', 'bridge')))
     date_str = report_json.get('date_of_survey', 'report').replace('/', '-')
@@ -335,4 +367,13 @@ def build_excel_amc(report_json: dict) -> str:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     wb.save(out_path)
     print(f"AMC EXCEL REPORT SAVED: {out_path}")
+
+    # Inject editable oval shapes after save
+    if ovals:
+        try:
+            from report_gen_excel import _inject_oval_shapes
+            _inject_oval_shapes(out_path, ovals)
+        except Exception as e:
+            print(f"AMC OVAL INJECT FAILED: {e}")
+
     return out_path

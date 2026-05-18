@@ -16,6 +16,7 @@
   "no_of_spans":        "Anupam Cinema side: 10 spans | Gomtipur Road side: 10 spans | Railway portion: 4 spans",
   "total_length":       "Anupam Cinema Road: 92+6×25+21+13+63 = 339.53 m | Gomtipur Road: 92+5×25+113 = 330 m",
   "span_length":        "Anupam Cinema side: C/C 25 m, pier width 1.25 m | Gomtipur Road side: C/C 12.5 m, pier width 1.2 m | Railway: 4×25 m = 100 m",
+  "span_arrangement":   "Railway Portion: 4 Nos. × 25 m = 100 m\nAnupam Cinema Side: 92 m + 6×25 m + 21 m + 13 m + 63 m = 339.53 m\nGomtipur Road Side: 92 m + 5×25 m + 113 m = 330 m",
   "bridge_type":        "Not Applicable as it is Railway Over Bridge",
   "type_of_bridge":     "Not Applicable as it is Railway Over Bridge",
   "superstructure_type":"PSC Girder + Deck Slab (Anupam P8 to A2) | RCC Solid Slab (Gomtipur P5 to BA1) | Steel Truss (Railway portion)",
@@ -82,7 +83,7 @@
   "defect_super1": {
     "RLY.A1-RP1": {
       "vegetation": "Growth of vegetation in span RLY.A1–RP1 (Railway portion)",
-      "rust_marks": "Corrosion and loose bolts at bottom of steel truss (Railway portion)"
+      "any_other":  "Corrosion in Steel Member\nLooseness of Bolts at bottom of steel truss (Railway portion)"
     },
     "RP1-P2": {
       "honeycombing": "Observed",
@@ -158,5 +159,18 @@
     "damaged",
     "damaged",
     "damaged"
+  ],
+  "photo_coords": [
+    null,
+    null,
+    null,
+    [0.50, 0.62],
+    [0.48, 0.70],
+    null,
+    [0.55, 0.45],
+    [0.40, 0.55],
+    [0.52, 0.60],
+    [0.35, 0.65],
+    [0.50, 0.58]
   ]
 }

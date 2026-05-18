@@ -537,13 +537,16 @@ def parse_inspection(session: dict) -> dict:
     )
 
     response = client.messages.create(
-        model='claude-sonnet-4-5',
-        max_tokens=16384,
+        model='claude-sonnet-4-6',
+        max_tokens=32768,
         system=SYSTEM_PROMPT,
         messages=[{'role': 'user', 'content': user_content}]
     )
     raw = response.content[0].text.strip()
-    print(f"CLAUDE RAW RESPONSE (first 200 chars): {raw[:200]}")
+    stop_reason = response.stop_reason
+    print(f"CLAUDE RAW RESPONSE stop_reason={stop_reason} (first 200 chars): {raw[:200]}")
+    if stop_reason == 'max_tokens':
+        print("WARNING: Claude hit max_tokens — JSON may be truncated; attempting repair")
 
     # Strip markdown code fences if Claude wrapped the JSON
     if raw.startswith('```'):
@@ -643,13 +646,16 @@ def parse_inspection_excel(session: dict) -> dict:
     )
 
     response = client.messages.create(
-        model='claude-sonnet-4-5',
-        max_tokens=16384,
+        model='claude-sonnet-4-6',
+        max_tokens=32768,
         system=SYSTEM_PROMPT + EXCEL_EXTRA_PROMPT,
         messages=[{'role': 'user', 'content': user_content}]
     )
     raw = response.content[0].text.strip()
-    print(f"CLAUDE EXCEL RAW RESPONSE (first 200 chars): {raw[:200]}")
+    stop_reason = response.stop_reason
+    print(f"CLAUDE EXCEL RAW RESPONSE stop_reason={stop_reason} (first 200 chars): {raw[:200]}")
+    if stop_reason == 'max_tokens':
+        print("WARNING: Claude hit max_tokens — JSON may be truncated; attempting repair")
 
     # Strip markdown code fences if Claude wrapped the JSON
     if raw.startswith('```'):

@@ -1,6 +1,6 @@
 # report_gen_excel.py — Fill CASAD Excel template from report JSON
 import os, re, io
-from datetime import datetime
+from datetime import datetime, date
 import openpyxl
 from openpyxl.drawing.image import Image as XLImage
 
@@ -13,9 +13,48 @@ DEFECT_ROW = {
     'delamination': 12, 'vegetation': 13, 'any_other': 14
 }
 
+# ─────────────────────────────────────────────────────────────
+#  Shared helpers
+# ─────────────────────────────────────────────────────────────
+
 def _safe(d, key, default='-'):
+    """Return str(value) or default.  Treats None as missing; keeps 0/'0'/False."""
     v = d.get(key)
-    return str(v) if v else default
+    return str(v) if v is not None else default
+
+
+def _parse_survey_date(val):
+    """Parse 'dd/mm/yyyy' string to a datetime object for Excel date cells."""
+    if isinstance(val, (datetime, date)):
+        return val
+    for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y'):
+        try:
+            return datetime.strptime(str(val), fmt)
+        except (ValueError, TypeError):
+            pass
+    return val   # fallback: write as-is
+
+
+def _coords(d) -> str:
+    """Format lat/lon with degree symbol."""
+    lat = d.get('latitude', '-')
+    lon = d.get('longitude', '-')
+    return f"{lat}° , {lon}°"
+
+
+def _safe_write(ws, row: int, col: int, value):
+    """Write to a cell, unmerging its range first if it is a MergedCell."""
+    from openpyxl.cell.cell import MergedCell
+    from openpyxl.utils import range_boundaries
+    cell = ws.cell(row=row, column=col)
+    if isinstance(cell, MergedCell):
+        for rng in list(ws.merged_cells.ranges):
+            min_col, min_row, max_col, max_row = range_boundaries(str(rng))
+            if min_row <= row <= max_row and min_col <= col <= max_col:
+                ws.unmerge_cells(str(rng))
+                break
+    ws.cell(row=row, column=col).value = value
+
 
 def _cell(ws, addr, value):
     """Write to a named cell address (e.g. 'C4'), unmerging if needed."""
@@ -23,71 +62,99 @@ def _cell(ws, addr, value):
     row, col = coordinate_to_tuple(addr)
     _safe_write(ws, row, col, value)
 
+
+def _merge_write(ws, row1: int, col1: int, row2: int, col2: int, value):
+    """Unmerge anything in the target area, write value to top-left, re-merge."""
+    # Unmerge every existing range overlapping this block
+    from openpyxl.utils import range_boundaries
+    for rng in list(ws.merged_cells.ranges):
+        rc1, rr1, rc2, rr2 = range_boundaries(str(rng))
+        if rr1 <= row2 and rr2 >= row1 and rc1 <= col2 and rc2 >= col1:
+            ws.unmerge_cells(str(rng))
+    ws.cell(row=row1, column=col1).value = value
+    if row1 != row2 or col1 != col2:
+        ws.merge_cells(start_row=row1, start_column=col1,
+                       end_row=row2, end_column=col2)
+
+
+# ─────────────────────────────────────────────────────────────
+#  Sheet fillers
+# ─────────────────────────────────────────────────────────────
+
 def _fill_title_page(wb, d):
     ws = wb['TITLE PAGE']
     _cell(ws, 'A2', f"CLIENT: {_safe(d, 'client_name', 'CASAD CONSULTANTS PVT. LTD.')}")
     _cell(ws, 'C4', _safe(d, 'project_name', 'Bridge Inspection Work'))
     _cell(ws, 'C5', f'"{_safe(d, "bridge_title_full", _safe(d, "bridge_title", d.get("river_name", "")))}"')
     _cell(ws, 'A6', f"Project No.: {_safe(d, 'project_number', '-')}")
-    from datetime import date
-    _cell(ws, 'A10', 'R0')
-    _cell(ws, 'B10', date.today())
+    # Revision row — use report date, not today; revision number from fixture or default R0
+    rev_no   = _safe(d, 'revision_number', 'R0')
+    rev_date = _parse_survey_date(d.get('date_of_survey', date.today()))
+    _cell(ws, 'A10', rev_no)
+    _cell(ws, 'B10', rev_date)
     _cell(ws, 'D10', 'Preliminary Inspection Report')
     _cell(ws, 'E10', 'CASAD')
+
 
 def _fill_appendix_a(wb, d):
     ws = wb['Appendix-A']
     mapping = {
-        'C4':  d.get('bridge_title', d.get('river_name', '-')),  # Name of Bridge
+        'C4':  d.get('bridge_title', d.get('river_name', '-')),
         'C6':  d.get('river_name', '-'),
         'C7':  d.get('road_name', '-'),
-        'C9':  f"{d.get('latitude','-')} , {d.get('longitude','-')}",
+        'C9':  _coords(d),
         'C11': d.get('division', d.get('circle', '-')),
         'C12': d.get('circle', '-'),
         'C15': d.get('no_of_spans', '-'),
         'C16': d.get('total_length', '-'),
-        'C43': d.get('bridge_type', '-'),
-        'C44': d.get('span_length', '-'),
+        # C43 = "Type of Bridge" = structural/superstructure type, NOT a generic label
+        'C43': d.get('superstructure_type', d.get('bridge_type', '-')),
+        # C44 = "Span arrangement"
+        'C44': d.get('span_arrangement', d.get('span_length', '-')),
         'C50': d.get('foundation_type', '-'),
         'C59': d.get('superstructure_type', '-'),
         'C64': d.get('bearing_type_detail', '-'),
         'C65': d.get('wearing_coat', '-'),
         'C66': d.get('railing_type', '-'),
         'C67': d.get('expansion_joint', '-'),
-        'C93': d.get('date_of_survey', '-'),
+        'C93': _parse_survey_date(d.get('date_of_survey', '-')),
     }
     for addr, val in mapping.items():
-        _cell(ws, addr, val)
+        try:
+            _cell(ws, addr, val)
+        except Exception:
+            pass
+
 
 def _fill_appendix_b(wb, d):
     ws = wb['Appendix-B']
-    # Correct row mapping verified against the actual R&B template structure
+    div, cir = d.get('division', '-'), d.get('circle', '-')
     fields = {
-        # Section 1 — General identity (rows 4-12, blank in template)
+        # Section 1 — General identity
         'C4':  d.get('bridge_title', d.get('river_name', '-')),
         'C6':  d.get('river_name', '-'),
         'C7':  d.get('road_name', '-'),
         'C8':  d.get('road_number', '-'),
-        'C9':  f"{d.get('latitude','-')} , {d.get('longitude','-')}",
-        'C10': d.get('division', '-') if d.get('division') == d.get('circle') else f"{d.get('division','-')} / {d.get('circle','-')}",
+        'C9':  _coords(d),
+        'C10': div if div == cir else f"{div} / {cir}",
         'C11': d.get('type_of_bridge', d.get('bridge_type', '-')),
-        'C12': d.get('date_of_survey', '-'),
-        # Section 4 — Approaches (rows 14-19)
+        'C12': _parse_survey_date(d.get('date_of_survey', '-')),
+        # Section 4 — Approaches
         'C14': d.get('approach_settlement', '-'),
         'C15': d.get('approach_side_slopes', '-'),
         'C16': d.get('approach_erosion', '-'),
         'C17': d.get('approach_slab', '-'),
         'C18': d.get('approach_geometrics', '-'),
         'C19': d.get('approach_other', '-'),
-        # Section 8 — Substructure cross-refs (rows 42-46)
+        # Section 8 — Substructure cross-refs
         'C42': 'Refer Table  1 and 2',
         'C43': 'Refer Table  1 and 2',
         'C44': 'Refer Table  1 and 2',
         'C45': 'Refer Table  1 and 2',
         'C46': 'Refer Table  1 and 2',
-        # Section 9.1.4 — Bearing pedestal/seismic arrestor cracks (row 52)
+        # Section 9 — Bearing/pedestal cracks
         'C52': d.get('sub_cracks', '-'),
-        # Section 10 — Superstructure cross-refs (rows 59, 61-64)
+        # Section 10 — Superstructure cross-refs
         'C59': 'Refer Table  3 and 4',
         'C61': 'Refer Table  3 and 4',
         'C62': 'Refer Table  3 and 4',
@@ -100,164 +167,210 @@ def _fill_appendix_b(wb, d):
         except Exception:
             pass
 
-def _col_letter(n):
-    """Convert 1-based column index to Excel letter (A, B, ... Z, AA, ...)."""
-    result = ''
-    while n > 0:
-        n, rem = divmod(n - 1, 26)
-        result = chr(65 + rem) + result
-    return result
 
-def _safe_write(ws, row: int, col: int, value):
-    """Write to a cell, unmerging its range first if it is a MergedCell."""
-    from openpyxl.cell.cell import MergedCell
-    from openpyxl.utils import range_boundaries
-    cell = ws.cell(row=row, column=col)
-    if isinstance(cell, MergedCell):
-        # Find the merge range that contains this cell and dissolve it
-        for rng in list(ws.merged_cells.ranges):
-            min_col, min_row, max_col, max_row = range_boundaries(str(rng))
-            if min_row <= row <= max_row and min_col <= col <= max_col:
-                ws.unmerge_cells(str(rng))
-                break
-    ws.cell(row=row, column=col).value = value
+# ─────────────────────────────────────────────────────────────
+#  Defect tables
+# ─────────────────────────────────────────────────────────────
 
 def _fill_defect_table(ws, elements: list, matrix: dict,
-                        start_col: int, remarks_col: int):
-    """Fill one defect table with pier/span IDs and observations.
+                       start_col: int, remarks_col: int):
+    """Fill one defect table.
 
-    elements: list of pier or span ID strings
-    matrix: {element_id: {defect_key: observation_string}}
-    start_col: 1-based column index where element IDs start (row 3)
-    remarks_col: 1-based column index of Remarks column (will be preserved)
+    Clears only the columns that will actually be written (start_col through
+    start_col+len(elements)-1) rather than clearing all the way to remarks_col,
+    which would destroy Remarks headers or merged 'Not Accessible' blocks.
     """
     if not elements:
         return
 
-    # Clear existing header and data cells between start_col and remarks_col-1
-    for col_i in range(start_col, remarks_col):
+    last_data_col = start_col + len(elements) - 1
+
+    # Clear only columns occupied by the new element data
+    for col_i in range(start_col, last_data_col + 1):
         _safe_write(ws, 3, col_i, None)
         for row in range(4, 15):
             _safe_write(ws, row, col_i, None)
 
-    # Write new element IDs in row 3
+    # Write element IDs in row 3
     for i, elem_id in enumerate(elements):
         _safe_write(ws, 3, start_col + i, elem_id)
 
     # Write defect observations
     for defect_key, row_num in DEFECT_ROW.items():
         for i, elem_id in enumerate(elements):
-            obs = (matrix.get(elem_id, {}) or {}).get(defect_key, 'Absent')
-            _safe_write(ws, row_num, start_col + i, obs or 'Absent')
+            obs = (matrix.get(elem_id, {}) or {}).get(defect_key)
+            # Use 'Absent' only when the element is explicitly in the matrix
+            # but lacks this defect.  Leave unwritten elements as-is (None).
+            if elem_id in matrix:
+                _safe_write(ws, row_num, start_col + i, obs if obs else 'Absent')
+            else:
+                _safe_write(ws, row_num, start_col + i, 'Absent')
+
 
 def _fill_defect_tables(wb, d):
-    # Table 1: Sub-structure Side 1 (piers start col E=5, remarks col P=16)
-    piers1 = d.get('sub_piers_side1') or []
+    # ── Table 1: Sub-structure Side 1 ──────────────────────────────────────
+    # 10 piers → cols E(5)–N(14); Remarks at col O(15)
+    piers1  = d.get('sub_piers_side1') or []
     matrix1 = d.get('defect_sub1') or {}
     if piers1:
-        _fill_defect_table(wb['Table 1'], piers1, matrix1, start_col=5, remarks_col=16)
+        _fill_defect_table(wb['Table 1'], piers1, matrix1,
+                           start_col=5, remarks_col=15)
 
-    # Table 2: Sub-structure Side 2 (piers start col E=5, remarks col O=15)
-    piers2 = d.get('sub_piers_side2') or []
+    # ── Table 2: Sub-structure Side 2 ──────────────────────────────────────
+    # Remarks at col O(15)
+    piers2  = d.get('sub_piers_side2') or []
     matrix2 = d.get('defect_sub2') or {}
     if piers2:
-        _fill_defect_table(wb['Table 2'], piers2, matrix2, start_col=5, remarks_col=15)
+        _fill_defect_table(wb['Table 2'], piers2, matrix2,
+                           start_col=5, remarks_col=15)
 
-    # Table 3: Super-structure Side 1 — special column layout
-    # The template has the Railway span at col E (5), then cols F & G are merged/empty,
-    # then road spans start at col H (8).  Remarks at col S (19).
+    # ── Table 3: Super-structure Side 1 ────────────────────────────────────
+    # Special layout: Railway span occupies cols E–G (merged), road spans
+    # start at col H(8).  Remarks at col S(19).
     spans1  = d.get('super_spans_side1') or []
     matrix3 = d.get('defect_super1') or {}
     ws3     = wb['Table 3']
     if spans1:
-        # Clear the full data area (cols E–R, rows 3–14) before writing
-        for col_i in range(5, 19):
-            _safe_write(ws3, 3, col_i, None)
-            for row in range(4, 15):
+        # 1. Clear ONLY the columns we will actually write:
+        #    railway in E:G (5–7) + road spans in H.. (8 + n–1).
+        #    Do NOT clear beyond the last data column (avoids wiping pre-existing
+        #    template headers or merged blocks beyond our data range).
+        road_spans     = spans1[1:]
+        last_road_col  = 7 + len(road_spans)          # col H=8 → 8 + len-1 = 7+len
+        for col_i in range(5, last_road_col + 1):
+            for row in range(3, 15):
                 _safe_write(ws3, row, col_i, None)
-        # Write the first span (Railway span) at col E (5)
-        rly_span = spans1[0]
-        _safe_write(ws3, 3, 5, rly_span)
-        for defect_key, row_num in DEFECT_ROW.items():
-            obs = (matrix3.get(rly_span, {}) or {}).get(defect_key, 'Absent')
-            _safe_write(ws3, row_num, 5, obs or 'Absent')
-        # Write remaining spans sequentially starting at col H (8) — skipping F, G
-        for i, span_id in enumerate(spans1[1:]):
-            col = 8 + i  # H=8, I=9, J=10, …
+
+        # 2. Railway span (first element) → merged across E:G
+        rly_span    = spans1[0]
+        rly_defects = (matrix3.get(rly_span) or {})
+
+        # Header row 3: E3:G3 merged
+        _merge_write(ws3, 3, 5, 3, 7, rly_span)
+
+        # Concrete defect rows 4–12: one merged "Not Applicable" block (steel truss)
+        concrete_obs = rly_defects.get('concrete', 'Not Applicable')
+        _merge_write(ws3, 4, 5, 12, 7, concrete_obs)
+
+        # Row 13 vegetation — merged E13:G13
+        veg = rly_defects.get('vegetation', 'Absent')
+        _merge_write(ws3, 13, 5, 13, 7, veg or 'Absent')
+
+        # Row 14 any_other — merged E14:G14 (corrosion/bolt defects for steel truss).
+        # If 'any_other' is absent but 'rust_marks' has content, use rust_marks
+        # (the AI occasionally stores corrosion data under rust_marks for steel spans).
+        other = (rly_defects.get('any_other')
+                 or rly_defects.get('rust_marks')
+                 or 'Absent')
+        _merge_write(ws3, 14, 5, 14, 7, other or 'Absent')
+
+        # 3. Road spans starting at col H(8)
+        for i, span_id in enumerate(road_spans):
+            col = 8 + i
             _safe_write(ws3, 3, col, span_id)
             for defect_key, row_num in DEFECT_ROW.items():
-                obs = (matrix3.get(span_id, {}) or {}).get(defect_key, 'Absent')
-                _safe_write(ws3, row_num, col, obs or 'Absent')
+                obs = (matrix3.get(span_id, {}) or {}).get(defect_key)
+                val = obs if obs else 'Absent'
+                _safe_write(ws3, row_num, col, val)
 
-    # Table 4: Super-structure Side 2 (spans start col E=5, remarks col O=15)
-    spans2 = d.get('super_spans_side2') or []
+    # ── Table 4: Super-structure Side 2 ────────────────────────────────────
+    # Remarks at col O(15)
+    spans2  = d.get('super_spans_side2') or []
     matrix4 = d.get('defect_super2') or {}
     if spans2:
-        _fill_defect_table(wb['Table 4'], spans2, matrix4, start_col=5, remarks_col=15)
+        _fill_defect_table(wb['Table 4'], spans2, matrix4,
+                           start_col=5, remarks_col=15)
+
+
+# ─────────────────────────────────────────────────────────────
+#  Photo helpers
+# ─────────────────────────────────────────────────────────────
 
 def _has_red_markers(path: str) -> bool:
-    """Return True if the image already has significant red circle/mark content."""
+    """Return True if the image already has prominent hand-drawn red circles.
+
+    Threshold raised to 2 % to avoid false-positives on construction-site
+    photos that contain some natural red tones (warning signs, machinery).
+    """
     try:
         from PIL import Image as _PIL
         img = _PIL.open(path).convert('RGB').resize((120, 120))
-        px = list(img.getdata())
+        px  = list(img.getdata())
         red = sum(1 for r, g, b in px if r > 170 and g < 90 and b < 90)
-        return red / len(px) > 0.003   # 0.3 % threshold
+        return red / len(px) > 0.02   # 2 % threshold (was 0.3 %)
     except Exception:
         return False
 
 
 def _draw_red_circle(img, x_pct: float, y_pct: float):
-    """Draw a red circle on a PIL image at the relative defect position."""
+    """Draw a proportional red circle at the relative defect position."""
     from PIL import ImageDraw
-    w, h   = img.size
-    cx     = int(x_pct * w)
-    cy     = int(y_pct * h)
-    r      = max(18, int(min(w, h) * 0.07))   # 7% of smaller dimension
-    width  = max(3,  int(min(w, h) * 0.012))  # ~1.2% stroke
-    draw   = ImageDraw.Draw(img)
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline='red', width=width)
+    w, h  = img.size
+    cx    = int(x_pct * w)
+    cy    = int(y_pct * h)
+    r     = max(18, int(min(w, h) * 0.07))
+    stroke = max(3,  int(min(w, h) * 0.012))
+    ImageDraw.Draw(img).ellipse(
+        [cx - r, cy - r, cx + r, cy + r], outline='red', width=stroke)
     return img
 
 
+# ─────────────────────────────────────────────────────────────
+#  Appendix-C photo sheets
+# ─────────────────────────────────────────────────────────────
+
+def _find_sheet_rb(wb, name):
+    """Return a worksheet by exact name, falling back to case-insensitive search."""
+    if name in wb.sheetnames:
+        return wb[name]
+    low = name.lower()
+    for sn in wb.sheetnames:
+        if sn.lower() == low:
+            return wb[sn]
+    return None
+
+
 def _fill_appendix_c(wb, d):
-    """Insert photos into Appendix-C sheets, matching original template style."""
+    """Insert photos into Appendix-C sheets.
+
+    Photos are inserted WITHOUT burning circles into the JPEG — instead the
+    function returns a list of oval descriptors so the caller can inject
+    editable Excel AutoShape ovals via _inject_oval_shapes().
+
+    Returns:
+        ovals: list of (sheet_name, from_col, from_row, to_col, to_row, shape_id)
+               (0-indexed, matching openpyxl/Excel drawing anchor convention)
+    """
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
     from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
-    from openpyxl.utils.units import pixels_to_points
 
     photos      = d.get('photos', [])
     categories  = d.get('photo_categories', [])
     titles      = d.get('photo_titles', [])
-    coords_list = d.get('photo_coords', [])
+    coords_list = list(d.get('photo_coords', [])) + [None] * len(photos)
 
-    # Pad coords_list so it matches photos length
-    coords_list = list(coords_list) + [None] * len(photos)
-
+    # 'damaged' is the canonical category; 'damage' (singular) is never used
     sub_photos   = [(p, t, c) for p, cat, t, c in
-                    zip(photos, categories,
-                        titles + [''] * len(photos),
-                        coords_list)
-                    if cat not in ('damage', 'damaged')]
+                    zip(photos, categories, titles + [''] * len(photos), coords_list)
+                    if cat == 'general']
     super_photos = [(p, t, c) for p, cat, t, c in
-                    zip(photos, categories,
-                        titles + [''] * len(photos),
-                        coords_list)
-                    if cat in ('damage', 'damaged')]
+                    zip(photos, categories, titles + [''] * len(photos), coords_list)
+                    if cat == 'damaged']
 
-    # Caption style matching original: light peach fill, Times New Roman 11pt bold, centred, thin border
-    CAPTION_FILL   = PatternFill(patternType='solid', fgColor='FCE4D6')   # accent2 ~60% tint
+    CAPTION_FILL   = PatternFill(patternType='solid', fgColor='FCE4D6')
     CAPTION_FONT   = Font(name='Times New Roman', size=11, bold=True)
     CAPTION_ALIGN  = Alignment(horizontal='center', vertical='center', wrap_text=True)
     _thin          = Side(style='thin', color='000000')
     CAPTION_BORDER = Border(top=_thin, left=_thin, right=_thin, bottom=_thin)
 
+    ovals     = []
+    shape_ctr = [100]   # mutable counter shared across both sheet inserts
+
     def _insert_photos(ws, photo_list):
-        if not photo_list:
+        if not photo_list or ws is None:
             return
         ws._images.clear()
-
-        # Pre-clear any existing caption merged ranges (B/A col, rows > 2)
+        # Clear stale caption merges (keep the header B2:H2)
         for rng in list(ws.merged_cells.ranges):
             if str(rng) != 'B2:H2':
                 try:
@@ -265,7 +378,7 @@ def _fill_appendix_c(wb, d):
                 except Exception:
                     pass
 
-        row = 3  # first photo starts at row 3
+        row = 3
         for path, title, coords in photo_list:
             if not path or not os.path.exists(path):
                 continue
@@ -275,69 +388,222 @@ def _fill_appendix_c(wb, d):
                     img.load()
                     if img.mode in ('RGBA', 'P', 'LA'):
                         img = img.convert('RGB')
-                    # Draw red circle if AI detected coords AND photo has no pre-drawn circle
-                    if coords and not _has_red_markers(path):
-                        img = _draw_red_circle(img, coords[0], coords[1])
-                    w, h = img.size
-                    # Scale to fill the sheet width (~600px wide × 420px tall max)
-                    max_w, max_h = 600, 420
-                    scale   = min(max_w / w, max_h / h)
-                    new_w   = int(w * scale)
-                    new_h   = int(h * scale)
-                    img_res = img.resize((new_w, new_h), PILImage.LANCZOS)
-                    buf = io.BytesIO()
-                    img_res.save(buf, format='JPEG', quality=90)
+                    # Do NOT burn circle into image — editable shapes injected later
+                    w, h  = img.size
+                    scale = min(600 / w, 420 / h)
+                    new_w = int(w * scale)
+                    new_h = int(h * scale)
+                    buf   = io.BytesIO()
+                    img.resize((new_w, new_h), PILImage.LANCZOS).save(
+                        buf, format='JPEG', quality=90)
                 buf.seek(0)
 
-                # Two-cell anchor: from A{row} to I{row+photo_rows-1}
-                # 1 px ≈ 9525 EMU; row height default 15pt → 20 rows ≈ image height
-                EMU_PER_PX = 9525
-                from_row   = row - 1       # 0-based
-                to_row     = row + 19      # ~20 rows for photo
-                xl_img = XLImage(buf)
+                # Photo anchor: rows row-1 → row+19, cols 0 → 8 (0-indexed)
+                photo_from_row = row - 1
+                photo_to_row   = row + 19
+                photo_from_col = 0
+                photo_to_col   = 8
+
+                xl_img        = XLImage(buf)
                 xl_img.width  = new_w
                 xl_img.height = new_h
-
-                # Build TwoCellAnchor manually so image fills A–H
-                anchor = TwoCellAnchor()
-                anchor._from = AnchorMarker(col=0, row=from_row, colOff=0, rowOff=0)   # col A
-                anchor.to    = AnchorMarker(col=8, row=to_row,   colOff=0, rowOff=0)   # col I
+                anchor        = TwoCellAnchor()
+                anchor._from  = AnchorMarker(col=photo_from_col, row=photo_from_row,
+                                              colOff=0, rowOff=0)
+                anchor.to     = AnchorMarker(col=photo_to_col,   row=photo_to_row,
+                                              colOff=0, rowOff=0)
                 anchor.editAs = 'oneCell'
                 xl_img.anchor = anchor
                 ws.add_image(xl_img)
 
-                # Caption row: 2 rows below photo block, span A:H, styled
-                cap_row = to_row + 2   # 1-based
+                # If defect coords available, schedule an editable oval shape
+                if coords and not _has_red_markers(path):
+                    x_pct, y_pct = coords
+                    span_cols = photo_to_col - photo_from_col   # 8
+                    span_rows = photo_to_row - photo_from_row   # 20
+                    # Oval occupies ~14% of photo width/height centred on defect
+                    r_cols = max(1, int(span_cols * 0.07))
+                    r_rows = max(1, int(span_rows * 0.07))
+                    oval_fc = photo_from_col + max(0, int(x_pct * span_cols) - r_cols)
+                    oval_tc = photo_from_col + min(span_cols, int(x_pct * span_cols) + r_cols)
+                    oval_fr = photo_from_row + max(0, int(y_pct * span_rows) - r_rows)
+                    oval_tr = photo_from_row + min(span_rows, int(y_pct * span_rows) + r_rows)
+                    shape_ctr[0] += 1
+                    ovals.append((ws.title, oval_fc, oval_fr, oval_tc, oval_tr, shape_ctr[0]))
+
+                cap_row = photo_to_row + 2   # two blank rows below photo block
                 try:
                     ws.merge_cells(start_row=cap_row, start_column=1,
                                    end_row=cap_row, end_column=8)
                 except Exception:
                     pass
-                cap_cell               = ws.cell(row=cap_row, column=1, value=title or path)
-                cap_cell.fill          = CAPTION_FILL
-                cap_cell.font          = CAPTION_FONT
-                cap_cell.alignment     = CAPTION_ALIGN
-                cap_cell.border        = CAPTION_BORDER
-                # Set row height so caption text is visible
+                cap_cell           = ws.cell(row=cap_row, column=1, value=title or path)
+                cap_cell.fill      = CAPTION_FILL
+                cap_cell.font      = CAPTION_FONT
+                cap_cell.alignment = CAPTION_ALIGN
+                cap_cell.border    = CAPTION_BORDER
                 ws.row_dimensions[cap_row].height = 28
 
-                row = cap_row + 3   # 2 blank rows gap before next photo
+                row = cap_row + 3   # gap before next photo
 
             except Exception as e:
                 print(f"EXCEL PHOTO INSERT FAILED {path}: {e}")
 
-    _insert_photos(wb['Appendix__C'], sub_photos)
-    _insert_photos(wb['Appendix__C (2)'], super_photos)
+    ws_sub   = _find_sheet_rb(wb, 'Appendix__C')
+    ws_super = _find_sheet_rb(wb, 'Appendix__C (2)')
+
+    if ws_sub is None:
+        print("WARNING: 'Appendix__C' sheet not found — sub-structure photos skipped")
+    if ws_super is None:
+        print("WARNING: 'Appendix__C (2)' sheet not found — super-structure photos skipped")
+
+    _insert_photos(ws_sub,   sub_photos)
+    _insert_photos(ws_super, super_photos)
+    return ovals
+
+
+# ─────────────────────────────────────────────────────────────
+#  Editable oval shape injection (post-processing)
+# ─────────────────────────────────────────────────────────────
+
+def _inject_oval_shapes(xlsx_path: str, ovals: list):
+    """Inject editable red oval AutoShapes into an already-saved xlsx file.
+
+    ovals: list of (sheet_name, from_col, from_row, to_col, to_row, shape_id)
+           — from_col/from_row/to_col/to_row are 0-indexed Excel drawing anchors.
+
+    The function:
+      1. Opens the xlsx as a ZIP archive.
+      2. Resolves each sheet name → its drawing XML file via workbook rels.
+      3. Appends <xdr:twoCellAnchor> oval elements to each drawing.
+      4. Writes a new xlsx (atomic replace).
+    """
+    if not ovals:
+        return
+
+    import zipfile
+    try:
+        from lxml import etree
+    except ImportError:
+        print("lxml not installed — editable ovals skipped (pip install lxml)")
+        return
+
+    XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
+    A   = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+    R   = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    REL = 'http://schemas.openxmlformats.org/package/2006/relationships'
+
+    def _oval_xml(sid, fc, fr, tc, tr):
+        return (
+            f'<xdr:twoCellAnchor xmlns:xdr="{XDR}" xmlns:a="{A}" editAs="oneCell">'
+            f'<xdr:from><xdr:col>{fc}</xdr:col><xdr:colOff>0</xdr:colOff>'
+            f'<xdr:row>{fr}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>'
+            f'<xdr:to><xdr:col>{tc}</xdr:col><xdr:colOff>0</xdr:colOff>'
+            f'<xdr:row>{tr}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>'
+            f'<xdr:sp macro="" textlink="">'
+            f'<xdr:nvSpPr>'
+            f'<xdr:cNvPr id="{sid}" name="DefectCircle{sid}"/>'
+            f'<xdr:cNvSpPr><a:spLocks noGrp="1"/></xdr:cNvSpPr>'
+            f'</xdr:nvSpPr>'
+            f'<xdr:spPr>'
+            f'<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>'
+            f'<a:noFill/>'
+            f'<a:ln w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln>'
+            f'</xdr:spPr>'
+            f'<xdr:txBody><a:bodyPr rtlCol="0" anchor="ctr"/>'
+            f'<a:lstStyle/><a:p/></xdr:txBody>'
+            f'</xdr:sp><xdr:clientData/></xdr:twoCellAnchor>'
+        )
+
+    # --- Load all files from the xlsx ZIP ---
+    with zipfile.ZipFile(xlsx_path, 'r') as z:
+        files = {n: z.read(n) for n in z.namelist()}
+
+    # --- Resolve sheet name → drawing file ---
+    def _parse(data):
+        return etree.fromstring(data)
+
+    wb_ns  = {'wb': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    rel_ns = {'rel': REL}
+
+    wb_xml   = _parse(files['xl/workbook.xml'])
+    wb_rels  = _parse(files.get('xl/_rels/workbook.xml.rels', b'<Relationships/>'))
+
+    rid_to_target = {rel.get('Id'): rel.get('Target')
+                     for rel in wb_rels.findall('.//rel:Relationship', rel_ns)}
+
+    sheet_to_drawing = {}   # sheet_name → 'xl/drawings/drawingN.xml'
+    for sh in wb_xml.findall('.//wb:sheet', wb_ns):
+        sname = sh.get('name', '')
+        rid   = sh.get(f'{{{R}}}id') or sh.get('r:id', '')
+        ws_target = rid_to_target.get(rid, '')
+        # ws_target may be 'worksheets/sheet3.xml' (relative to xl/)
+        if ws_target.startswith('/xl/'):
+            ws_path = ws_target[1:]          # strip leading /
+        elif ws_target.startswith('xl/'):
+            ws_path = ws_target
+        else:
+            ws_path = f'xl/{ws_target}'
+
+        ws_fname    = ws_path.split('/')[-1]
+        ws_rels_key = f'xl/worksheets/_rels/{ws_fname}.rels'
+        if ws_rels_key not in files:
+            continue
+
+        ws_rels = _parse(files[ws_rels_key])
+        for rel in ws_rels.findall('.//rel:Relationship', rel_ns):
+            if 'drawing' in rel.get('Type', '').lower():
+                drw = rel.get('Target', '')
+                # Target is relative to worksheets/ so '../drawings/drawingN.xml'
+                drw_fname = drw.split('/')[-1]
+                sheet_to_drawing[sname] = f'xl/drawings/{drw_fname}'
+                break
+
+    # --- Group ovals by sheet ---
+    ovals_by_sheet = {}
+    for sname, fc, fr, tc, tr, sid in ovals:
+        ovals_by_sheet.setdefault(sname, []).append((fc, fr, tc, tr, sid))
+
+    # --- Inject ovals into drawing XMLs ---
+    modified = False
+    for sname, oval_list in ovals_by_sheet.items():
+        drw_key = sheet_to_drawing.get(sname)
+        if not drw_key or drw_key not in files:
+            print(f"OVAL INJECT: drawing not found for sheet '{sname}', skipping")
+            continue
+
+        drw_root = _parse(files[drw_key])
+        for fc, fr, tc, tr, sid in oval_list:
+            oval_el = etree.fromstring(_oval_xml(sid, fc, fr, tc, tr))
+            drw_root.append(oval_el)
+            print(f"OVAL INJECT: shape {sid} → sheet '{sname}' "
+                  f"cols {fc}-{tc}, rows {fr}-{tr}")
+
+        files[drw_key] = etree.tostring(drw_root, xml_declaration=True,
+                                         encoding='UTF-8', standalone=True)
+        modified = True
+
+    if not modified:
+        return
+
+    # --- Write back ---
+    tmp = xlsx_path + '._tmp'
+    with zipfile.ZipFile(tmp, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
+        for name, data in files.items():
+            zout.writestr(name, data)
+    os.replace(tmp, xlsx_path)
+    print(f"OVAL INJECT: saved {len(ovals)} oval(s) into {xlsx_path}")
+
 
 def _fill_appendix_c_captions(wb, d):
-    """Write photo caption list to Appendix-c sheet."""
+    """Write the photo caption index to Appendix-c sheet."""
     from openpyxl.cell.cell import MergedCell
-    ws = wb['Appendix-c']
-    photos     = d.get('photos', [])
-    titles     = d.get('photo_titles', [])
-    categories = d.get('photo_categories', [])
+    ws     = wb['Appendix-c']
+    photos = d.get('photos', [])
+    titles = d.get('photo_titles', [])
+    cats   = d.get('photo_categories', [])
 
-    # Clear existing content below row 1 (skip MergedCells)
+    # Clear existing content below row 1
     for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
         for cell in row:
             if not isinstance(cell, MergedCell):
@@ -346,18 +612,27 @@ def _fill_appendix_c_captions(wb, d):
     row = 2
     _safe_write(ws, row, 2, 'SUB STRUCTURE')
     row += 1
-    for i, (path, title, cat) in enumerate(zip(photos, titles, categories), 1):
-        if cat not in ('damage', 'damaged'):
-            _safe_write(ws, row, 2, f'{i}. {title}')
+    sub_n = 1
+    for path, title, cat in zip(photos, titles, cats):
+        if cat == 'general':
+            _safe_write(ws, row, 2, f'{sub_n}. {title}')
+            sub_n += 1
             row += 1
 
     row += 1
     _safe_write(ws, row, 2, 'SUPER STRUCTURE')
     row += 1
-    for i, (path, title, cat) in enumerate(zip(photos, titles, categories), 1):
-        if cat in ('damage', 'damaged'):
-            _safe_write(ws, row, 2, f'{i}. {title}')
+    sup_n = 1
+    for path, title, cat in zip(photos, titles, cats):
+        if cat == 'damaged':
+            _safe_write(ws, row, 2, f'{sup_n}. {title}')
+            sup_n += 1
             row += 1
+
+
+# ─────────────────────────────────────────────────────────────
+#  Entry point
+# ─────────────────────────────────────────────────────────────
 
 def build_excel(report_json: dict) -> str:
     """Fill CASAD Excel template with report_json and return saved file path."""
@@ -368,16 +643,19 @@ def build_excel(report_json: dict) -> str:
     _fill_appendix_b(wb, report_json)
     _fill_defect_tables(wb, report_json)
     _fill_appendix_c_captions(wb, report_json)
-    _fill_appendix_c(wb, report_json)
+    ovals = _fill_appendix_c(wb, report_json)   # returns list of oval descriptors
 
-    # Prefer bridge_title for the filename; fall back to river_name
-    name     = report_json.get('bridge_title') or report_json.get('river_name', 'bridge')
-    road     = report_json.get('road_name', 'road')
-    name     = re.sub(r'[^\w\-]', '_', name)
-    road     = re.sub(r'[^\w\-]', '_', road)
+    name     = re.sub(r'[^\w\-]', '_',
+                      report_json.get('bridge_title') or report_json.get('river_name', 'bridge'))
+    road     = re.sub(r'[^\w\-]', '_', report_json.get('road_name', 'road'))
     date_str = report_json.get('date_of_survey', 'report').replace('/', '-')
     out_path = os.path.join(OUTPUT_DIR, f'CASAD_{name}_{road}_{date_str}.xlsx')
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     wb.save(out_path)
     print(f"EXCEL REPORT SAVED: {out_path}")
+
+    # Inject editable oval shapes (post-processing — must happen after wb.save)
+    if ovals:
+        _inject_oval_shapes(out_path, ovals)
+
     return out_path

@@ -27,7 +27,7 @@ def _fill_title_page(wb, d):
     ws = wb['TITLE PAGE']
     _cell(ws, 'A2', f"CLIENT: {_safe(d, 'client_name', 'CASAD CONSULTANTS PVT. LTD.')}")
     _cell(ws, 'C4', _safe(d, 'project_name', 'Bridge Inspection Work'))
-    _cell(ws, 'C5', f'"{_safe(d, "bridge_title", d.get("river_name", ""))}"')
+    _cell(ws, 'C5', f'"{_safe(d, "bridge_title_full", _safe(d, "bridge_title", d.get("river_name", "")))}"')
     _cell(ws, 'A6', f"Project No.: {_safe(d, 'project_number', '-')}")
     from datetime import date
     _cell(ws, 'A10', 'R0')
@@ -69,7 +69,7 @@ def _fill_appendix_b(wb, d):
         'C7':  d.get('road_name', '-'),
         'C8':  d.get('road_number', '-'),
         'C9':  f"{d.get('latitude','-')} , {d.get('longitude','-')}",
-        'C10': f"{d.get('division','-')} / {d.get('circle','-')}",
+        'C10': d.get('division', '-') if d.get('division') == d.get('circle') else f"{d.get('division','-')} / {d.get('circle','-')}",
         'C11': d.get('type_of_bridge', d.get('bridge_type', '-')),
         'C12': d.get('date_of_survey', '-'),
         # Section 4 — Approaches (rows 14-19)
@@ -151,11 +151,11 @@ def _fill_defect_table(ws, elements: list, matrix: dict,
             _safe_write(ws, row_num, start_col + i, obs or 'Absent')
 
 def _fill_defect_tables(wb, d):
-    # Table 1: Sub-structure Side 1 (piers start col E=5, remarks col O=15)
+    # Table 1: Sub-structure Side 1 (piers start col E=5, remarks col P=16)
     piers1 = d.get('sub_piers_side1') or []
     matrix1 = d.get('defect_sub1') or {}
     if piers1:
-        _fill_defect_table(wb['Table 1'], piers1, matrix1, start_col=5, remarks_col=15)
+        _fill_defect_table(wb['Table 1'], piers1, matrix1, start_col=5, remarks_col=16)
 
     # Table 2: Sub-structure Side 2 (piers start col E=5, remarks col O=15)
     piers2 = d.get('sub_piers_side2') or []
@@ -163,11 +163,31 @@ def _fill_defect_tables(wb, d):
     if piers2:
         _fill_defect_table(wb['Table 2'], piers2, matrix2, start_col=5, remarks_col=15)
 
-    # Table 3: Super-structure Side 1 (spans start col E=5, remarks col S=19)
-    spans1 = d.get('super_spans_side1') or []
+    # Table 3: Super-structure Side 1 — special column layout
+    # The template has the Railway span at col E (5), then cols F & G are merged/empty,
+    # then road spans start at col H (8).  Remarks at col S (19).
+    spans1  = d.get('super_spans_side1') or []
     matrix3 = d.get('defect_super1') or {}
+    ws3     = wb['Table 3']
     if spans1:
-        _fill_defect_table(wb['Table 3'], spans1, matrix3, start_col=5, remarks_col=19)
+        # Clear the full data area (cols E–R, rows 3–14) before writing
+        for col_i in range(5, 19):
+            _safe_write(ws3, 3, col_i, None)
+            for row in range(4, 15):
+                _safe_write(ws3, row, col_i, None)
+        # Write the first span (Railway span) at col E (5)
+        rly_span = spans1[0]
+        _safe_write(ws3, 3, 5, rly_span)
+        for defect_key, row_num in DEFECT_ROW.items():
+            obs = (matrix3.get(rly_span, {}) or {}).get(defect_key, 'Absent')
+            _safe_write(ws3, row_num, 5, obs or 'Absent')
+        # Write remaining spans sequentially starting at col H (8) — skipping F, G
+        for i, span_id in enumerate(spans1[1:]):
+            col = 8 + i  # H=8, I=9, J=10, …
+            _safe_write(ws3, 3, col, span_id)
+            for defect_key, row_num in DEFECT_ROW.items():
+                obs = (matrix3.get(span_id, {}) or {}).get(defect_key, 'Absent')
+                _safe_write(ws3, row_num, col, obs or 'Absent')
 
     # Table 4: Super-structure Side 2 (spans start col E=5, remarks col O=15)
     spans2 = d.get('super_spans_side2') or []
@@ -176,7 +196,11 @@ def _fill_defect_tables(wb, d):
         _fill_defect_table(wb['Table 4'], spans2, matrix4, start_col=5, remarks_col=15)
 
 def _fill_appendix_c(wb, d):
-    """Insert photos into Appendix-C sheets."""
+    """Insert photos into Appendix-C sheets, matching original template style."""
+    from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+    from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
+    from openpyxl.utils.units import pixels_to_points
+
     photos     = d.get('photos', [])
     categories = d.get('photo_categories', [])
     titles     = d.get('photo_titles', [])
@@ -186,12 +210,27 @@ def _fill_appendix_c(wb, d):
     super_photos = [(p, t) for p, c, t in zip(photos, categories, titles + [''] * len(photos))
                     if c in ('damage', 'damaged')]
 
+    # Caption style matching original: light peach fill, Times New Roman 11pt bold, centred, thin border
+    CAPTION_FILL   = PatternFill(patternType='solid', fgColor='FCE4D6')   # accent2 ~60% tint
+    CAPTION_FONT   = Font(name='Times New Roman', size=11, bold=True)
+    CAPTION_ALIGN  = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    _thin          = Side(style='thin', color='000000')
+    CAPTION_BORDER = Border(top=_thin, left=_thin, right=_thin, bottom=_thin)
+
     def _insert_photos(ws, photo_list):
         if not photo_list:
             return
-        # Clear existing images
         ws._images.clear()
-        row = 3
+
+        # Pre-clear any existing caption merged ranges (B/A col, rows > 2)
+        for rng in list(ws.merged_cells.ranges):
+            if str(rng) != 'B2:H2':
+                try:
+                    ws.unmerge_cells(str(rng))
+                except Exception:
+                    pass
+
+        row = 3  # first photo starts at row 3
         for path, title in photo_list:
             if not path or not os.path.exists(path):
                 continue
@@ -202,19 +241,50 @@ def _fill_appendix_c(wb, d):
                     if img.mode in ('RGBA', 'P', 'LA'):
                         img = img.convert('RGB')
                     w, h = img.size
-                    max_w, max_h = 400, 300
-                    scale = min(max_w / w, max_h / h)
-                    new_w, new_h = int(w * scale), int(h * scale)
-                    img_resized = img.resize((new_w, new_h))
+                    # Scale to fill the sheet width (~600px wide × 420px tall max)
+                    max_w, max_h = 600, 420
+                    scale   = min(max_w / w, max_h / h)
+                    new_w   = int(w * scale)
+                    new_h   = int(h * scale)
+                    img_res = img.resize((new_w, new_h), PILImage.LANCZOS)
                     buf = io.BytesIO()
-                    img_resized.save(buf, format='JPEG', quality=85)
+                    img_res.save(buf, format='JPEG', quality=90)
                 buf.seek(0)
+
+                # Two-cell anchor: from A{row} to I{row+photo_rows-1}
+                # 1 px ≈ 9525 EMU; row height default 15pt → 20 rows ≈ image height
+                EMU_PER_PX = 9525
+                from_row   = row - 1       # 0-based
+                to_row     = row + 19      # ~20 rows for photo
                 xl_img = XLImage(buf)
-                xl_img.anchor = f'B{row}'
+                xl_img.width  = new_w
+                xl_img.height = new_h
+
+                # Build TwoCellAnchor manually so image fills A–H
+                anchor = TwoCellAnchor()
+                anchor._from = AnchorMarker(col=0, row=from_row, colOff=0, rowOff=0)   # col A
+                anchor.to    = AnchorMarker(col=8, row=to_row,   colOff=0, rowOff=0)   # col I
+                anchor.editAs = 'oneCell'
+                xl_img.anchor = anchor
                 ws.add_image(xl_img)
-                # Write caption below photo
-                ws.cell(row=row + 15, column=2, value=title or path)
-                row += 20  # next photo slot
+
+                # Caption row: 2 rows below photo block, span A:H, styled
+                cap_row = to_row + 2   # 1-based
+                try:
+                    ws.merge_cells(start_row=cap_row, start_column=1,
+                                   end_row=cap_row, end_column=8)
+                except Exception:
+                    pass
+                cap_cell               = ws.cell(row=cap_row, column=1, value=title or path)
+                cap_cell.fill          = CAPTION_FILL
+                cap_cell.font          = CAPTION_FONT
+                cap_cell.alignment     = CAPTION_ALIGN
+                cap_cell.border        = CAPTION_BORDER
+                # Set row height so caption text is visible
+                ws.row_dimensions[cap_row].height = 28
+
+                row = cap_row + 3   # 2 blank rows gap before next photo
+
             except Exception as e:
                 print(f"EXCEL PHOTO INSERT FAILED {path}: {e}")
 

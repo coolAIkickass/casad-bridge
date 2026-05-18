@@ -152,7 +152,7 @@ def _fill_title_page(wb, d):
     ws = wb['TITLE PAGE']
     _cell(ws, 'A2', f"CLIENT: {_safe(d, 'client_name', 'AHMEDABAD MUNICIPAL CORPORATION')}")
     _cell(ws, 'C3', _safe(d, 'project_name', 'Bridge Inspection Work Ahmedabad City'))
-    _cell(ws, 'C4', f'"{_safe(d, "bridge_title", d.get("river_name", ""))}"')
+    _cell(ws, 'C4', f'"{_safe(d, "bridge_title_full", _safe(d, "bridge_title", d.get("river_name", "")))}"')
     _cell(ws, 'A5', f"Project No.: {_safe(d, 'project_number', '-')}")
     _cell(ws, 'A8', 'R0')
     _cell(ws, 'B8', date.today())
@@ -191,7 +191,7 @@ def _fill_appendix_b(wb, d):
         'C4':  d.get('bridge_title', d.get('river_name', '-')),
         'C7':  d.get('road_name', '-'),
         'C9':  f"{d.get('latitude', '-')} , {d.get('longitude', '-')}",
-        'C10': d.get('circle', '-'),
+        'C10': d.get('division', '-') if d.get('division') == d.get('circle') else f"{d.get('division','-')} / {d.get('circle','-')}",
         'C11': d.get('type_of_bridge', d.get('bridge_type', '-')),
         'C12': d.get('date_of_survey', '-'),
         # Approaches
@@ -220,6 +220,9 @@ def _fill_appendix_b(wb, d):
 
 def _fill_appendix_c(wb, d):
     """Insert photos into the single Appendix-C- sheet (AMC format)."""
+    from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+    from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
+
     ws = _find_sheet(wb, 'appendix-c')
     if ws is None:
         print("AMC PHOTO: Appendix-C sheet not found, skipping photos.")
@@ -230,12 +233,28 @@ def _fill_appendix_c(wb, d):
     categories = d.get('photo_categories', [])
 
     # Pad lists to equal length
-    max_len = max(len(photos), len(titles), len(categories))
-    photos     = (photos + [''] * max_len)[:max_len]
-    titles     = (titles + [''] * max_len)[:max_len]
+    max_len    = max(len(photos), len(titles), len(categories)) if any([photos, titles, categories]) else 0
+    photos     = (photos     + [''] * max_len)[:max_len]
+    titles     = (titles     + [''] * max_len)[:max_len]
     categories = (categories + [''] * max_len)[:max_len]
 
+    # Caption style matching original
+    CAPTION_FILL   = PatternFill(patternType='solid', fgColor='FCE4D6')
+    CAPTION_FONT   = Font(name='Times New Roman', size=11, bold=True)
+    CAPTION_ALIGN  = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    _thin          = Side(style='thin', color='000000')
+    CAPTION_BORDER = Border(top=_thin, left=_thin, right=_thin, bottom=_thin)
+
     ws._images.clear()
+    # Clear existing caption merges (keep header row merges)
+    for rng in list(ws.merged_cells.ranges):
+        r = str(rng)
+        if 'B2' not in r and 'A1' not in r:
+            try:
+                ws.unmerge_cells(r)
+            except Exception:
+                pass
+
     row = 3
     for path, title, cat in zip(photos, titles, categories):
         if not path or not os.path.exists(path):
@@ -247,20 +266,45 @@ def _fill_appendix_c(wb, d):
                 if img.mode in ('RGBA', 'P', 'LA'):
                     img = img.convert('RGB')
                 w, h = img.size
-                max_w, max_h = 400, 300
-                scale    = min(max_w / w, max_h / h)
-                new_w    = int(w * scale)
-                new_h    = int(h * scale)
-                img_resized = img.resize((new_w, new_h))
+                max_w, max_h = 600, 420
+                scale       = min(max_w / w, max_h / h)
+                new_w       = int(w * scale)
+                new_h       = int(h * scale)
+                img_res     = img.resize((new_w, new_h), PILImage.LANCZOS)
                 buf = io.BytesIO()
-                img_resized.save(buf, format='JPEG', quality=85)
+                img_res.save(buf, format='JPEG', quality=90)
             buf.seek(0)
+
             xl_img        = XLImage(buf)
-            xl_img.anchor = f'B{row}'
+            xl_img.width  = new_w
+            xl_img.height = new_h
+
+            from_row = row - 1
+            to_row   = row + 19
+
+            anchor        = TwoCellAnchor()
+            anchor._from  = AnchorMarker(col=0, row=from_row, colOff=0, rowOff=0)
+            anchor.to     = AnchorMarker(col=8, row=to_row,   colOff=0, rowOff=0)
+            anchor.editAs = 'oneCell'
+            xl_img.anchor = anchor
             ws.add_image(xl_img)
-            # Caption below photo
-            ws.cell(row=row + 15, column=2, value=title or path)
-            row += 20
+
+            # Caption row
+            cap_row = to_row + 2
+            try:
+                ws.merge_cells(start_row=cap_row, start_column=1,
+                               end_row=cap_row, end_column=8)
+            except Exception:
+                pass
+            cap_cell           = ws.cell(row=cap_row, column=1, value=title or path)
+            cap_cell.fill      = CAPTION_FILL
+            cap_cell.font      = CAPTION_FONT
+            cap_cell.alignment = CAPTION_ALIGN
+            cap_cell.border    = CAPTION_BORDER
+            ws.row_dimensions[cap_row].height = 28
+
+            row = cap_row + 3
+
         except Exception as e:
             print(f"AMC PHOTO INSERT FAILED {path}: {e}")
 

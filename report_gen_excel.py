@@ -85,6 +85,62 @@ def _rich_bold_labels(text) -> object:
     return parts
 
 
+def _build_spans_cell(d) -> object:
+    """Build the 'Number of Spans' cell with 4 fixed bold sub-titles.
+
+    Format (each sub-title bold; omitted when no data for that sub-field):
+        Number of Span: <no_of_spans>
+        Length:         <total_length>
+        C/C of Piers:   <cc_of_piers>
+        Width of Piers: <width_of_piers>
+
+    Fallback: if none of the structured sub-fields are available, writes a
+    plain text dump of whatever span info was given (no bold formatting).
+    Returns None (blank cell) when no data at all is provided.
+    """
+    def _v(key):
+        val = (d.get(key) or '').strip()
+        return val if val and val not in ('-', 'None') else ''
+
+    no_of_spans    = _v('no_of_spans')
+    total_length   = _v('total_length')
+    cc_of_piers    = _v('cc_of_piers')
+    width_of_piers = _v('width_of_piers')
+    span_length    = _v('span_length')   # legacy fallback
+
+    # Build ordered sections — only include sub-titles that have data
+    sections = []
+    if no_of_spans:
+        sections.append(('Number of Span', no_of_spans))
+    if total_length:
+        sections.append(('Length', total_length))
+    if cc_of_piers:
+        sections.append(('C/C of Piers', cc_of_piers))
+    if width_of_piers:
+        sections.append(('Width of Piers', width_of_piers))
+
+    if not sections:
+        # No structured data — fall back to plain text dump
+        fallback = _combine_fields(no_of_spans, span_length)
+        return _rich_bold_labels(fallback)   # returns None if still empty
+
+    try:
+        from openpyxl.cell.rich_text import CellRichText, TextBlock
+        from openpyxl.cell.text import InlineFont
+    except ImportError:
+        # Older openpyxl — plain-string fallback (no bold)
+        return '\n'.join(f'{label}: {val}' for label, val in sections)
+
+    bold  = InlineFont(b=True)
+    parts = CellRichText()
+    for i, (label, value) in enumerate(sections):
+        newline = '\n' if i < len(sections) - 1 else ''
+        parts.append(TextBlock(bold, label + ':'))
+        # Value may itself be multi-line — preserve as-is
+        parts.append(' ' + value + newline)
+    return parts
+
+
 def _coords(d) -> str:
     """Format lat/lon with degree symbol."""
     lat = d.get('latitude', '-')
@@ -179,13 +235,10 @@ def _fill_appendix_a(wb, d):
         'C33': d.get('subsoil_particulars') or None,
 
         # Section 2 — Details of Spans
-        # Row 2.1 label: "Number of Spans (Length, center to center of piers
-        # and width of piers)" — ONE cell that must combine both fields.
-        # Sub-titles (the part before ':' on each line) are rendered in bold;
-        # returns None (blank) when no data is provided.
-        'C15': _rich_bold_labels(
-            _combine_fields(d.get('no_of_spans', ''), d.get('span_length', ''))
-        ),
+        # Row 2.1: "Number of Spans (Length, c/c of piers and width of piers)"
+        # Built with 4 fixed bold sub-titles; only those with data are shown.
+        # Falls back to plain-text dump when structured fields are missing.
+        'C15': _build_spans_cell(d),
         'C16': d.get('total_length', '-'),
         'C17': d.get('angle_of_crossing', '-'),
         # C18 = high-level / submersible / ROB — use bridge_level_type or type_of_bridge

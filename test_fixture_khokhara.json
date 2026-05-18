@@ -15,6 +15,8 @@
 
   "no_of_spans":        "Anupam Road Side: 10 Nos.\nGomtipur Road Side: 10 Nos.\nRailway Portion: 4 Nos.",
   "total_length":       "92 + 6 × 25 + 21 + 13 + 63 = 339.53 m (Anupam Cinema Road)\n92 + 5 × 25 + 113 = 330 m (Gomtipur Road)\nRailway Portion: 4 × 25 = 100 m",
+  "cc_of_piers":        "25 m (Anupam Cinema Side)\n12.5 m (Gomtipur Road Side)\n25 m (Railway Portion)",
+  "width_of_piers":     "1.25 m (Anupam Cinema Side)\n1.2 m (Gomtipur Road Side)",
   "span_length":        "C/C 25 m, pier width 1.25 m (Anupam Cinema Side)\nC/C 12.5 m, pier width 1.2 m (Gomtipur Road Side)\n4 × 25 m = 100 m (Railway Portion)",
   "span_arrangement":   "Railway Portion: 4 Nos. × 25 m = 100 m\nAnupam Cinema Side: 92 + 6 × 25 + 21 + 13 + 63 = 339.53 m\nGomtipur Road Side: 92 + 5 × 25 + 113 = 330 m",
   "bridge_level_type":  "ROB (Railway Over Bridge) — High Level",

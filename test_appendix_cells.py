@@ -87,23 +87,21 @@ class TestRB_AppendixA(unittest.TestCase):
 
     def test_TC06_C15_no_of_spans_AND_span_length(self):
         """
-        BUG-01 (R&B): Template row-2.1 label reads
-          "Number of Spans (Length, center to center of piers and width of piers)"
-        Old code wrote ONLY no_of_spans; span_length (C/C spacing, pier widths)
-        was silently dropped.
-        Expected: combined text of both fields.
+        C15 must use 4 fixed bold sub-titles:
+          Number of Span / Length / C/C of Piers / Width of Piers
+        Each sub-title is followed by the matching field value (only shown if data given).
         """
         val = str(_get(self.ws, 'C15') or '')
-        # no_of_spans part
-        self.assertIn('Anupam Road Side: 10 Nos.', val,
-                      "no_of_spans missing from C15")
-        self.assertIn('Railway Portion: 4 Nos.', val,
-                      "Railway span count missing")
-        # span_length part — C/C spacing and pier widths
-        self.assertIn('C/C 25 m', val,
-                      "C/C spacing (span_length) missing from C15")
-        self.assertIn('pier width 1.25 m', val,
-                      "Pier width (span_length) missing from C15")
+        # Fixed sub-title labels
+        self.assertIn('Number of Span:', val, "Missing 'Number of Span:' sub-title")
+        self.assertIn('Length:', val,         "Missing 'Length:' sub-title")
+        self.assertIn('C/C of Piers:', val,   "Missing 'C/C of Piers:' sub-title")
+        self.assertIn('Width of Piers:', val, "Missing 'Width of Piers:' sub-title")
+        # Data content
+        self.assertIn('Anupam Road Side: 10 Nos.', val, "no_of_spans missing from C15")
+        self.assertIn('339.53', val,  "total_length missing from C15 Length sub-title")
+        self.assertIn('25 m (Anupam Cinema Side)', val, "cc_of_piers missing from C15")
+        self.assertIn('1.25 m (Anupam Cinema Side)', val, "width_of_piers missing from C15")
 
     def test_TC07_C16_total_length_math_preserved(self):
         """BUG: none. Math expression must survive verbatim."""
@@ -269,15 +267,21 @@ class TestAMC_AppendixA(unittest.TestCase):
 
     def test_TC27_C15_no_of_spans_AND_span_length(self):
         """
-        BUG-06 (AMC): old code wrote no_of_spans to C14 (header row).
-        Row 2.1 'Number of Spans (Length, c/c of piers and width of piers)'
-        must be at C15 and must include both no_of_spans + span_length.
+        AMC C15 must use 4 fixed bold sub-titles:
+          Number of Span / Length / C/C of Piers / Width of Piers
+        Each sub-title is followed by the matching field value (only shown if data given).
         """
         val = str(_get(self.ws, 'C15') or '')
-        self.assertIn('Anupam Road Side: 10 Nos.', val,
-                      "no_of_spans not at C15")
-        self.assertIn('C/C 25 m', val,
-                      "span_length (C/C) not combined into C15")
+        # Fixed sub-title labels
+        self.assertIn('Number of Span:', val, "Missing 'Number of Span:' sub-title in AMC C15")
+        self.assertIn('Length:', val,         "Missing 'Length:' sub-title in AMC C15")
+        self.assertIn('C/C of Piers:', val,   "Missing 'C/C of Piers:' sub-title in AMC C15")
+        self.assertIn('Width of Piers:', val, "Missing 'Width of Piers:' sub-title in AMC C15")
+        # Data content
+        self.assertIn('Anupam Road Side: 10 Nos.', val, "no_of_spans not at C15")
+        self.assertIn('339.53', val,  "total_length missing from AMC C15 Length sub-title")
+        self.assertIn('25 m (Anupam Cinema Side)', val, "cc_of_piers missing from AMC C15")
+        self.assertIn('1.25 m (Anupam Cinema Side)', val, "width_of_piers missing from AMC C15")
 
     def test_TC28_C16_total_length(self):
         """

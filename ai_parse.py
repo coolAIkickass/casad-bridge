@@ -244,7 +244,9 @@ SCHEMA = {
     "division":             "",
     "sub_division":         "",
     "no_of_spans":          "",    # list each side: "Anupam: 10 Nos.\nGomtipur: 10 Nos.\nRailway: 4 Nos."
-    "span_length":          "",    # C/C of piers with pier widths
+    "cc_of_piers":          "",    # C/C spacing per side: "25 m (Anupam Cinema side)\n12.5 m (Gomtipur Road Side)"
+    "width_of_piers":       "",    # pier width per side: "1.25 m (Anupam Cinema side)\n1.2 m (Gomtipur Road Side)"
+    "span_length":          "",    # legacy combined field (C/C + pier widths) — keep for backward compat
     "span_arrangement":     "",    # EXACT mathematical breakdown: "92+6×25+21+13+63=339.53m (Anupam)..."
     "total_length":         "",    # same as span_arrangement — full expression
     "bridge_type":          "",    # structural type (PSC Girder / RCC Slab / Steel Truss)
@@ -421,7 +423,11 @@ BRIDGE DETAILS EXTRACTION RULES (critical for Excel Appendix-A accuracy):
 - bridge_level_type / type_of_bridge: "High Level" / "ROB" / "Submersible" — NOT the structural type.
 - angle_of_crossing: copy EXACTLY as stated — if inspector says "Q", output "Q" (not "Skew").
 - latitude / longitude: preserve FULL decimal precision exactly as stated.
-- span_length: C/C spacing and pier widths per side (this is DIFFERENT from span_arrangement).
+- cc_of_piers: ONLY the C/C (centre-to-centre) spacing per side, e.g.:
+  "25 m (Anupam Cinema side)\n12.5 m (Gomtipur Road Side)"
+- width_of_piers: ONLY the pier width per side, e.g.:
+  "1.25 m (Anupam Cinema side)\n1.2 m (Gomtipur Road Side)"
+- span_length: legacy combined field — if the inspector gives C/C and pier width together (e.g. "C/C 25m, pier width 1.25m"), populate span_length AND also extract cc_of_piers and width_of_piers separately if distinguishable.
 - hydraulic_parameters: if inspector says "hydraulic parameters not applicable" or similar, output "Not Applicable". For ROBs, this is always "Not Applicable".
 - subsoil_particulars: if inspector says "as per approved GAD" or "as per approved design", output exactly that phrase. Leave empty if not mentioned.
 - bearing_type_detail: list each bearing type with its location. e.g. "Elastomeric Bearing (Anupam Cinema + Gomtipur Side)\nPOT-PTFE Bearing (Railway Portion)". NEVER put expansion joint text here.

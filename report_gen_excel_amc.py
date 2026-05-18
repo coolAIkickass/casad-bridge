@@ -54,6 +54,35 @@ def _combine_fields(*parts, sep='\n') -> str:
     return sep.join(filtered) if filtered else '-'
 
 
+def _rich_bold_labels(text) -> object:
+    """Return a CellRichText where the portion before ':' on each line is bold.
+
+    Used for multi-line fields like no_of_spans where each line has the form
+    "Side Label: value". Returns None if no content is given (blank cell).
+    Falls back to plain string if openpyxl rich-text is unavailable.
+    """
+    if not text or str(text).strip() in ('-', '', 'None'):
+        return None
+    try:
+        from openpyxl.cell.rich_text import CellRichText, TextBlock
+        from openpyxl.cell.text import InlineFont
+    except ImportError:
+        return str(text)   # older openpyxl — plain-string fallback
+
+    bold = InlineFont(b=True)
+    lines = str(text).split('\n')
+    parts = CellRichText()
+    for i, line in enumerate(lines):
+        newline = '\n' if i < len(lines) - 1 else ''
+        if ':' in line:
+            label, rest = line.split(':', 1)
+            parts.append(TextBlock(bold, label + ':'))
+            parts.append(rest + newline)
+        else:
+            parts.append(line + newline)
+    return parts
+
+
 def _safe_write(ws, row: int, col: int, value):
     """Write to a cell, unmerging its range first if it is a MergedCell."""
     from openpyxl.cell.cell import MergedCell
@@ -213,7 +242,11 @@ def _fill_appendix_a(wb, d):
         # Row 14 = "Details of Spans:" section header — do NOT write here.
         # Row 2.1 label: "Number of Spans (Length, c/c of piers and width of
         # piers)" — one cell combining no_of_spans + span_length.
-        'C15': _combine_fields(d.get('no_of_spans', ''), d.get('span_length', '')),
+        # Sub-titles (the part before ':' on each line) are rendered in bold;
+        # returns None (blank) when no data is provided.
+        'C15': _rich_bold_labels(
+            _combine_fields(d.get('no_of_spans', ''), d.get('span_length', ''))
+        ),
         'C16': d.get('total_length', '-'),
         'C17': d.get('angle_of_crossing', '-'),
         'C18': d.get('bridge_level_type', d.get('type_of_bridge', '-')),

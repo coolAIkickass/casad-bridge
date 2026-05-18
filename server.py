@@ -168,7 +168,8 @@ def webhook():
         # recover gracefully — don't restart the whole flow mid-inspection.
         if content_lower == 'done':
             send_message(phone,
-                "⚠️ Your session was reset (server restart). Please start a new inspection by sending *hi*.")
+                "Apologies! Your session was reset (due to server restart).\n\n"
+                "Please start a new session by sending *hi* and reshare.")
             return 'OK', 200
 
         reset_session(phone)

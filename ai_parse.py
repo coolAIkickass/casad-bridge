@@ -572,12 +572,15 @@ def parse_inspection(session: dict) -> dict:
         "Do NOT add references to Absent / Not Visible / NIL / NA fields."
     )
 
-    response = client.messages.create(
+    # Use streaming — required by Anthropic SDK for requests that may exceed
+    # 10 minutes (large max_tokens + photo-coord processing on Render).
+    with client.messages.stream(
         model='claude-sonnet-4-6',
         max_tokens=32768,
         system=SYSTEM_PROMPT,
         messages=[{'role': 'user', 'content': user_content}]
-    )
+    ) as stream:
+        response = stream.get_final_message()
     raw = response.content[0].text.strip()
     stop_reason = response.stop_reason
     print(f"CLAUDE RAW RESPONSE stop_reason={stop_reason} (first 200 chars): {raw[:200]}")
@@ -681,12 +684,15 @@ def parse_inspection_excel(session: dict) -> dict:
         "For defect matrices: extract per-pier/span observations. Use 'Absent' for any element not mentioned for a given defect type.\n\n"
     )
 
-    response = client.messages.create(
+    # Use streaming — required by Anthropic SDK for requests that may exceed
+    # 10 minutes (large max_tokens + photo-coord processing on Render).
+    with client.messages.stream(
         model='claude-sonnet-4-6',
         max_tokens=32768,
         system=SYSTEM_PROMPT + EXCEL_EXTRA_PROMPT,
         messages=[{'role': 'user', 'content': user_content}]
-    )
+    ) as stream:
+        response = stream.get_final_message()
     raw = response.content[0].text.strip()
     stop_reason = response.stop_reason
     print(f"CLAUDE EXCEL RAW RESPONSE stop_reason={stop_reason} (first 200 chars): {raw[:200]}")

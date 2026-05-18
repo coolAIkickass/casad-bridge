@@ -1,5 +1,6 @@
 # whatsapp.py — WhatsApp message parsing, media download, reply sending
 import os, requests
+from datetime import datetime
 
 TOKEN         = os.getenv('WHATSAPP_TOKEN')
 PHONE_NUM_ID  = os.getenv('PHONE_NUMBER_ID')
@@ -7,6 +8,9 @@ MEDIA_DIR     = os.getenv('MEDIA_DIR', 'media')
 BASE_URL      = f"https://graph.facebook.com/v19.0/{PHONE_NUM_ID}"
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
+
+def _log(label, msg):
+    print(f"[{datetime.utcnow().strftime('%H:%M:%S')}] {label}: {msg}", flush=True)
 
 
 def parse_payload(data: dict) -> dict:
@@ -50,6 +54,9 @@ def download_media(media_id: str, save: bool = False) -> bytes | str:
     url_resp = requests.get(
         f'https://graph.facebook.com/v19.0/{media_id}', headers=headers
     )
+    if not url_resp.ok:
+        err = url_resp.json().get('error', {})
+        _log('META MEDIA ERROR', f"HTTP {url_resp.status_code} | code={err.get('code')} | type={err.get('type')} | msg={err.get('message')}")
     url_resp.raise_for_status()
     download_url = url_resp.json()['url']
 
@@ -81,6 +88,9 @@ def send_message(phone: str, text: str) -> None:
         'text': {'body': text},
     }
     r = requests.post(f'{BASE_URL}/messages', json=payload, headers=headers)
+    if not r.ok:
+        err = r.json().get('error', {})
+        _log('META SEND ERROR', f"HTTP {r.status_code} | code={err.get('code')} | type={err.get('type')} | msg={err.get('message')} | phone={phone}")
     r.raise_for_status()
 
 

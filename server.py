@@ -100,21 +100,26 @@ processed_ids = set()
 
 app = Flask(__name__)
 
-with app.app_context():
-    init_db()
-
-print("CASAD SERVER STARTED OK", flush=True)
+try:
+    with app.app_context():
+        init_db()
+    print("CASAD SERVER STARTED OK — DB initialised", flush=True)
+except Exception as _e:
+    print(f"CASAD STARTUP ERROR — DB init failed: {_e}", flush=True)
+    raise
 
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     if request.method == 'GET':
-        if request.args.get('hub.verify_token') == VERIFY_TOKEN:
+        token_ok = request.args.get('hub.verify_token') == VERIFY_TOKEN
+        print(f"[WEBHOOK VERIFY] token_ok={token_ok}", flush=True)
+        if token_ok:
             return request.args.get('hub.challenge'), 200
         return 'Forbidden', 403
 
     msg = parse_payload(request.json)
-    print(f"MSG RECEIVED: {msg}")
+    print(f"[MSG IN] type={msg.get('type')} phone={msg.get('phone')} content={str(msg.get('content',''))[:60]}", flush=True)
 
     msg_id = msg.get('msg_id')
     if msg_id and msg_id in processed_ids:
@@ -161,6 +166,7 @@ def webhook():
         # else: fall through with state='format_select' so the handler routes them
 
     state, photo_count = get_session_state(phone)
+    print(f"[STATE] phone={phone} state={state} photos={photo_count}", flush=True)
 
     # ── Format selection state ─────────────────────────────────────────────────
     if state == 'format_select':
@@ -282,6 +288,7 @@ def webhook():
 def _generate_report(phone: str) -> None:
     try:
         fmt     = get_report_format(phone)
+        print(f"[REPORT START] phone={phone} fmt={fmt}", flush=True)
         session = get_session(phone)
         if fmt == 'excel_rb':
             from report_gen_excel import build_excel
@@ -297,12 +304,14 @@ def _generate_report(phone: str) -> None:
             report_json = parse_inspection(session)
             out_path    = build_docx(report_json)
             caption     = f"CASAD Bridge Inspection Report — {report_json.get('river_name', '')} / {report_json.get('road_name', '')}"
+        print(f"[REPORT DONE] phone={phone} fmt={fmt} path={out_path}", flush=True)
         send_document(phone, out_path, caption=caption)
         send_message(phone, "✅ Your inspection report is ready. Please check!")
         mark_done(phone, report_path=out_path)
     except Exception as e:
-        print(f"REPORT ERROR: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+        print(f"[REPORT ERROR] phone={phone} fmt={fmt} error={e}", flush=True)
+        traceback.print_exc()
         send_message(phone, f"Sorry, report generation failed: {e}")
 
 

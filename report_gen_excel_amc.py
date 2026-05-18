@@ -154,7 +154,16 @@ def _fill_title_page(wb, d):
 
 def _fill_appendix_a(wb, d):
     """Fill Appendix-A — mirrors R&B layout with AMC-specific row offsets."""
+    from openpyxl.cell.cell import MergedCell
     ws = wb['Appendix-A']
+
+    # Step 1: Clear ALL variable data cells in column C (rows 4–104) to prevent
+    # stale template data from bleeding through for cells not explicitly written.
+    for r in range(4, 105):
+        cell = ws.cell(row=r, column=3)
+        if not isinstance(cell, MergedCell):
+            cell.value = None
+
     lat = d.get('latitude', '-')
     lon = d.get('longitude', '-')
     mapping = {

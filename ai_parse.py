@@ -233,6 +233,50 @@ SCHEMA = {
 }
 
 
+EXCEL_SCHEMA = {
+    **SCHEMA,  # include all standard fields
+    # Excel-specific additions
+    "client_name":       "",
+    "project_name":      "",
+    "project_number":    "",
+    "bridge_title":      "",  # full official bridge name
+    "sub_piers_side1":   [],  # pier ID strings for substructure side 1
+    "sub_side1_label":   "",  # label e.g. "Railway + Anupam Cinema Side"
+    "sub_piers_side2":   [],
+    "sub_side2_label":   "",
+    "super_spans_side1": [],  # span ID strings for superstructure side 1
+    "super_side1_label": "",
+    "super_spans_side2": [],
+    "super_side2_label": "",
+    "defect_sub1":   {},  # {pier_id: {defect_key: observation}}
+    "defect_sub2":   {},
+    "defect_super1": {},
+    "defect_super2": {},
+}
+
+EXCEL_EXTRA_PROMPT = '''
+EXCEL FORMAT ADDITIONAL INSTRUCTIONS:
+
+Extract pier and span IDs from the bridge details and inspection messages:
+- sub_piers_side1/sub_piers_side2: list of pier/abutment IDs for each side (e.g. ["A1","RP1","P2","P3"])
+- super_spans_side1/super_spans_side2: list of span IDs (e.g. ["A1-RP1","RP1-P2","P2-P3"])
+- sub_side1_label/sub_side2_label: descriptive label for each side (e.g. "Railway + Anupam Cinema Side")
+
+For defect matrices (defect_sub1, defect_sub2, defect_super1, defect_super2):
+- Build a dict: {pier_or_span_id: {defect_key: observation_string}}
+- Defect keys: cracks, leaching, honeycombing, exposed_rebar, leakage, spalling, rust_marks, shuttering, delamination, vegetation, any_other
+- For any pier/span not mentioned for a specific defect, use "Absent"
+- If a defect IS observed at a pier/span, write the specific description
+- If only one side is mentioned, leave side2 empty list
+
+Extract from bridge details:
+- client_name: the government/municipal body that commissioned the inspection
+- project_name: the broader project name (e.g. "Bridge Inspection Work Ahmedabad City")
+- project_number: project reference number if mentioned
+- bridge_title: official full bridge name
+'''
+
+
 def _find_photo_description(messages: list, photo_idx: int,
                              claimed: set = None) -> str:
     """Return the best description for a photo, marking the source as claimed.
@@ -456,3 +500,141 @@ def parse_inspection(session: dict) -> dict:
     print(f"TITLES: {result['photo_titles']}")
     print(f"CATEGORIES: {result['photo_categories']}")
     return result
+
+
+def parse_inspection_excel(session: dict) -> dict:
+    """Send session messages to Claude and return structured JSON for Excel output."""
+    messages = session.get('messages', [])
+
+    # Collect photo paths and their best available description
+    photo_paths              = []
+    photo_captions           = []   # raw description (used for circle detection)
+    photo_descriptions       = []   # same, passed to Claude for title generation
+    photo_categories_from_db = []   # set by menu state at collection time
+
+    claimed_text_indices = set()   # track which text msgs have been used as photo captions
+
+    for j, m in enumerate(messages):
+        if m.get('media_path'):
+            desc = _find_photo_description(messages, j, claimed_text_indices)
+            photo_paths.append(m['media_path'])
+            photo_captions.append(desc)
+            photo_descriptions.append(desc)
+            # Category is set by the menu state at collection time — no AI classification needed
+            photo_categories_from_db.append(m.get('category', 'damaged'))
+
+    grouped_notes = _group_messages_by_category(messages)
+
+    # Assign figure numbers only to damage photos (these are the numbers used in Appendix B)
+    fig_counter = 0
+    photo_info  = []
+    for i, (d, c) in enumerate(zip(photo_descriptions, photo_categories_from_db)):
+        entry = {"description": d, "category": c}
+        if c in ('damage', 'damaged'):
+            fig_counter += 1
+            entry["figure_no"] = fig_counter
+            entry["reference"]  = f"(Photo No.-{fig_counter})"
+        else:
+            entry["figure_no"] = None
+            entry["reference"]  = None   # general photos are not referenced in observations
+        photo_info.append(entry)
+
+    print(f"PARSE EXCEL: {len(messages)} messages, photos={len(photo_paths)}")
+    print(f"GROUPED NOTES:\n{grouped_notes}")
+    print(f"PHOTO INFO: {photo_info}")
+
+    user_content = (
+        f"Schema:\n{json.dumps(EXCEL_SCHEMA, indent=2)}\n\n"
+        f"Field notes (grouped by section):\n{grouped_notes}\n\n"
+        f"Photo information (use 'reference' value when citing each photo in observation fields):\n"
+        f"{json.dumps(photo_info, indent=2)}\n\n"
+        f"Photo file paths (in sequence order):\n{json.dumps(photo_paths)}\n\n"
+        "For photo_titles: generate a short title (max 10 words) per photo from its description. "
+        "photo_titles must have exactly the same count as photo file paths.\n\n"
+        "For photo_categories: use the category values from Photo information — do NOT reclassify. "
+        "photo_categories must have exactly the same count as photo file paths.\n\n"
+        "For observation fields (ss_*, sub_*, found_*, bearing_*, approach_*, expansion_joint, "
+        "wearing_coat, vegetation): when a defect is observed, append the 'reference' value from "
+        "matching damage photos, e.g. \"Observed (Photo No.-1), (Photo No.-3)\". "
+        "Only reference damage photos (those with a non-null reference). "
+        "Do NOT add references to Absent / Not Visible / NIL / NA fields.\n\n"
+        "For defect matrices: extract per-pier/span observations. Use 'Absent' for any element not mentioned for a given defect type.\n\n"
+    )
+
+    response = client.messages.create(
+        model='claude-sonnet-4-5',
+        max_tokens=4096,
+        system=SYSTEM_PROMPT + EXCEL_EXTRA_PROMPT,
+        messages=[{'role': 'user', 'content': user_content}]
+    )
+    raw = response.content[0].text.strip()
+    print(f"CLAUDE EXCEL RAW RESPONSE (first 200 chars): {raw[:200]}")
+
+    # Strip markdown code fences if Claude wrapped the JSON
+    if raw.startswith('```'):
+        raw = raw.split('```')[1]
+        if raw.startswith('json'):
+            raw = raw[4:]
+        raw = raw.strip()
+
+    if not raw:
+        print("ERROR: Claude returned empty response")
+        raise ValueError("Claude returned empty response — check field notes content")
+
+    result = json.loads(raw)
+    result['photos']         = photo_paths
+    result['photo_captions'] = photo_captions
+    result['_messages']      = messages   # passed to build_docx for BLOB restoration
+
+    # Ensure photo_titles has the right count; fall back to first 10 words of description
+    titles = result.get('photo_titles') or []
+    if len(titles) != len(photo_paths):
+        titles = [' '.join(d.split()[:10]) if d else '' for d in photo_descriptions]
+    result['photo_titles'] = titles
+
+    # Categories come from DB (menu state) — use as authoritative source
+    cats = photo_categories_from_db if len(photo_categories_from_db) == len(photo_paths) \
+           else (result.get('photo_categories') or ['damaged'] * len(photo_paths))
+
+    result['photo_categories'] = cats
+
+    # Locate defects in damage photos — run in parallel, return coords (no image modification)
+    import concurrent.futures
+
+    def _locate_one(args):
+        path, desc = args
+        try:
+            with open(path, 'rb') as f:
+                img_bytes = f.read()
+            return (path, get_defect_coords(img_bytes, desc))
+        except Exception as e:
+            print(f"DEFECT LOCATE FAILED for {path}: {e}")
+            return (path, None)
+
+    locate_jobs = [
+        (path, desc)
+        for path, desc, cat in zip(photo_paths, photo_descriptions, cats)
+        if cat in ('damage', 'damaged') and desc and os.path.exists(path)
+    ]
+    photo_coords = {path: None for path in photo_paths}
+    if locate_jobs:
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            for path, coords in pool.map(_locate_one, locate_jobs):
+                photo_coords[path] = coords
+
+    result['photo_coords'] = [photo_coords.get(p) for p in photo_paths]
+
+    print(f"EXCEL PHOTOS injected: {photo_paths}")
+    print(f"TITLES: {result['photo_titles']}")
+    print(f"CATEGORIES: {result['photo_categories']}")
+    return result
+
+
+def parse_inspection_amc(session: dict) -> dict:
+    """Parse session for AMC Excel format.
+
+    AMC and R&B share the same data-collection schema (pier IDs, span IDs,
+    defect matrices) — the difference is purely in template layout.
+    Delegates to parse_inspection_excel which already handles all of this.
+    """
+    return parse_inspection_excel(session)

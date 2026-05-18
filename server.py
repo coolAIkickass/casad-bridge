@@ -5,11 +5,14 @@ from flask import Flask, request
 from dotenv import load_dotenv
 from db import (init_db, store_message, get_session, get_session_status,
                 get_session_state, set_session_state, increment_photo_count,
-                reset_session, mark_done, has_bridge_details)
+                reset_session, mark_done, has_bridge_details,
+                set_report_format, get_report_format)
 from whatsapp import parse_payload, download_media, send_message, send_document
 from transcribe import transcribe_audio
-from ai_parse import parse_inspection
+from ai_parse import parse_inspection, parse_inspection_excel, parse_inspection_amc
 from report_gen import build_docx
+from report_gen_excel import build_excel
+from report_gen_excel_amc import build_excel_amc
 
 load_dotenv()
 
@@ -27,10 +30,16 @@ MENU_MSG = (
     "_Send the number to select._"
 )
 
-WELCOME_MSG = (
+FORMAT_SELECT_MSG = (
     "Hello CASAD team! I will assist you in creating your *bridge inspection report*.\n\n"
-    + MENU_MSG
+    "Please select your *report format*:\n\n"
+    "1️⃣  Standard Word (CASAD template)\n"
+    "2️⃣  Excel – R & B format\n"
+    "3️⃣  Excel – AMC format\n\n"
+    "_Send 1, 2 or 3 to continue._"
 )
+
+WELCOME_MSG = FORMAT_SELECT_MSG
 
 SECTION_NAMES = {
     '1': 'Bridge Details',
@@ -142,15 +151,33 @@ def webhook():
         reset_session(phone)
         msg['category'] = 'system'
         store_message(msg)           # creates the session row in DB
-        set_session_state(phone, 'menu')
-        send_message(phone, WELCOME_MSG)
-        # If they already sent a valid menu number, fall through and handle it
+        set_session_state(phone, 'format_select')
+        send_message(phone, FORMAT_SELECT_MSG)
+        # If they already sent a valid format selection, fall through and handle it
         # immediately rather than making them send it again.
-        if content_lower not in VALID_OPTIONS or content_lower in ('6', '7'):
+        if content_lower not in ('1', '2', '3'):
             return 'OK', 200
-        # else: fall through with state='menu' so the menu handler routes them
+        # else: fall through with state='format_select' so the handler routes them
 
     state, photo_count = get_session_state(phone)
+
+    # ── Format selection state ─────────────────────────────────────────────────
+    if state == 'format_select':
+        if content_lower == '1':
+            set_report_format(phone, 'word')
+            set_session_state(phone, 'menu')
+            send_message(phone, "✅ Standard Word format selected.\n\n" + MENU_MSG)
+        elif content_lower == '2':
+            set_report_format(phone, 'excel_rb')
+            set_session_state(phone, 'menu')
+            send_message(phone, "✅ Excel – R & B format selected.\n\n" + MENU_MSG)
+        elif content_lower == '3':
+            set_report_format(phone, 'excel_amc')
+            set_session_state(phone, 'menu')
+            send_message(phone, "✅ Excel – AMC format selected.\n\n" + MENU_MSG)
+        else:
+            send_message(phone, FORMAT_SELECT_MSG)
+        return 'OK', 200
 
     # ── Confirm-generate state: user was warned about missing bridge details ────
     if state == 'confirm_generate':
@@ -253,16 +280,23 @@ def webhook():
 
 def _generate_report(phone: str) -> None:
     try:
-        session     = get_session(phone)
-        report_json = parse_inspection(session)
-        docx_path   = build_docx(report_json)
-        send_document(
-            phone,
-            docx_path,
-            caption=f"CASAD Bridge Inspection Report — {report_json.get('river_name', '')} / {report_json.get('road_name', '')}",
-        )
+        fmt     = get_report_format(phone)
+        session = get_session(phone)
+        if fmt == 'excel_rb':
+            report_json = parse_inspection_excel(session)
+            out_path    = build_excel(report_json)
+            caption     = f"CASAD Bridge Inspection Report (R&B) — {report_json.get('bridge_title', report_json.get('river_name', ''))}"
+        elif fmt == 'excel_amc':
+            report_json = parse_inspection_amc(session)
+            out_path    = build_excel_amc(report_json)
+            caption     = f"CASAD Bridge Inspection Report (AMC) — {report_json.get('bridge_title', report_json.get('river_name', ''))}"
+        else:
+            report_json = parse_inspection(session)
+            out_path    = build_docx(report_json)
+            caption     = f"CASAD Bridge Inspection Report — {report_json.get('river_name', '')} / {report_json.get('road_name', '')}"
+        send_document(phone, out_path, caption=caption)
         send_message(phone, "✅ Your inspection report is ready. Please check!")
-        mark_done(phone, report_path=docx_path)
+        mark_done(phone, report_path=out_path)
     except Exception as e:
         print(f"REPORT ERROR: {e}")
         import traceback; traceback.print_exc()

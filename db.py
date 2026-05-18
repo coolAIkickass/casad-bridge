@@ -50,6 +50,7 @@ def init_db():
             'ALTER TABLE messages ADD COLUMN category TEXT',
             'ALTER TABLE messages ADD COLUMN photo_num INTEGER',
             'ALTER TABLE messages ADD COLUMN session_id INTEGER',
+            'ALTER TABLE sessions ADD COLUMN report_format TEXT',
         ):
             try:
                 con.execute(col_sql)
@@ -179,6 +180,29 @@ def has_bridge_details(phone: str) -> bool:
     ).fetchone()
     con.close()
     return row is not None
+
+
+def set_report_format(phone: str, fmt: str):
+    """Store report format ('word' or 'excel') for the active session."""
+    con = sqlite3.connect(DB)
+    sid = _active_session_id(con, phone)
+    if sid:
+        con.execute('UPDATE sessions SET report_format=? WHERE id=?', (fmt, sid))
+    con.commit()
+    con.close()
+
+
+def get_report_format(phone: str) -> str:
+    """Return 'word' (default) or 'excel' for the active session."""
+    con = sqlite3.connect(DB)
+    row = con.execute(
+        'SELECT report_format FROM sessions WHERE phone=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1',
+        (phone,)
+    ).fetchone()
+    con.close()
+    if row and row[0]:
+        return row[0]
+    return 'word'
 
 
 def mark_done(phone: str, report_path: str = None):

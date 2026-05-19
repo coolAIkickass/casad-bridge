@@ -1,7 +1,11 @@
 # server.py — CASAD Bridge Inspection Automation Pipeline
 import os, threading, io
+import concurrent.futures
 from PIL import Image
 from flask import Flask, request
+
+_report_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4,
+    thread_name_prefix='report-gen')
 from dotenv import load_dotenv
 from db import (init_db, store_message, get_session, get_session_status,
                 get_session_state, set_session_state, increment_photo_count,
@@ -221,7 +225,7 @@ def webhook():
         if content_lower == '6':
             set_session_state(phone, 'menu')
             send_message(phone, "Generating your report now... I'll share it in a few minutes. 📄\n\n_Note: It takes ~1 min / 5 photo to process._")
-            threading.Thread(target=_generate_report, args=(phone,), daemon=True).start()
+            _report_executor.submit(_generate_report, phone)
             return 'OK', 200
         elif content_lower == '1':
             set_session_state(phone, '1')
@@ -251,7 +255,7 @@ def webhook():
                 set_session_state(phone, 'confirm_generate')
                 return 'OK', 200
             send_message(phone, "Generating your report now... I'll share it in a few minutes. 📄\n\n_Note: It takes ~1 min / 5 photo to process._")
-            threading.Thread(target=_generate_report, args=(phone,), daemon=True).start()
+            _report_executor.submit(_generate_report, phone)
             return 'OK', 200
 
         # Valid section selected

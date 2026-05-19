@@ -7,6 +7,8 @@ DB = os.getenv('DB_PATH', 'casad.db')
 
 def init_db():
     con = sqlite3.connect(DB)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=NORMAL")
 
     # ── sessions table ────────────────────────────────────────────────────────
     existing_sess_cols = {row[1] for row in con.execute("PRAGMA table_info(sessions)")}
@@ -72,7 +74,7 @@ def _active_session_id(con, phone):
 
 
 def store_message(msg):
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
     # Create session row if none exists yet
     sid = _active_session_id(con, msg['phone'])
     if sid is None:
@@ -93,7 +95,7 @@ def store_message(msg):
 
 
 def get_session(phone):
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
     con.row_factory = sqlite3.Row
     sid = _active_session_id(con, phone)
     if sid is None:
@@ -116,7 +118,7 @@ def get_session(phone):
 
 
 def get_session_status(phone: str):
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
     row = con.execute(
         'SELECT status FROM sessions WHERE phone=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1',
         (phone,)
@@ -126,7 +128,7 @@ def get_session_status(phone: str):
 
 
 def get_session_state(phone: str):
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
     row = con.execute(
         'SELECT state, photo_count FROM sessions WHERE phone=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1',
         (phone,)
@@ -136,7 +138,7 @@ def get_session_state(phone: str):
 
 
 def set_session_state(phone: str, state: str):
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
     sid = _active_session_id(con, phone)
     if sid:
         con.execute('UPDATE sessions SET state=? WHERE id=?', (state, sid))
@@ -145,7 +147,7 @@ def set_session_state(phone: str, state: str):
 
 
 def increment_photo_count(phone: str) -> int:
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
     sid = _active_session_id(con, phone)
     if sid:
         con.execute(
@@ -159,7 +161,7 @@ def increment_photo_count(phone: str) -> int:
 
 def reset_session(phone: str):
     """End the current active session (stamp ended_at) rather than deleting it."""
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
     con.execute(
         "UPDATE sessions SET ended_at=?, status='exited' WHERE phone=? AND ended_at IS NULL",
         (datetime.utcnow().isoformat(), phone)
@@ -170,7 +172,7 @@ def reset_session(phone: str):
 
 def has_bridge_details(phone: str) -> bool:
     """Return True if the active session has at least one bridge_details message."""
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
     sid = _active_session_id(con, phone)
     if sid is None:
         con.close()
@@ -185,7 +187,7 @@ def has_bridge_details(phone: str) -> bool:
 
 def set_report_format(phone: str, fmt: str):
     """Store report format ('word' or 'excel') for the active session."""
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
     sid = _active_session_id(con, phone)
     if sid:
         con.execute('UPDATE sessions SET report_format=? WHERE id=?', (fmt, sid))
@@ -195,7 +197,7 @@ def set_report_format(phone: str, fmt: str):
 
 def get_report_format(phone: str) -> str:
     """Return 'word' (default) or 'excel' for the active session."""
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
     row = con.execute(
         'SELECT report_format FROM sessions WHERE phone=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1',
         (phone,)
@@ -207,7 +209,7 @@ def get_report_format(phone: str) -> str:
 
 
 def mark_done(phone: str, report_path: str = None):
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(DB, timeout=10)
     sid = _active_session_id(con, phone)
     if sid:
         con.execute(

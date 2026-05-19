@@ -17,6 +17,14 @@ from openpyxl.drawing.image import Image as XLImage
 AMC_TEMPLATE_PATH = os.getenv('AMC_TEMPLATE_PATH', 'casad_amc_template.xlsx')
 OUTPUT_DIR = os.getenv('OUTPUT_DIR', 'media')
 
+# Cache raw template bytes at import time — avoids repeated disk reads under load.
+# Each build_excel_amc() call loads from memory via io.BytesIO.
+try:
+    with open(AMC_TEMPLATE_PATH, 'rb') as _f:
+        _AMC_TEMPLATE_BYTES = _f.read()
+except FileNotFoundError:
+    _AMC_TEMPLATE_BYTES = None
+
 DEFECT_ROW = {
     'cracks': 4, 'leaching': 5, 'honeycombing': 6, 'exposed_rebar': 7,
     'leakage': 8, 'spalling': 9, 'rust_marks': 10, 'shuttering': 11,
@@ -181,17 +189,19 @@ def _detect_remarks_col(ws):
     return last + 1
 
 
-def _fill_defect_table(ws, elements: list, matrix: dict, start_col: int, remarks_col: int):
+def _fill_defect_table(ws, elements: list, matrix: dict, start_col: int, remarks_col: int, row_offset: int = 0):
     """Fill one defect table sheet.
 
     ALWAYS clears the data region first to remove stale template data.
     Writes blank instead of 'Absent' for unobserved defects.
+    row_offset: extra rows to add to each defect row (use 1 for AMC SUPER sheets
+    which have an extra 'Type of Super Structure' row at row 4).
     """
     # Always clear — even when elements is empty
     clear_end = (start_col + len(elements)) if elements else remarks_col
     for col_i in range(start_col, clear_end):
         _safe_write(ws, 3, col_i, None)
-        for row in range(4, 15):
+        for row in range(4 + row_offset, 15 + row_offset):
             _safe_write(ws, row, col_i, None)
 
     if not elements:
@@ -204,7 +214,7 @@ def _fill_defect_table(ws, elements: list, matrix: dict, start_col: int, remarks
         for i, elem_id in enumerate(elements):
             obs = (matrix.get(elem_id, {}) or {}).get(defect_key, '')
             if obs and str(obs).strip().lower() != 'absent':
-                _safe_write(ws, row_num, start_col + i, obs)
+                _safe_write(ws, row_num + row_offset, start_col + i, obs)
 
 
 def _fill_defect_tables(wb, d):
@@ -216,48 +226,44 @@ def _fill_defect_tables(wb, d):
     if ws1:
         piers1  = d.get('sub_piers_side1') or []
         matrix1 = d.get('defect_sub1') or {}
-        if piers1:
-            remarks_col = _detect_remarks_col(ws1)
-            _fill_defect_table(ws1, piers1, matrix1, START_COL, remarks_col)
+        remarks_col = _detect_remarks_col(ws1)
+        _fill_defect_table(ws1, piers1, matrix1, START_COL, remarks_col)
 
     # Sub-structure Side 2
     ws2 = _find_sheet(wb, 'sub - 2')
     if ws2:
         piers2  = d.get('sub_piers_side2') or []
         matrix2 = d.get('defect_sub2') or {}
-        if piers2:
-            remarks_col = _detect_remarks_col(ws2)
-            _fill_defect_table(ws2, piers2, matrix2, START_COL, remarks_col)
+        remarks_col = _detect_remarks_col(ws2)
+        _fill_defect_table(ws2, piers2, matrix2, START_COL, remarks_col)
 
     # Super-structure Side 1
     ws3 = _find_sheet(wb, 'super - 1')
     if ws3:
         spans1  = d.get('super_spans_side1') or []
         matrix3 = d.get('defect_super1') or {}
-        if spans1:
-            remarks_col = _detect_remarks_col(ws3)
-            _fill_defect_table(ws3, spans1, matrix3, START_COL, remarks_col)
+        remarks_col = _detect_remarks_col(ws3)
+        _fill_defect_table(ws3, spans1, matrix3, START_COL, remarks_col, row_offset=1)
 
     # Super-structure Side 2
     ws4 = _find_sheet(wb, 'super - 2')
     if ws4:
         spans2  = d.get('super_spans_side2') or []
         matrix4 = d.get('defect_super2') or {}
-        if spans2:
-            remarks_col = _detect_remarks_col(ws4)
-            _fill_defect_table(ws4, spans2, matrix4, START_COL, remarks_col)
+        remarks_col = _detect_remarks_col(ws4)
+        _fill_defect_table(ws4, spans2, matrix4, START_COL, remarks_col, row_offset=1)
 
 
 def _fill_title_page(wb, d):
     ws = wb['TITLE PAGE']
     _cell(ws, 'A2', f"CLIENT: {_safe(d, 'client_name', 'AHMEDABAD MUNICIPAL CORPORATION')}")
-    _cell(ws, 'C3', _safe(d, 'project_name', 'Bridge Inspection Work Ahmedabad City'))
-    _cell(ws, 'C4', f'"{_safe(d, "bridge_title_full", _safe(d, "bridge_title", d.get("river_name", "")))}"')
-    _cell(ws, 'A5', f"Project No.: {_safe(d, 'project_number', '-')}")
-    _cell(ws, 'A8', 'R0')
-    _cell(ws, 'B8', date.today())
-    _cell(ws, 'D8', 'Preliminary Inspection Report')
-    _cell(ws, 'E8', 'CASAD')
+    _cell(ws, 'C4', _safe(d, 'project_name', 'Bridge Inspection Work Ahmedabad City'))
+    _cell(ws, 'C5', f'"{_safe(d, "bridge_title_full", _safe(d, "bridge_title", d.get("river_name", "")))}"')
+    _cell(ws, 'A6', f"Project No.: {_safe(d, 'project_number', '-')}")
+    _cell(ws, 'A10', 'R0')
+    _cell(ws, 'B10', date.today())
+    _cell(ws, 'D10', 'Preliminary Inspection Report')
+    _cell(ws, 'E10', 'CASAD')
 
 
 def _fill_appendix_a(wb, d):
@@ -375,7 +381,7 @@ def _fill_appendix_b(wb, d):
         'C9':  f"{lat}° , {lon}°",
         'C10': div if div == cir else f"{div} / {cir}",
         'C11': d.get('type_of_bridge', d.get('bridge_type')) or None,
-        'C12': d.get('date_of_survey', '-'),
+        'C12': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else None,
         # Approaches (blank if not provided)
         'C14': _v('approach_settlement'),
         'C15': _v('approach_side_slopes'),
@@ -393,6 +399,7 @@ def _fill_appendix_b(wb, d):
         'C52': _v('sub_cracks'),
         # Superstructure cross-refs
         'C59': 'Refer Table  3 and 4',
+        'C60': d.get('superstructure_type') or None,
         'C61': 'Refer Table  3 and 4',
         'C62': 'Refer Table  3 and 4',
         'C63': 'Refer Table  3 and 4',
@@ -473,7 +480,7 @@ def _fill_appendix_c(wb, d):
                     img = img.convert('RGB')
                 # No burned-in circle — editable oval injected after save
                 w, h    = img.size
-                scale   = min(600 / w, 420 / h)
+                scale   = min(1200 / w, 900 / h)
                 new_w   = int(w * scale)
                 new_h   = int(h * scale)
                 buf     = io.BytesIO()
@@ -530,20 +537,25 @@ def _fill_appendix_c(wb, d):
 
 def build_excel_amc(report_json: dict) -> str:
     """Fill CASAD AMC Excel template with report_json and return saved file path."""
-    wb = openpyxl.load_workbook(AMC_TEMPLATE_PATH)
+    if _AMC_TEMPLATE_BYTES:
+        wb = openpyxl.load_workbook(io.BytesIO(_AMC_TEMPLATE_BYTES))
+    else:
+        wb = openpyxl.load_workbook(AMC_TEMPLATE_PATH)
+    try:
+        _fill_title_page(wb, report_json)
+        _fill_appendix_a(wb, report_json)
+        _fill_appendix_b(wb, report_json)
+        _fill_defect_tables(wb, report_json)
+        ovals = _fill_appendix_c(wb, report_json)
 
-    _fill_title_page(wb, report_json)
-    _fill_appendix_a(wb, report_json)
-    _fill_appendix_b(wb, report_json)
-    _fill_defect_tables(wb, report_json)
-    ovals = _fill_appendix_c(wb, report_json)
-
-    bridge   = re.sub(r'[^\w\-]', '_', report_json.get('bridge_title', report_json.get('river_name', 'bridge')))
-    date_str = report_json.get('date_of_survey', 'report').replace('/', '-')
-    out_path = os.path.join(OUTPUT_DIR, f'CASAD_AMC_{bridge}_{date_str}.xlsx')
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    wb.save(out_path)
-    print(f"AMC EXCEL REPORT SAVED: {out_path}")
+        bridge   = re.sub(r'[^\w\-]', '_', report_json.get('bridge_title', report_json.get('river_name', 'bridge')))
+        date_str = report_json.get('date_of_survey', 'report').replace('/', '-')
+        out_path = os.path.join(OUTPUT_DIR, f'CASAD_AMC_{bridge}_{date_str}.xlsx')
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        wb.save(out_path)
+        print(f"AMC EXCEL REPORT SAVED: {out_path}")
+    finally:
+        wb.close()
 
     # Inject editable oval shapes after save
     if ovals:

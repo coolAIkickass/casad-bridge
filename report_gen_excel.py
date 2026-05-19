@@ -7,6 +7,14 @@ from openpyxl.drawing.image import Image as XLImage
 EXCEL_TEMPLATE_PATH = os.getenv('EXCEL_TEMPLATE_PATH', 'casad_excel_template.xlsx')
 OUTPUT_DIR = os.getenv('OUTPUT_DIR', 'media')
 
+# Cache raw template bytes at import time — avoids repeated disk reads under load.
+# Each build_excel() call loads from memory via io.BytesIO.
+try:
+    with open(EXCEL_TEMPLATE_PATH, 'rb') as _f:
+        _TEMPLATE_BYTES = _f.read()
+except FileNotFoundError:
+    _TEMPLATE_BYTES = None
+
 DEFECT_ROW = {
     'cracks': 4, 'leaching': 5, 'honeycombing': 6, 'exposed_rebar': 7,
     'leakage': 8, 'spalling': 9, 'rust_marks': 10, 'shuttering': 11,
@@ -328,6 +336,7 @@ def _fill_appendix_b(wb, d):
         'C52': _v('sub_cracks'),
         # Section 10 — Superstructure cross-refs
         'C59': 'Refer Table  3 and 4',
+        'C60': d.get('superstructure_type') or None,
         'C61': 'Refer Table  3 and 4',
         'C62': 'Refer Table  3 and 4',
         'C63': 'Refer Table  3 and 4',
@@ -382,17 +391,15 @@ def _fill_defect_tables(wb, d):
     # 10 piers → cols E(5)–N(14); Remarks at col O(15)
     piers1  = d.get('sub_piers_side1') or []
     matrix1 = d.get('defect_sub1') or {}
-    if piers1:
-        _fill_defect_table(wb['Table 1'], piers1, matrix1,
-                           start_col=5, remarks_col=15)
+    _fill_defect_table(wb['Table 1'], piers1, matrix1,
+                       start_col=5, remarks_col=15)
 
     # ── Table 2: Sub-structure Side 2 ──────────────────────────────────────
     # Remarks at col O(15)
     piers2  = d.get('sub_piers_side2') or []
     matrix2 = d.get('defect_sub2') or {}
-    if piers2:
-        _fill_defect_table(wb['Table 2'], piers2, matrix2,
-                           start_col=5, remarks_col=15)
+    _fill_defect_table(wb['Table 2'], piers2, matrix2,
+                       start_col=5, remarks_col=15)
 
     # ── Table 3: Super-structure Side 1 ────────────────────────────────────
     # Special layout: Railway span occupies cols E–G (merged), road spans
@@ -448,9 +455,8 @@ def _fill_defect_tables(wb, d):
     # Remarks at col O(15)
     spans2  = d.get('super_spans_side2') or []
     matrix4 = d.get('defect_super2') or {}
-    if spans2:
-        _fill_defect_table(wb['Table 4'], spans2, matrix4,
-                           start_col=5, remarks_col=15)
+    _fill_defect_table(wb['Table 4'], spans2, matrix4,
+                       start_col=5, remarks_col=15)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -561,7 +567,7 @@ def _fill_appendix_c(wb, d):
                         img = img.convert('RGB')
                     # Do NOT burn circle into image — editable shapes injected later
                     w, h  = img.size
-                    scale = min(600 / w, 420 / h)
+                    scale = min(1200 / w, 900 / h)
                     new_w = int(w * scale)
                     new_h = int(h * scale)
                     buf   = io.BytesIO()
@@ -807,23 +813,28 @@ def _fill_appendix_c_captions(wb, d):
 
 def build_excel(report_json: dict) -> str:
     """Fill CASAD Excel template with report_json and return saved file path."""
-    wb = openpyxl.load_workbook(EXCEL_TEMPLATE_PATH)
+    if _TEMPLATE_BYTES:
+        wb = openpyxl.load_workbook(io.BytesIO(_TEMPLATE_BYTES))
+    else:
+        wb = openpyxl.load_workbook(EXCEL_TEMPLATE_PATH)
+    try:
+        _fill_title_page(wb, report_json)
+        _fill_appendix_a(wb, report_json)
+        _fill_appendix_b(wb, report_json)
+        _fill_defect_tables(wb, report_json)
+        _fill_appendix_c_captions(wb, report_json)
+        ovals = _fill_appendix_c(wb, report_json)   # returns list of oval descriptors
 
-    _fill_title_page(wb, report_json)
-    _fill_appendix_a(wb, report_json)
-    _fill_appendix_b(wb, report_json)
-    _fill_defect_tables(wb, report_json)
-    _fill_appendix_c_captions(wb, report_json)
-    ovals = _fill_appendix_c(wb, report_json)   # returns list of oval descriptors
-
-    name     = re.sub(r'[^\w\-]', '_',
-                      report_json.get('bridge_title') or report_json.get('river_name', 'bridge'))
-    road     = re.sub(r'[^\w\-]', '_', report_json.get('road_name', 'road'))
-    date_str = report_json.get('date_of_survey', 'report').replace('/', '-')
-    out_path = os.path.join(OUTPUT_DIR, f'CASAD_{name}_{road}_{date_str}.xlsx')
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    wb.save(out_path)
-    print(f"EXCEL REPORT SAVED: {out_path}")
+        name     = re.sub(r'[^\w\-]', '_',
+                          report_json.get('bridge_title') or report_json.get('river_name', 'bridge'))
+        road     = re.sub(r'[^\w\-]', '_', report_json.get('road_name', 'road'))
+        date_str = report_json.get('date_of_survey', 'report').replace('/', '-')
+        out_path = os.path.join(OUTPUT_DIR, f'CASAD_{name}_{road}_{date_str}.xlsx')
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        wb.save(out_path)
+        print(f"EXCEL REPORT SAVED: {out_path}")
+    finally:
+        wb.close()
 
     # Inject editable oval shapes (post-processing — must happen after wb.save)
     if ovals:

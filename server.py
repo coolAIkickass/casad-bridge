@@ -394,54 +394,41 @@ def dashboard():
     if request.args.get('token') != DASHBOARD_TOKEN:
         return 'Unauthorized — add ?token=YOUR_TOKEN', 403
 
-    import sqlite3 as _sq
     from datetime import datetime as _dt, timedelta as _td
+    from db import _db as _pg_db
 
     show_all = request.args.get('all') == '1'
     token    = request.args.get('token', '')
 
-    db  = os.getenv('DB_PATH', 'casad.db')
-    con = _sq.connect(db)
-    con.row_factory = _sq.Row
-
-    if show_all:
-        sessions = con.execute(
-            'SELECT * FROM sessions ORDER BY started_at DESC'
-        ).fetchall()
-    else:
-        cutoff = (_dt.utcnow() - _td(hours=3)).isoformat()
-        sessions = con.execute(
-            'SELECT * FROM sessions WHERE started_at >= ? ORDER BY started_at DESC',
-            (cutoff,)
-        ).fetchall()
-
-    # Total count for the toggle link
-    total_all = con.execute('SELECT COUNT(*) FROM sessions').fetchone()[0]
-
     session_data = []
-    for s in sessions:
-        sid  = s['id']
-        if sid:
-            msgs = con.execute(
-                'SELECT type, content, category, photo_num, created_at, media_path '
-                'FROM messages WHERE session_id=? ORDER BY id',
-                (sid,)
-            ).fetchall()
-            # Also grab old messages with no session_id linked to this phone
-            if not msgs:
-                msgs = con.execute(
-                    'SELECT type, content, category, photo_num, created_at, media_path '
-                    'FROM messages WHERE phone=? AND (session_id IS NULL OR session_id=?) ORDER BY id',
-                    (s['phone'], sid)
-                ).fetchall()
+    total_all    = 0
+
+    with _pg_db() as cur:
+        # Total session count (for the toggle link)
+        cur.execute('SELECT COUNT(*) FROM sessions')
+        total_all = cur.fetchone()[0]
+
+        if show_all:
+            cur.execute('SELECT * FROM sessions ORDER BY started_at DESC')
         else:
-            msgs = con.execute(
+            cutoff = (_dt.utcnow() - _td(hours=3)).isoformat()
+            cur.execute(
+                'SELECT * FROM sessions WHERE started_at >= %s ORDER BY started_at DESC',
+                (cutoff,)
+            )
+        cols     = [d[0] for d in cur.description]
+        sessions = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+        for s in sessions:
+            sid = s.get('id')
+            cur.execute(
                 'SELECT type, content, category, photo_num, created_at, media_path '
-                'FROM messages WHERE phone=? ORDER BY id',
-                (s['phone'],)
-            ).fetchall()
-        session_data.append((dict(s), [dict(m) for m in msgs]))
-    con.close()
+                'FROM messages WHERE session_id=%s ORDER BY id',
+                (sid,)
+            )
+            mcols = [d[0] for d in cur.description]
+            msgs  = [dict(zip(mcols, r)) for r in cur.fetchall()]
+            session_data.append((s, msgs))
 
     STATUS_COLOR = {
         'active': '#2e7d32',

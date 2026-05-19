@@ -1,220 +1,295 @@
-# db.py — SQLite session storage
-import sqlite3, os
+# db.py — PostgreSQL session storage
+#
+# Replaces the old SQLite backend.  Render's ephemeral filesystem wipes
+# casad.db on every dyno sleep/restart (~15 min inactivity on free tier),
+# losing in-progress inspection sessions.  PostgreSQL persists across restarts.
+#
+# Connection: set DATABASE_URL env var (Render auto-sets this when you add a
+#             Postgres add-on to the service).
+#
+# Pool: ThreadedConnectionPool(2, 10) — safe for 4 concurrent report-gen
+#       threads + webhook handlers without exhausting the free-tier 25-conn limit.
+#
+# Public API is unchanged — server.py needs no edits.
+
+import os
+import psycopg2
+import psycopg2.pool
+from contextlib import contextmanager
 from datetime import datetime
 
-DB = os.getenv('DB_PATH', 'casad.db')
+DATABASE_URL = os.getenv('DATABASE_URL')
 
+_pool: psycopg2.pool.ThreadedConnectionPool = None   # initialised by init_db()
+
+
+# ─────────────────────────────────────────────────────────────
+#  Internal helpers
+# ─────────────────────────────────────────────────────────────
+
+def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    if _pool is None:
+        raise RuntimeError("Database pool not initialised — call init_db() first")
+    return _pool
+
+
+@contextmanager
+def _db(dict_rows: bool = False):
+    """Yield a cursor from the pool.
+
+    Commits on clean exit, rolls back on exception, always returns the
+    connection to the pool.  Use dict_rows=True to get column-name dicts.
+    """
+    pool = _get_pool()
+    con  = pool.getconn()
+    try:
+        if dict_rows:
+            import psycopg2.extras
+            cur = con.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        else:
+            cur = con.cursor()
+        try:
+            yield cur
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+        finally:
+            cur.close()
+    finally:
+        pool.putconn(con)
+
+
+def _rows_as_dicts(cur) -> list:
+    """Convert all fetched rows to plain dicts (works with a regular cursor)."""
+    cols = [desc[0] for desc in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def _row_as_dict(cur) -> dict:
+    cols = [desc[0] for desc in cur.description]
+    row  = cur.fetchone()
+    return dict(zip(cols, row)) if row else None
+
+
+def _active_session_id(cur, phone: str):
+    """Return the id of the current active (not ended) session for this phone."""
+    cur.execute(
+        'SELECT id FROM sessions WHERE phone=%s AND ended_at IS NULL '
+        'ORDER BY started_at DESC LIMIT 1',
+        (phone,)
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+# ─────────────────────────────────────────────────────────────
+#  Public API
+# ─────────────────────────────────────────────────────────────
 
 def init_db():
-    con = sqlite3.connect(DB)
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA synchronous=NORMAL")
-
-    # ── sessions table ────────────────────────────────────────────────────────
-    existing_sess_cols = {row[1] for row in con.execute("PRAGMA table_info(sessions)")}
-
-    if not existing_sess_cols:
-        # Fresh DB — create with full schema
-        con.execute('''CREATE TABLE sessions
-            (id INTEGER PRIMARY KEY AUTOINCREMENT,
-             phone TEXT, bridge TEXT, status TEXT,
-             state TEXT, photo_count INTEGER,
-             started_at TEXT, ended_at TEXT, report_path TEXT,
-             report_format TEXT)''')
-    else:
-        # Old schema had phone as PRIMARY KEY — rebuild with id as PK
-        needs_rebuild = 'id' not in existing_sess_cols or 'report_path' not in existing_sess_cols
-        if needs_rebuild:
-            copy_cols = [c for c in ('phone','bridge','status','state','photo_count','started_at','ended_at','report_path')
-                         if c in existing_sess_cols]
-            col_list = ', '.join(copy_cols)
-            con.execute('''CREATE TABLE sessions_new
-                (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 phone TEXT, bridge TEXT, status TEXT,
-                 state TEXT, photo_count INTEGER,
-                 started_at TEXT, ended_at TEXT, report_path TEXT)''')
-            con.execute(f'INSERT INTO sessions_new ({col_list}) SELECT {col_list} FROM sessions')
-            con.execute('DROP TABLE sessions')
-            con.execute('ALTER TABLE sessions_new RENAME TO sessions')
-
-    # ── messages table ────────────────────────────────────────────────────────
-    existing_msg_cols = {row[1] for row in con.execute("PRAGMA table_info(messages)")}
-
-    if not existing_msg_cols:
-        con.execute('''CREATE TABLE messages
-            (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT,
-             session_id INTEGER,
-             type TEXT, content TEXT, media_path TEXT,
-             category TEXT, photo_num INTEGER,
-             seq INTEGER, created_at TEXT, image_data BLOB)''')
-    else:
-        for col_sql in (
-            'ALTER TABLE messages ADD COLUMN image_data BLOB',
-            'ALTER TABLE messages ADD COLUMN category TEXT',
-            'ALTER TABLE messages ADD COLUMN photo_num INTEGER',
-            'ALTER TABLE messages ADD COLUMN session_id INTEGER',
-            'ALTER TABLE sessions ADD COLUMN report_format TEXT',
-        ):
-            try:
-                con.execute(col_sql)
-            except Exception:
-                pass
-
-    con.commit()
-    con.close()
-
-
-def _active_session_id(con, phone):
-    """Return the rowid of the current active (not ended) session for this phone."""
-    row = con.execute(
-        'SELECT id FROM sessions WHERE phone=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1',
-        (phone,)
-    ).fetchone()
-    return row[0] if row else None
-
-
-def store_message(msg):
-    con = sqlite3.connect(DB, timeout=10)
-    # Create session row if none exists yet
-    sid = _active_session_id(con, msg['phone'])
-    if sid is None:
-        con.execute(
-            'INSERT INTO sessions (phone, bridge, status, state, photo_count, started_at) VALUES (?,?,?,?,?,?)',
-            (msg['phone'], msg.get('bridge', ''), 'active', 'menu', 0, datetime.utcnow().isoformat())
+    """Create the connection pool and ensure tables exist."""
+    global _pool
+    if not DATABASE_URL:
+        raise EnvironmentError(
+            "DATABASE_URL environment variable not set. "
+            "Add a Postgres add-on in Render and it will be set automatically."
         )
-        sid = con.execute('SELECT last_insert_rowid()').fetchone()[0]
-    con.execute(
-        'INSERT INTO messages (phone, session_id, type, content, media_path, category, photo_num, seq, created_at, image_data) '
-        'VALUES (?,?,?,?,?,?,?,?,datetime("now"),?)',
-        (msg['phone'], sid, msg['type'], msg.get('content'),
-         msg.get('media_path'), msg.get('category'),
-         msg.get('photo_num'), msg.get('seq', 0), msg.get('image_data'))
-    )
-    con.commit()
-    con.close()
+    _pool = psycopg2.pool.ThreadedConnectionPool(2, 10, DATABASE_URL)
+
+    with _db() as cur:
+        # sessions
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                id           SERIAL PRIMARY KEY,
+                phone        TEXT,
+                bridge       TEXT,
+                status       TEXT,
+                state        TEXT,
+                photo_count  INTEGER DEFAULT 0,
+                started_at   TEXT,
+                ended_at     TEXT,
+                report_path  TEXT,
+                report_format TEXT
+            )
+        ''')
+        # messages — image_data is BYTEA so photos survive restarts
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id          SERIAL PRIMARY KEY,
+                phone       TEXT,
+                session_id  INTEGER,
+                type        TEXT,
+                content     TEXT,
+                media_path  TEXT,
+                category    TEXT,
+                photo_num   INTEGER,
+                seq         INTEGER,
+                created_at  TEXT,
+                image_data  BYTEA
+            )
+        ''')
+        # Index for the common "active session for phone" query
+        cur.execute('''
+            CREATE INDEX IF NOT EXISTS idx_sessions_phone_active
+            ON sessions (phone, ended_at)
+        ''')
+        cur.execute('''
+            CREATE INDEX IF NOT EXISTS idx_messages_session
+            ON messages (session_id, seq, created_at)
+        ''')
 
 
-def get_session(phone):
-    con = sqlite3.connect(DB, timeout=10)
-    con.row_factory = sqlite3.Row
-    sid = _active_session_id(con, phone)
-    if sid is None:
-        con.close()
-        return None
-    session  = con.execute('SELECT * FROM sessions WHERE id=?', (sid,)).fetchone()
-    messages = con.execute(
-        'SELECT * FROM messages WHERE session_id=? ORDER BY seq, created_at', (sid,)
-    ).fetchall()
-    con.close()
+def store_message(msg: dict):
+    with _db() as cur:
+        sid = _active_session_id(cur, msg['phone'])
+        if sid is None:
+            cur.execute(
+                '''INSERT INTO sessions
+                   (phone, bridge, status, state, photo_count, started_at)
+                   VALUES (%s, %s, %s, %s, %s, %s) RETURNING id''',
+                (msg['phone'], msg.get('bridge', ''), 'active', 'menu', 0,
+                 datetime.utcnow().isoformat())
+            )
+            sid = cur.fetchone()[0]
 
-    rows = [dict(m) for m in messages]
+        # image_data may be bytes (psycopg2 maps Python bytes ↔ BYTEA automatically)
+        cur.execute(
+            '''INSERT INTO messages
+               (phone, session_id, type, content, media_path, category,
+                photo_num, seq, created_at, image_data)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+            (msg['phone'], sid, msg['type'], msg.get('content'),
+             msg.get('media_path'), msg.get('category'),
+             msg.get('photo_num'), msg.get('seq', 0),
+             datetime.utcnow().isoformat(), msg.get('image_data'))
+        )
+
+
+def get_session(phone: str) -> dict | None:
+    with _db() as cur:
+        sid = _active_session_id(cur, phone)
+        if sid is None:
+            return None
+
+        cur.execute('SELECT * FROM sessions WHERE id=%s', (sid,))
+        session = _row_as_dict(cur)
+        if session is None:
+            return None
+
+        cur.execute(
+            'SELECT * FROM messages WHERE session_id=%s ORDER BY seq, created_at',
+            (sid,)
+        )
+        messages = _rows_as_dicts(cur)
+
+    # Restore media files to disk if they were lost (e.g. after a restart)
     os.makedirs(os.getenv('MEDIA_DIR', 'media'), exist_ok=True)
-    for m in rows:
-        if m.get('image_data') and m.get('media_path') and not os.path.exists(m['media_path']):
+    for m in messages:
+        data = m.get('image_data')
+        if data and m.get('media_path') and not os.path.exists(m['media_path']):
+            # psycopg2 returns BYTEA as memoryview — convert to bytes
+            raw = bytes(data) if isinstance(data, memoryview) else data
             with open(m['media_path'], 'wb') as f:
-                f.write(m['image_data'])
+                f.write(raw)
 
-    return {**dict(session), 'messages': rows}
+    return {**session, 'messages': messages}
 
 
-def get_session_status(phone: str):
-    con = sqlite3.connect(DB, timeout=10)
-    row = con.execute(
-        'SELECT status FROM sessions WHERE phone=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1',
-        (phone,)
-    ).fetchone()
-    con.close()
+def get_session_status(phone: str) -> str | None:
+    with _db() as cur:
+        cur.execute(
+            'SELECT status FROM sessions WHERE phone=%s AND ended_at IS NULL '
+            'ORDER BY started_at DESC LIMIT 1',
+            (phone,)
+        )
+        row = cur.fetchone()
     return row[0] if row else None
 
 
-def get_session_state(phone: str):
-    con = sqlite3.connect(DB, timeout=10)
-    row = con.execute(
-        'SELECT state, photo_count FROM sessions WHERE phone=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1',
-        (phone,)
-    ).fetchone()
-    con.close()
+def get_session_state(phone: str) -> tuple[str, int]:
+    with _db() as cur:
+        cur.execute(
+            'SELECT state, photo_count FROM sessions WHERE phone=%s AND ended_at IS NULL '
+            'ORDER BY started_at DESC LIMIT 1',
+            (phone,)
+        )
+        row = cur.fetchone()
     return (row[0] or 'menu', row[1] or 0) if row else ('menu', 0)
 
 
 def set_session_state(phone: str, state: str):
-    con = sqlite3.connect(DB, timeout=10)
-    sid = _active_session_id(con, phone)
-    if sid:
-        con.execute('UPDATE sessions SET state=? WHERE id=?', (state, sid))
-    con.commit()
-    con.close()
+    with _db() as cur:
+        sid = _active_session_id(cur, phone)
+        if sid:
+            cur.execute('UPDATE sessions SET state=%s WHERE id=%s', (state, sid))
 
 
 def increment_photo_count(phone: str) -> int:
-    con = sqlite3.connect(DB, timeout=10)
-    sid = _active_session_id(con, phone)
-    if sid:
-        con.execute(
-            'UPDATE sessions SET photo_count = COALESCE(photo_count, 0) + 1 WHERE id=?', (sid,)
-        )
-    row = con.execute('SELECT photo_count FROM sessions WHERE id=?', (sid,)).fetchone()
-    con.commit()
-    con.close()
-    return row[0] if row else 1
+    with _db() as cur:
+        sid = _active_session_id(cur, phone)
+        if sid:
+            cur.execute(
+                'UPDATE sessions SET photo_count = COALESCE(photo_count, 0) + 1 '
+                'WHERE id=%s', (sid,)
+            )
+            cur.execute('SELECT photo_count FROM sessions WHERE id=%s', (sid,))
+            row = cur.fetchone()
+            return row[0] if row else 1
+    return 1
 
 
 def reset_session(phone: str):
     """End the current active session (stamp ended_at) rather than deleting it."""
-    con = sqlite3.connect(DB, timeout=10)
-    con.execute(
-        "UPDATE sessions SET ended_at=?, status='exited' WHERE phone=? AND ended_at IS NULL",
-        (datetime.utcnow().isoformat(), phone)
-    )
-    con.commit()
-    con.close()
+    with _db() as cur:
+        cur.execute(
+            "UPDATE sessions SET ended_at=%s, status='exited' "
+            "WHERE phone=%s AND ended_at IS NULL",
+            (datetime.utcnow().isoformat(), phone)
+        )
 
 
 def has_bridge_details(phone: str) -> bool:
     """Return True if the active session has at least one bridge_details message."""
-    con = sqlite3.connect(DB, timeout=10)
-    sid = _active_session_id(con, phone)
-    if sid is None:
-        con.close()
-        return False
-    row = con.execute(
-        "SELECT 1 FROM messages WHERE session_id=? AND category='bridge_details' LIMIT 1",
-        (sid,)
-    ).fetchone()
-    con.close()
-    return row is not None
+    with _db() as cur:
+        sid = _active_session_id(cur, phone)
+        if sid is None:
+            return False
+        cur.execute(
+            "SELECT 1 FROM messages WHERE session_id=%s AND category='bridge_details' LIMIT 1",
+            (sid,)
+        )
+        return cur.fetchone() is not None
 
 
 def set_report_format(phone: str, fmt: str):
     """Store report format ('word' or 'excel') for the active session."""
-    con = sqlite3.connect(DB, timeout=10)
-    sid = _active_session_id(con, phone)
-    if sid:
-        con.execute('UPDATE sessions SET report_format=? WHERE id=?', (fmt, sid))
-    con.commit()
-    con.close()
+    with _db() as cur:
+        sid = _active_session_id(cur, phone)
+        if sid:
+            cur.execute(
+                'UPDATE sessions SET report_format=%s WHERE id=%s', (fmt, sid)
+            )
 
 
 def get_report_format(phone: str) -> str:
     """Return 'word' (default) or 'excel' for the active session."""
-    con = sqlite3.connect(DB, timeout=10)
-    row = con.execute(
-        'SELECT report_format FROM sessions WHERE phone=? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1',
-        (phone,)
-    ).fetchone()
-    con.close()
-    if row and row[0]:
-        return row[0]
-    return 'word'
+    with _db() as cur:
+        cur.execute(
+            'SELECT report_format FROM sessions WHERE phone=%s AND ended_at IS NULL '
+            'ORDER BY started_at DESC LIMIT 1',
+            (phone,)
+        )
+        row = cur.fetchone()
+    return row[0] if (row and row[0]) else 'word'
 
 
 def mark_done(phone: str, report_path: str = None):
-    con = sqlite3.connect(DB, timeout=10)
-    sid = _active_session_id(con, phone)
-    if sid:
-        con.execute(
-            "UPDATE sessions SET status='done', ended_at=?, report_path=? WHERE id=?",
-            (datetime.utcnow().isoformat(), report_path, sid)
-        )
-    con.commit()
-    con.close()
+    with _db() as cur:
+        sid = _active_session_id(cur, phone)
+        if sid:
+            cur.execute(
+                "UPDATE sessions SET status='done', ended_at=%s, report_path=%s "
+                "WHERE id=%s",
+                (datetime.utcnow().isoformat(), report_path, sid)
+            )

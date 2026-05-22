@@ -377,8 +377,134 @@ EXCEL_SCHEMA = {
     "project_name":      "",
     "project_number":    "",
     "bridge_title":      "",  # full official bridge name
+
+    # ── Appendix-A additional fields ─────────────────────────────────────────
+    "bm_gts_level":              "",  # BM / GTS benchmark level
+    "pier_width_detail":         "",  # width of pier (e.g. "1.2 m and 0.6 m")
+    "pier_cap_width":            "",  # width of pier cap
+    "abutment_width":            "",  # width of abutment
+    "abutment_cap_width":        "",  # width of abutment cap
+    "returns_length":            "",  # length of returns/wing walls
+    "date_of_construction_start": "", # date construction started (dd/mm/yyyy)
+    "design_agency":             "",  # name of design agency
+    "construction_agency":       "",  # name of construction agency
+
+    # ── Appendix-B Section 4 — Approaches (individual rows) ──────────────────
+    "approach_side_slopes": "",  # 4.2 side slopes condition
+    "approach_slab":        "",  # 4.4 approach slab condition
+    "approach_geometrics":  "",  # 4.5 approach geometrics
+
+    # ── Appendix-B Section 5 — Protective Works ──────────────────────────────
+    "prot_type":            "",  # 5.1 type of protective works
+    "prot_damage_layout":   "",  # 5.2 damage to layout / cross-section
+    "prot_slope_pitching":  "",  # 5.3 slope pitching / apron / toe walls
+    "prot_floor_protection":"",  # 5.4 floor protection works
+    "prot_scour_extent":    "",  # 5.5 extent of scour
+    "prot_reserve_stone":   "",  # 5.6 reserve stone material
+    "prot_other":           "",  # 5.7 any other observation
+
+    # ── Appendix-B Section 6 — Waterway ──────────────────────────────────────
+    "waterway_obs":         "",  # section-level summary (e.g. "Not Applicable")
+    "waterway_obstruction": "",  # 6.1 obstructions/undergrowth
+    "waterway_scour":       "",  # 6.2 scour
+    "waterway_flow":        "",  # 6.3 change in flow pattern
+    "waterway_flood_level": "",  # 6.4 max flood level observed
+    "waterway_afflux":      "",  # 6.5 afflux
+    "waterway_adequacy":    "",  # 6.6 adequacy of waterway
+    "waterway_other":       "",  # 6.7 any other observation
+
+    # ── Appendix-B Section 7 — Foundations ───────────────────────────────────
+    "foundations_obs":       "",  # section-level summary (e.g. "Not Visible")
+    "foundations_settlement":"",  # 7.1 settlement
+    "foundations_cracking":  "",  # 7.2 cracking/disintegration
+    "foundations_floating":  "",  # 7.3 floating bodies damage
+    "foundations_subway":    "",  # 7.4 subway seepage
+    "foundations_other":     "",  # 7.5 any other observation
+
+    # ── Appendix-B Section 8 — Substructure ──────────────────────────────────
+    "sub_section_obs":      "",  # 8 header (e.g. "Refer Table 1 and 2" if user says so)
+    "sub_drainage_backfill":"",  # 8.1 backfill drainage / weep holes
+    "sub_cracking_obs":     "",  # 8.2 cracking / disintegration
+    "sub_subway_obs":       "",  # 8.3 subway retaining walls
+    "sub_other_obs":        "",  # 8.4 any other observation
+
+    # ── Appendix-B Section 9 — Bearings ──────────────────────────────────────
+    "bear_metallic_type":       "",  # 9.1 metallic bearings (type / "Not Applicable")
+    "bear_metallic_condition":  "",  # 9.1.1 condition
+    "bear_metallic_functioning":"",  # 9.1.2 functioning
+    "bear_metallic_greasing":   "",  # 9.1.3 greasing/oil bath
+    "bear_pedestal_cracks":     "",  # 9.1.4 cracks in pedestal/pier cap
+    "bear_metallic_anchor":     "",  # 9.1.5 anchor bolts
+    "bear_metallic_other":      "",  # 9.1.6 any other
+    "bear_elastomeric_type":    "",  # 9.2 elastomeric bearings (type / "Not Applicable")
+    "bear_pad_condition":       "",  # 9.2.1 pad condition
+    "bear_cleanliness":         "",  # 9.2.2 cleanliness
+    "bear_elastomeric_other":   "",  # 9.2.3 any other
+
+    # ── Appendix-B Section 10 — Superstructure ───────────────────────────────
+    "super_section_obs":     "",  # 10 header (e.g. "Refer Table 3 and 4" if user says so)
+    "super_spalling_obs":    "",  # 10.1.1 spalling/honeycombing
+    "super_cracking_obs":    "",  # 10.1.2 cracking
+    "super_corrosion_obs":   "",  # 10.1.3 corrosion of reinforcement
+    "super_vehicle_damage":  "",  # 10.1.4 damage due to vehicles
+    "super_articulation":    "",  # 10.1.5 articulation condition
+    "super_vibration":       "",  # 10.1.6 perceptible vibration
+    "super_deflection":      "",  # 10.1.7 excessive deflection / loss of camber
+    "super_anchorage_cracks":"",  # 10.1.8 cracks in end anchorage zone
+    "super_hinge_deflection":"",  # 10.1.9 deflection at central hinge
+    "steel_obs":             "",  # 10.2 steel members summary
+    "masonry_obs":           "",  # 10.3 masonry arches summary
+    "timber_obs":            "",  # 10.4 timber members summary
+
+    # ── Appendix-B Section 11 — Expansion Joints ─────────────────────────────
+    "exp_jt_functioning":   "",  # 11.1 functioning / gap condition
+    "exp_jt_sealing":       "",  # 11.2 sealing material condition
+    "exp_jt_fixing":        "",  # 11.3 condition at fixing points
+    "exp_jt_sliding_plate": "",  # 11.4 top sliding plate corrosion
+    "exp_jt_locking":       "",  # 11.5 locking of joints
+    "exp_jt_debris":        "",  # 11.6 debris in open joints
+    "exp_jt_rattling":      "",  # 11.7 rattling
+    "exp_jt_other":         "",  # 11.8 any other observation
+
+    # ── Appendix-B Section 12 — Wearing Coat ─────────────────────────────────
+    "wear_coat_type":       "",  # 12 type (e.g. "Bituminous")
+    "wear_coat_surface":    "",  # 12.1 surface condition
+    "wear_coat_evidence":   "",  # 12.2 evidence of wear
+
+    # ── Appendix-B Section 13 — Drainage Spouts ──────────────────────────────
+    "drain_type":           "",  # 13 overall condition / type
+    "drain_clogging":       "",  # 13.1 clogging/deterioration
+    "drain_projection":     "",  # 13.2 projection on underside
+    "drain_adequacy":       "",  # 13.3 adequacy
+    "drain_subway":         "",  # 13.4 subway pumping
+    "drain_other":          "",  # 13.5 any other
+
+    # ── Appendix-B Section 14 — Handrail ─────────────────────────────────────
+    "handrail_condition":   "",  # 14.1 general condition
+    "handrail_collision":   "",  # 14.2 collision damage
+    "handrail_alignment":   "",  # 14.3 alignment
+
+    # ── Appendix-B Section 15 — Footpath ─────────────────────────────────────
+    "footpath_condition":   "",  # 15.1 general condition
+    "footpath_missing_slab":"",  # 15.2 missing footpath slab
+    "footpath_other":       "",  # 15.3 any other observation
+
+    # ── Appendix-B Section 16 — Utilities ────────────────────────────────────
+    "utilities_obs":        "",  # 16 section-level summary
+    "util_water_leakage":   "",  # 16.1 water/sewage pipe leakage
+    "util_cable_damage":    "",  # 16.2 telephone/electric cable damage
+    "util_lighting":        "",  # 16.3 lighting condition
+    "util_other_damage":    "",  # 16.4 other utility damage
+
+    # ── Appendix-B Section 17-19 & Overall ───────────────────────────────────
+    "bridge_num_condition":   "",  # 17.1 bridge number / painting condition
+    "aesthetics_intrusion":   "",  # 18.1 visual intrusion
+    "maintenance_history":    "",  # 19 maintenance done since last inspection
+    "overall_condition_visual":"", # overall visual condition (unlabelled row)
+
+    # ── Defect table pier/span lists ──────────────────────────────────────────
     "sub_piers_side1":   [],  # pier ID strings for substructure side 1
-    "sub_side1_label":   "",  # label e.g. "Railway + Anupam Cinema Side"
+    "sub_side1_label":   "",
     "sub_piers_side2":   [],
     "sub_side2_label":   "",
     "super_spans_side1": [],  # span ID strings for superstructure side 1
@@ -432,6 +558,192 @@ BRIDGE DETAILS EXTRACTION RULES (critical for Excel Appendix-A accuracy):
 - subsoil_particulars: if inspector says "as per approved GAD" or "as per approved design", output exactly that phrase. Leave empty if not mentioned.
 - bearing_type_detail: list each bearing type with its location. e.g. "Elastomeric Bearing (Anupam Cinema + Gomtipur Side)\nPOT-PTFE Bearing (Railway Portion)". NEVER put expansion joint text here.
 - date_of_completion: dd/mm/yyyy format, e.g. "09/08/2020"
+- date_of_construction_start: dd/mm/yyyy format — from "date of starting construction"
+- construction_agency: name of the contractor/construction agency
+- design_agency: name of the design agency
+- pier_width_detail: width of piers (e.g. "1.2 m and 0.6 m") — different from width_of_piers which is used in the spans cell
+- pier_cap_width: width of pier cap
+- abutment_width: width of abutment
+- abutment_cap_width: width of abutment cap
+- returns_length: length of return walls / wing walls (e.g. "100 m Shamal side + 70 m Jivraj side = 170 m")
+
+APPENDIX-B FIELD EXTRACTION (Inspection Observations):
+Map each inspector observation to the most specific matching field. Write the value EXACTLY as given.
+- "Not Applicable", "Absent", "Not Visible", "Good", "Damaged" etc. are all valid values — write them as-is.
+- Each field maps to exactly one row in Appendix-B. Do NOT combine multiple rows into one field.
+- If the inspector says "Not Applicable" for an entire section (e.g. "waterway not applicable"), put that value ONLY in the section-level field (waterway_obs) — NOT in individual sub-row fields (waterway_obstruction etc.). Each sub-row field must have its own explicit observation to be filled.
+- For substructure section (sub_section_obs) and superstructure section (super_section_obs): if the inspector explicitly says "refer table 1 and 2" or "refer table 3 and 4", copy that text exactly into the field. Do not add these references on your own.
+
+Section mapping guide:
+  approach_settlement → 4.1 (pavement surface condition of approaches)
+  approach_side_slopes → 4.2 (side slopes)
+  approach_erosion → 4.3 (erosion of embankment)
+  approach_slab → 4.4 (approach slab)
+  approach_geometrics → 4.5 (approach geometrics)
+  approach_other → 4.6 (any other specific observations for approaches)
+
+  prot_type → 5.1, prot_damage_layout → 5.2, prot_slope_pitching → 5.3,
+  prot_floor_protection → 5.4, prot_scour_extent → 5.5, prot_reserve_stone → 5.6, prot_other → 5.7
+
+  waterway_obs → section 6 header, waterway_obstruction → 6.1, waterway_scour → 6.2,
+  waterway_flow → 6.3, waterway_flood_level → 6.4, waterway_afflux → 6.5,
+  waterway_adequacy → 6.6, waterway_other → 6.7
+
+  foundations_obs → section 7 header, foundations_settlement → 7.1, foundations_cracking → 7.2,
+  foundations_floating → 7.3, foundations_subway → 7.4, foundations_other → 7.5
+
+  sub_section_obs → section 8 header, sub_drainage_backfill → 8.1, sub_cracking_obs → 8.2,
+  sub_subway_obs → 8.3, sub_other_obs → 8.4
+
+  bear_metallic_type → 9.1, bear_metallic_condition → 9.1.1, bear_metallic_functioning → 9.1.2,
+  bear_metallic_greasing → 9.1.3, bear_pedestal_cracks → 9.1.4, bear_metallic_anchor → 9.1.5,
+  bear_metallic_other → 9.1.6, bear_elastomeric_type → 9.2, bear_pad_condition → 9.2.1,
+  bear_cleanliness → 9.2.2, bear_elastomeric_other → 9.2.3
+
+  super_section_obs → section 10 header, super_spalling_obs → 10.1.1, super_cracking_obs → 10.1.2,
+  super_corrosion_obs → 10.1.3, super_vehicle_damage → 10.1.4, super_articulation → 10.1.5,
+  super_vibration → 10.1.6, super_deflection → 10.1.7, super_anchorage_cracks → 10.1.8,
+  super_hinge_deflection → 10.1.9, steel_obs → 10.2, masonry_obs → 10.3, timber_obs → 10.4
+
+  exp_jt_functioning → 11.1, exp_jt_sealing → 11.2, exp_jt_fixing → 11.3,
+  exp_jt_sliding_plate → 11.4, exp_jt_locking → 11.5, exp_jt_debris → 11.6,
+  exp_jt_rattling → 11.7, exp_jt_other → 11.8
+
+  wear_coat_type → 12, wear_coat_surface → 12.1, wear_coat_evidence → 12.2
+
+  drain_type → 13, drain_clogging → 13.1, drain_projection → 13.2,
+  drain_adequacy → 13.3, drain_subway → 13.4, drain_other → 13.5
+
+  handrail_condition → 14.1, handrail_collision → 14.2, handrail_alignment → 14.3
+  footpath_condition → 15.1, footpath_missing_slab → 15.2, footpath_other → 15.3
+  utilities_obs → section 16 header, util_water_leakage → 16.1, util_cable_damage → 16.2,
+  util_lighting → 16.3, util_other_damage → 16.4
+  bridge_num_condition → 17.1, aesthetics_intrusion → 18.1
+  maintenance_history → 19, overall_condition_visual → overall condition row
+
+  Section 20 (maintenance recommendations): DO NOT fill any field for this — leave blank.
+  The engineer fills recommendations manually.
+
+INPUT STYLE HANDLING — Three Modes for Appendix-A Bridge Details:
+
+Users provide bridge detail data via WhatsApp in 3 styles. You MUST correctly identify
+and map values to the right JSON field in ALL THREE cases.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STYLE 1 — EXPLICIT FIELD NAMING (user states the field name, then gives the value):
+  "Name of bridge is ABC Bridge, number of spans is 10, type is ROB"
+  "Name of bridge: ABC Bridge. No of spans: 10. Type of bridge: ROB"
+  → Map each value to the matching field using the stated name. This is straightforward.
+
+STYLE 2 — SEQUENTIAL VALUES WITH CONNECTOR WORDS (user goes field-by-field without
+  naming each field; values separated by connector words such as THEN / next / then /
+  "and then" / "Next" / semicolons / commas-only with no label before the value):
+  Example: "ABC Bridge THEN Not Applicable THEN NH-64 THEN 10 spans THEN ROB"
+  Example: "ABC Bridge next 10 next railway over bridge"
+  → Map values IN ORDER to the Appendix-A field sequence below.
+  → Use semantic fit: if a value clearly doesn't match the expected positional field
+    (e.g. a bridge type word appears where a number is expected), shift forward one
+    position or use context to find the correct field.
+  → If ANY value in the sequence carries an explicit label, treat that label as a
+    positional anchor and map remaining unlabelled values relative to it.
+
+  APPENDIX-A SEQUENTIAL FIELD ORDER (use for positional mapping in Style 2):
+  Pos 01  bridge_title             Name of Bridge / Bridge Title
+  Pos 02  bridge_number            Bridge Number (often absent — skip if next value is not a number/code)
+  Pos 03  river_name               Name of River / Canal / Nala ("Not Applicable" for ROB)
+  Pos 04  road_name                Name of Road or Highway
+  Pos 05  road_number              Road Number (often absent — skip if next value is not a number)
+  Pos 06  latitude                 GPS Latitude (decimal, e.g. 23.007695)
+  Pos 07  longitude                GPS Longitude
+  Pos 08  bm_gts_level             Location of BM / GTS Level / Arbitrary Level
+  Pos 09  division                 Division Name
+  Pos 10  circle                   Circle Name
+  Pos 11  no_of_spans              Number of Spans (per side, e.g. "10 Nos.")
+  Pos 12  total_length             Total Length of Bridge
+  Pos 13  cc_of_piers              C/C of Piers (centre-to-centre spacing)
+  Pos 14  width_of_piers           Width of Piers
+  Pos 15  angle_of_crossing        Angle of Crossing
+  Pos 16  bridge_level_type        Type: High Level / ROB / Submersible
+  Pos 17  hydraulic_parameters     Hydraulic Parameters ("Not Applicable" for ROB)
+  Pos 18  subsoil_particulars      Sub Soil Particulars ("As per approved GAD" or actual)
+  Pos 19  superstructure_type      Type of Superstructure (PSC Girder / RCC Slab / Steel Truss)
+  Pos 20  span_arrangement         Span Arrangement (full math expression, e.g. "6×25=150 m")
+  Pos 21  carriage_width           Carriage Width (and footpath width if stated together)
+  Pos 22  deck_level               Deck Level (in metres)
+  Pos 23  foundation_type          Type of Foundation (pile / open / well)
+  Pos 24  substructure_type        Type of Substructure (RCC pier / masonry abutment etc.)
+  Pos 25  pier_length              Length / Height of Piers
+  Pos 26  pier_width_detail        Width of Piers (detailed, per side)
+  Pos 27  pier_cap_width           Width of Pier Cap
+  Pos 28  abutment_width           Width of Abutment
+  Pos 29  abutment_cap_width       Width of Abutment Cap
+  Pos 30  returns_length           Length of Returns / Wing Walls
+  Pos 31  prestressing_details     Details of Prestressing
+  Pos 32  bearing_type_detail      Type of Bearings
+  Pos 33  wearing_coat             Wearing Coat Type
+  Pos 34  railing_type             Type of Railing / Parapet / Crash Barrier
+  Pos 35  expansion_joint          Type of Expansion Joint
+  Pos 36  date_of_construction_start  Date of Starting Construction (dd/mm/yyyy)
+  Pos 37  date_of_completion       Date of Completion (dd/mm/yyyy)
+  Pos 38  surface_utilities        Surface Utilities on Bridge
+  Pos 39  design_agency            Design Agency
+  Pos 40  construction_agency      Construction Agency
+  Pos 41  performance              Overall Performance (Good / Fair / Poor)
+
+STYLE 3 — PARTIAL / ABBREVIATED FIELD NAMES (user says a shortened or paraphrased
+  version of the official field name; you must still map it to the correct field):
+  Example: "Location of BM is 107.575 m" → bm_gts_level  (not the full label text)
+  Example: "No of bridge is B-123"        → bridge_number
+  Example: "Angle is Q"                   → angle_of_crossing
+
+  Partial name used by user                       → Target JSON field
+  "name of bridge" / "bridge name"                → bridge_title
+  "no of bridge" / "bridge no" / "bridge number"  → bridge_number
+  "name of river" / "river" / "nala name"         → river_name
+  "road name" / "name of road" / "highway"        → road_name
+  "road no" / "road number"                       → road_number
+  "GPS" / "coordinates" / "lat lon" / "latitude"  → latitude (and longitude)
+  "location of BM" / "BM level" / "GTS level"
+    / "benchmark" / "BM GTS" / "arbitrary level"  → bm_gts_level
+  "division" / "circle"                           → division / circle (match by context)
+  "no of spans" / "number of spans" / "spans"     → no_of_spans
+  "total length" / "bridge length" / "length"     → total_length
+  "C/C" / "c to c" / "centre to centre" / "c/c of piers" → cc_of_piers
+  "pier width" (without "cap" keyword)            → width_of_piers or pier_width_detail
+  "pier cap" / "cap width" / "width of cap"       → pier_cap_width
+  "abutment cap" / "abutment cap width"           → abutment_cap_width
+  "abutment width" / "width of abutment"          → abutment_width
+  "angle" / "skew" / "skew angle" / "crossing angle" → angle_of_crossing
+  "type of bridge" / "high level or submersible"
+    / "high level/ROB/submersible"                → bridge_level_type
+  "hydraulic" (short form)                        → hydraulic_parameters
+  "sub soil" / "subsoil" / "soil particulars"     → subsoil_particulars
+  "superstructure type" / "type of superstructure" → superstructure_type
+  "span arrangement" / "span details"             → span_arrangement
+  "carriage" / "carriageway" / "carriage width"   → carriage_width
+  "footpath" / "footpath width"                   → footpath_width (fill separately)
+  "deck level" / "deck"                           → deck_level
+  "foundation type" / "type of foundation"        → foundation_type
+  "substructure type" / "type of substructure"    → substructure_type
+  "pier length" / "height of pier" / "pier height" → pier_length
+  "return walls" / "wing walls" / "returns"       → returns_length
+  "prestressing" / "prestress" / "prestress details" → prestressing_details
+  "bearing type" / "type of bearing" / "bearings" → bearing_type_detail
+  "expansion joint" / "EJ" / "EJ type"           → expansion_joint
+  "wearing coat" / "WC" / "WC type"              → wearing_coat
+  "railing" / "parapet" / "crash barrier type"   → railing_type
+  "date of construction" / "construction date"
+    (if completion context) → date_of_completion;
+    (if start context)      → date_of_construction_start
+  "contractor" / "construction agency"            → construction_agency
+  "designer" / "design agency"                    → design_agency
+  "utilities" / "services on bridge" / "surface utilities" → surface_utilities
+  "performance" / "condition" / "overall performance" → performance
+
+COMBINED STYLES: When a message mixes explicit labels with unlabelled sequential values,
+use the labelled fields as anchors and infer the positions of unlabelled values relative
+to those anchors using the Pos order above. Always prefer explicit naming over positional
+inference.
 '''
 
 

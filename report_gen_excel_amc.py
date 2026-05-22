@@ -1,13 +1,14 @@
 # report_gen_excel_amc.py — Fill CASAD AMC Excel template from report JSON
 #
-# AMC template structure (Nathalal Zaghda style):
-#   - TITLE PAGE, DISCLAIMR, Appendix-A, Appendix-B, Appendix-B 21-22, Appendix-C-
-#   - Defect sheets named: "[BRIDGE] SUB - 1", "[BRIDGE] SUB - 2",
-#                          "[BRIDGE] SUPER - 1", "[BRIDGE] SUPER - 2"
+# AMC template structure:
+#   - TITLE PAGE, DISCLAIMR, Appendix-A, Appendix-B, Appendix-B 21-22,
+#     Appendix - Photos, Table 1, Table 2, Table 3, Table 4
+#   - Defect sheets: Table 1 (SUB side 1), Table 2 (SUB side 2),
+#                    Table 3 (SUPER side 1), Table 4 (SUPER side 2)
 #   - All defect tables: row 3 = pier/span IDs starting col 5 (E),
 #                        rows 4-14 = defect observations (a-k)
 #   - Remarks column detected dynamically from row 3
-#   - Single photo sheet: "Appendix-C-"
+#   - Single photo sheet: "Appendix - Photos"
 
 import os, re, io
 from datetime import date, datetime
@@ -197,12 +198,15 @@ def _fill_defect_table(ws, elements: list, matrix: dict, start_col: int, remarks
     row_offset: extra rows to add to each defect row (use 1 for AMC SUPER sheets
     which have an extra 'Type of Super Structure' row at row 4).
     """
-    # Always clear — even when elements is empty
+    # Always clear data region — including remarks column (stale photo refs from template)
     clear_end = (start_col + len(elements)) if elements else remarks_col
     for col_i in range(start_col, clear_end):
         _safe_write(ws, 3, col_i, None)
         for row in range(4 + row_offset, 15 + row_offset):
             _safe_write(ws, row, col_i, None)
+    # Clear remarks column data rows (keep row-3 header label)
+    for row in range(4 + row_offset, 15 + row_offset):
+        _safe_write(ws, row, remarks_col, None)
 
     if not elements:
         return
@@ -221,32 +225,32 @@ def _fill_defect_tables(wb, d):
     """Find and fill all four defect sheets in the AMC template."""
     START_COL = 5  # column E — same in both R&B and AMC templates
 
-    # Sub-structure Side 1
-    ws1 = _find_sheet(wb, 'sub - 1')
+    # Sub-structure Side 1  (sheet renamed from "GURUJI SUB - 1" → "Table 1")
+    ws1 = _find_sheet(wb, 'table 1')
     if ws1:
         piers1  = d.get('sub_piers_side1') or []
         matrix1 = d.get('defect_sub1') or {}
         remarks_col = _detect_remarks_col(ws1)
         _fill_defect_table(ws1, piers1, matrix1, START_COL, remarks_col)
 
-    # Sub-structure Side 2
-    ws2 = _find_sheet(wb, 'sub - 2')
+    # Sub-structure Side 2  (sheet renamed → "Table 2")
+    ws2 = _find_sheet(wb, 'table 2')
     if ws2:
         piers2  = d.get('sub_piers_side2') or []
         matrix2 = d.get('defect_sub2') or {}
         remarks_col = _detect_remarks_col(ws2)
         _fill_defect_table(ws2, piers2, matrix2, START_COL, remarks_col)
 
-    # Super-structure Side 1
-    ws3 = _find_sheet(wb, 'super - 1')
+    # Super-structure Side 1  (sheet renamed → "Table 3")
+    ws3 = _find_sheet(wb, 'table 3')
     if ws3:
         spans1  = d.get('super_spans_side1') or []
         matrix3 = d.get('defect_super1') or {}
         remarks_col = _detect_remarks_col(ws3)
         _fill_defect_table(ws3, spans1, matrix3, START_COL, remarks_col, row_offset=1)
 
-    # Super-structure Side 2
-    ws4 = _find_sheet(wb, 'super - 2')
+    # Super-structure Side 2  (sheet renamed → "Table 4")
+    ws4 = _find_sheet(wb, 'table 4')
     if ws4:
         spans2  = d.get('super_spans_side2') or []
         matrix4 = d.get('defect_super2') or {}
@@ -267,84 +271,81 @@ def _fill_title_page(wb, d):
 
 
 def _fill_appendix_a(wb, d):
-    """Fill Appendix-A — AMC template row structure verified against
-    casad_amc_template.xlsx (2026-05-18).  Row numbers match the R&B template
-    exactly; earlier code had several off-by-one errors.
+    """Fill Appendix-A — purely user-input driven; no code-generated defaults.
+    Each cell is written only when the user explicitly provided a value.
     """
     from openpyxl.cell.cell import MergedCell
     ws = wb['Appendix-A']
 
-    # Step 1: Clear ALL variable data cells in column C (rows 4–104) to prevent
-    # stale template data from bleeding through for cells not explicitly written.
+    # Clear ALL variable data cells in column C (rows 4–104)
     for r in range(4, 105):
         cell = ws.cell(row=r, column=3)
         if not isinstance(cell, MergedCell):
             cell.value = None
 
-    lat = d.get('latitude', '-')
-    lon = d.get('longitude', '-')
+    def _v(key):
+        v = d.get(key)
+        return v if v and str(v).strip() not in ('-', '') else None
+
+    lat = _v('latitude')
+    lon = _v('longitude')
+    location = f"{lat}° , {lon}°" if lat and lon else None
+
     mapping = {
         # ── Section 1 — General identity (rows 4-12) ─────────────────────────
-        'C4':  d.get('bridge_title', d.get('river_name', '-')),
-        'C5':  d.get('bridge_number', '-'),
-        'C6':  d.get('river_name', '-'),
-        'C7':  d.get('road_name', '-'),
-        'C8':  d.get('road_number', '-'),
-        'C9':  f"{lat}° , {lon}°",
-        'C10': '-',          # BM / GTS level — rarely provided
-        'C11': d.get('division', d.get('circle', '-')),
-        'C12': d.get('circle', '-'),
-
-        # Section 3 — Hydraulic Parameters section header
-        'C20': d.get('hydraulic_parameters') or None,
-        # Section 4 — Sub Soil Particulars section header
-        'C33': d.get('subsoil_particulars') or None,
+        'C4':  _v('bridge_title') or _v('river_name'),
+        'C5':  _v('bridge_number'),
+        'C6':  _v('river_name'),
+        'C7':  _v('road_name'),
+        'C8':  _v('road_number'),
+        'C9':  location,
+        'C10': _v('bm_gts_level'),
+        'C11': _v('division') or _v('circle'),
+        'C12': _v('circle'),
 
         # ── Section 2 — Details of Spans (rows 15-18) ────────────────────────
-        # Row 14 = "Details of Spans:" section header — do NOT write here.
-        # Row 2.1: "Number of Spans (Length, c/c of piers and width of piers)"
-        # Built with 4 fixed bold sub-titles; only those with data are shown.
-        # Falls back to plain-text dump when structured fields are missing.
         'C15': _build_spans_cell(d),
-        'C16': d.get('total_length', '-'),
-        'C17': d.get('angle_of_crossing', '-'),
-        'C18': d.get('bridge_level_type', d.get('type_of_bridge', '-')),
+        'C16': _v('total_length'),
+        'C17': _v('angle_of_crossing'),
+        'C18': _v('bridge_level_type') or _v('type_of_bridge'),
+
+        # ── Section 3 — Hydraulic Parameters (row 20 header only) ────────────
+        'C20': _v('hydraulic_parameters'),
+
+        # ── Section 4 — Sub Soil Particulars (row 33 header only) ────────────
+        'C33': _v('subsoil_particulars'),
 
         # ── Section 5 — Design and Structural Data (rows 43-67) ──────────────
-        # BUG FIXED: was C44/C45 — both shifted one row too low.
-        # C43 = row-(b) "Type of Bridge (RCC solid slab, T-beam, etc.)"
-        'C43': d.get('superstructure_type', d.get('bridge_type', '-')),
-        # C44 = row-(c) "Span arrangement"
-        'C44': d.get('span_arrangement', d.get('span_length', '-')),
-        # C45 = row-(d) "Carriage width and footpath width"
-        'C45': d.get('carriage_width', '-'),
-        # C46 = row-(e) "Deck level (from F.R.L.)"
-        'C46': d.get('deck_level', '-'),
-        # C50 = row-(h) "Type of Foundations with salient details"
-        'C50': d.get('foundation_type', '-'),
-        # C52 = row-(i)(i) "Masonry, Mass Concrete, RCC"
-        'C52': d.get('substructure_type', '-'),
-        # C53 = row-(i)(ii) "Straight length of pier"
-        'C53': d.get('pier_length', '-'),
-        # BUG FIXED: was C61 (articulation row) — must be C59.
-        # C59 = row-(j)(i) "Type of superstructure"
-        'C59': d.get('superstructure_type', '-'),
-        # C60 = row-(j)(ii) "Details of Prestressing"
-        'C60': d.get('prestressing_details', 'As per approved Design'),
-        # C64 = row-(m) "Type of bearings"
-        'C64': d.get('bearing_type_detail') or None,
-        'C65': d.get('wearing_coat') or None,
-        'C66': d.get('railing_type') or None,
-        'C67': d.get('expansion_joint') or None,
+        'C43': _v('superstructure_type') or _v('bridge_type'),
+        'C44': _v('span_arrangement') or _v('span_length'),
+        'C45': _v('carriage_width'),
+        'C46': _v('deck_level'),
+        'C50': _v('foundation_type'),
+        'C52': _v('substructure_type'),
+        'C53': _v('pier_length'),
+        'C54': _v('pier_width_detail'),
+        'C55': _v('pier_cap_width'),
+        'C56': _v('abutment_width'),
+        'C57': _v('abutment_cap_width'),
+        'C58': _v('returns_length'),
+        'C59': _v('superstructure_type'),
+        'C60': _v('prestressing_details'),
+        'C64': _v('bearing_type_detail'),
+        'C65': _v('wearing_coat'),
+        'C66': _v('railing_type'),
+        'C67': _v('expansion_joint'),
 
-        # ── Section 7 — Other Data (rows 81-84) ──────────────────────────────
-        'C81': _fmt_date(d.get('date_of_completion')) if d.get('date_of_completion') else '-',
-        'C82': d.get('surface_utilities') or None,
-        'C84': d.get('ls_sketch') or None,
+        # ── Section 7 — Other Data (rows 80-84) ──────────────────────────────
+        'C80': _fmt_date(d.get('date_of_construction_start')) if d.get('date_of_construction_start') else None,
+        'C81': _fmt_date(d.get('date_of_completion')) if d.get('date_of_completion') else None,
+        'C82': _v('surface_utilities'),
+        'C84': _v('ls_sketch'),
+        'C90': _v('design_agency'),
+        'C91': _v('construction_agency'),
 
-        # ── Section 8-9 — Performance & survey date ───────────────────────────
-        'C92': d.get('performance') or None,
-        'C93': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else '-',
+        # ── Section 8-9 — Performance & survey date ──────────────────────────
+        'C92': _v('performance'),
+        'C93': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else None,
     }
     for addr, val in mapping.items():
         try:
@@ -354,56 +355,171 @@ def _fill_appendix_a(wb, d):
 
 
 def _fill_appendix_b(wb, d):
-    """Fill Appendix-B — AMC version. Pre-wiped to prevent stale template data."""
+    """Fill Appendix-B — purely user-input driven.
+    Pre-wipe covers the full data area (rows 4-128) so no stale template data bleeds through.
+    No hardcoded cross-references or defaults — every cell is written only from user input.
+    Section 20 (recommendations) is intentionally left blank for the engineer.
+    """
     from openpyxl.cell.cell import MergedCell
     ws = wb['Appendix-B']
 
-    # Pre-wipe column C rows 4-75
-    for r in range(4, 76):
+    # Wipe full data area (rows 4-128, col C)
+    for r in range(4, 129):
         cell = ws.cell(row=r, column=3)
         if not isinstance(cell, MergedCell):
             cell.value = None
-
-    lat = d.get('latitude', '-')
-    lon = d.get('longitude', '-')
-    div = d.get('division', '-')
-    cir = d.get('circle', '-')
 
     def _v(key):
         v = d.get(key)
         return v if v and str(v).strip() not in ('-', '') else None
 
+    lat = _v('latitude')
+    lon = _v('longitude')
+    location = f"{lat}° , {lon}°" if lat and lon else None
+
+    div = _v('division')
+    cir = _v('circle')
+    if div and cir and div != cir:
+        div_cir = f"{div} / {cir}"
+    else:
+        div_cir = div or cir or None
+
     fields = {
-        'C4':  d.get('bridge_title', d.get('river_name', '-')),
-        'C6':  d.get('river_name', '-'),
-        'C7':  d.get('road_name', '-'),
-        'C8':  d.get('road_number') or None,
-        'C9':  f"{lat}° , {lon}°",
-        'C10': div if div == cir else f"{div} / {cir}",
-        'C11': d.get('type_of_bridge', d.get('bridge_type')) or None,
+        # ── Section 1 — General ───────────────────────────────────────────────
+        'C4':  _v('bridge_title') or _v('river_name'),
+        'C6':  _v('river_name'),
+        'C7':  _v('road_name'),
+        'C8':  _v('road_number'),
+        'C9':  location,
+        'C10': div_cir,
+        'C11': _v('type_of_bridge') or _v('bridge_type'),
         'C12': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else None,
-        # Approaches (blank if not provided)
+
+        # ── Section 4 — Approaches ────────────────────────────────────────────
         'C14': _v('approach_settlement'),
         'C15': _v('approach_side_slopes'),
         'C16': _v('approach_erosion'),
         'C17': _v('approach_slab'),
         'C18': _v('approach_geometrics'),
         'C19': _v('approach_other'),
-        # Substructure cross-refs
-        'C42': 'Refer Table  1 and 2',
-        'C43': 'Refer Table  1 and 2',
-        'C44': 'Refer Table  1 and 2',
-        'C45': 'Refer Table  1 and 2',
-        'C46': 'Refer Table  1 and 2',
-        # Bearing/pedestal cracks
-        'C52': _v('sub_cracks'),
-        # Superstructure cross-refs
-        'C59': 'Refer Table  3 and 4',
-        'C60': d.get('superstructure_type') or None,
-        'C61': 'Refer Table  3 and 4',
-        'C62': 'Refer Table  3 and 4',
-        'C63': 'Refer Table  3 and 4',
-        'C64': 'Refer Table  3 and 4',
+
+        # ── Section 5 — Protective Works ─────────────────────────────────────
+        'C21': _v('prot_type'),
+        'C22': _v('prot_damage_layout'),
+        'C23': _v('prot_slope_pitching'),
+        'C24': _v('prot_floor_protection'),
+        'C25': _v('prot_scour_extent'),
+        'C26': _v('prot_reserve_stone'),
+        'C27': _v('prot_other'),
+
+        # ── Section 6 — Waterway ──────────────────────────────────────────────
+        'C28': _v('waterway_obs'),
+        'C29': _v('waterway_obstruction'),
+        'C30': _v('waterway_scour'),
+        'C31': _v('waterway_flow'),
+        'C32': _v('waterway_flood_level'),
+        'C33': _v('waterway_afflux'),
+        'C34': _v('waterway_adequacy'),
+        'C35': _v('waterway_other'),
+
+        # ── Section 7 — Foundations ───────────────────────────────────────────
+        'C36': _v('foundations_obs'),
+        'C37': _v('foundations_settlement'),
+        'C38': _v('foundations_cracking'),
+        'C39': _v('foundations_floating'),
+        'C40': _v('foundations_subway'),
+        'C41': _v('foundations_other'),
+
+        # ── Section 8 — Substructure (no hardcoded cross-refs) ───────────────
+        'C42': _v('sub_section_obs'),
+        'C43': _v('sub_drainage_backfill'),
+        'C44': _v('sub_cracking_obs'),
+        'C45': _v('sub_subway_obs'),
+        'C46': _v('sub_other_obs'),
+
+        # ── Section 9 — Bearings ──────────────────────────────────────────────
+        'C48': _v('bear_metallic_type'),
+        'C49': _v('bear_metallic_condition'),
+        'C50': _v('bear_metallic_functioning'),
+        'C51': _v('bear_metallic_greasing'),
+        'C52': _v('bear_pedestal_cracks'),
+        'C53': _v('bear_metallic_anchor'),
+        'C54': _v('bear_metallic_other'),
+        'C55': _v('bear_elastomeric_type'),
+        'C56': _v('bear_pad_condition'),
+        'C57': _v('bear_cleanliness'),
+        'C58': _v('bear_elastomeric_other'),
+
+        # ── Section 10 — Superstructure (no hardcoded cross-refs) ────────────
+        'C59': _v('super_section_obs'),
+        'C60': _v('superstructure_type'),
+        'C61': _v('super_spalling_obs'),
+        'C62': _v('super_cracking_obs'),
+        'C63': _v('super_corrosion_obs'),
+        'C64': _v('super_vehicle_damage'),
+        'C65': _v('super_articulation'),
+        'C66': _v('super_vibration'),
+        'C67': _v('super_deflection'),
+        'C68': _v('super_anchorage_cracks'),
+        'C69': _v('super_hinge_deflection'),
+        'C70': _v('steel_obs'),
+        'C79': _v('masonry_obs'),
+        'C86': _v('timber_obs'),
+
+        # ── Section 11 — Expansion Joints ────────────────────────────────────
+        'C92': _v('exp_jt_functioning'),
+        'C93': _v('exp_jt_sealing'),
+        'C94': _v('exp_jt_fixing'),
+        'C95': _v('exp_jt_sliding_plate'),
+        'C96': _v('exp_jt_locking'),
+        'C97': _v('exp_jt_debris'),
+        'C98': _v('exp_jt_rattling'),
+        'C99': _v('exp_jt_other'),
+
+        # ── Section 12 — Wearing Coat ─────────────────────────────────────────
+        'C100': _v('wear_coat_type'),
+        'C101': _v('wear_coat_surface'),
+        'C102': _v('wear_coat_evidence'),
+
+        # ── Section 13 — Drainage Spouts ─────────────────────────────────────
+        'C103': _v('drain_type'),
+        'C104': _v('drain_clogging'),
+        'C105': _v('drain_projection'),
+        'C106': _v('drain_adequacy'),
+        'C107': _v('drain_subway'),
+        'C108': _v('drain_other'),
+
+        # ── Section 14 — Handrail ─────────────────────────────────────────────
+        'C110': _v('handrail_condition'),
+        'C111': _v('handrail_collision'),
+        'C112': _v('handrail_alignment'),
+
+        # ── Section 15 — Footpath ─────────────────────────────────────────────
+        'C114': _v('footpath_condition'),
+        'C115': _v('footpath_missing_slab'),
+        'C116': _v('footpath_other'),
+
+        # ── Section 16 — Utilities ────────────────────────────────────────────
+        'C117': _v('utilities_obs'),
+        'C118': _v('util_water_leakage'),
+        'C119': _v('util_cable_damage'),
+        'C120': _v('util_lighting'),
+        'C121': _v('util_other_damage'),
+
+        # ── Section 17 — Bridge Number ────────────────────────────────────────
+        'C123': _v('bridge_num_condition'),
+
+        # ── Section 18 — Aesthetics ───────────────────────────────────────────
+        'C125': _v('aesthetics_intrusion'),
+
+        # ── Section 19 — Maintenance History ─────────────────────────────────
+        'C126': _v('maintenance_history'),
+
+        # ── Overall Condition (unlabelled row 127) ────────────────────────────
+        'C127': _v('overall_condition_visual'),
+
+        # ── Section 20 — Recommendations: intentionally not written ──────────
+        # Engineer fills this cell manually.
     }
     for addr, val in fields.items():
         try:
@@ -433,9 +549,9 @@ def _fill_appendix_c(wb, d):
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
     from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
 
-    ws = _find_sheet(wb, 'appendix-c')
+    ws = _find_sheet(wb, 'appendix - photos')
     if ws is None:
-        print("AMC PHOTO: Appendix-C sheet not found, skipping photos.")
+        print("AMC PHOTO: Appendix - Photos sheet not found, skipping photos.")
         return []
 
     photos      = d.get('photos', [])

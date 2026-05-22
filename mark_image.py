@@ -1,6 +1,6 @@
 # mark_image.py — Use Claude Vision to locate defect; returns coordinates only.
 # The circle is added as an editable Word DrawingML shape in report_gen.py.
-import base64, os
+import base64, os, re
 import anthropic
 
 client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
@@ -73,9 +73,14 @@ def get_defect_coords(img_bytes: bytes, caption: str):
         )
 
         raw = response.content[0].text.strip()
-        x_str, y_str = raw.split(',')
-        x_pct = max(0.0, min(1.0, float(x_str.strip()) / 100))
-        y_pct = max(0.0, min(1.0, float(y_str.strip()) / 100))
+        # Extract the first two integers from the response — handles extra words,
+        # spaces, or punctuation Claude occasionally adds despite the strict prompt.
+        nums = re.findall(r'\d+', raw)
+        if len(nums) < 2:
+            print(f"DEFECT COORDS: unexpected response {raw!r} for: {caption[:60]}")
+            return None
+        x_pct = max(0.0, min(1.0, float(nums[0]) / 100))
+        y_pct = max(0.0, min(1.0, float(nums[1]) / 100))
         print(f"DEFECT COORDS: ({x_pct:.2f}, {y_pct:.2f}) for: {caption[:60]}")
         return (x_pct, y_pct)
 

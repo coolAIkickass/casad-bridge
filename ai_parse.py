@@ -946,8 +946,12 @@ def parse_inspection(session: dict) -> dict:
 
     result['photo_categories'] = cats
 
-    # Locate defect coordinates in damage photos — sequential, rate-limit safe
-    photo_coords = _detect_defect_coords(photo_paths, photo_descriptions, cats)
+    # Locate defect coordinates in damage photos — sequential, rate-limit safe.
+    # Use AI-generated titles as descriptions: they are always populated by Claude
+    # even when the inspector sent a photo without a caption, fixing the common case
+    # where _find_photo_description returns '' for batched uncaptioned photos.
+    coord_descs = [t if t else d for t, d in zip(titles, photo_descriptions)]
+    photo_coords = _detect_defect_coords(photo_paths, coord_descs, cats)
     result['photo_coords'] = [photo_coords.get(p) for p in photo_paths]
 
     print(f"PHOTOS injected: {photo_paths}", flush=True)
@@ -1058,8 +1062,12 @@ def parse_inspection_excel(session: dict) -> dict:
 
     result['photo_categories'] = cats
 
-    # Locate defect coordinates in damage photos — sequential, rate-limit safe
-    photo_coords = _detect_defect_coords(photo_paths, photo_descriptions, cats)
+    # Locate defect coordinates in damage photos — sequential, rate-limit safe.
+    # Use AI-generated titles as descriptions: they are always populated by Claude
+    # even when the inspector sent a photo without a caption, fixing the common case
+    # where _find_photo_description returns '' for batched uncaptioned photos.
+    coord_descs = [t if t else d for t, d in zip(titles, photo_descriptions)]
+    photo_coords = _detect_defect_coords(photo_paths, coord_descs, cats)
     result['photo_coords'] = [photo_coords.get(p) for p in photo_paths]
 
     print(f"EXCEL PHOTOS injected: {photo_paths}", flush=True)

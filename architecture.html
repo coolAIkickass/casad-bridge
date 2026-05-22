@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CASAD Bridge Bot — Architecture & Workflow</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 32px 24px; }
+  h1 { text-align: center; font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 4px; letter-spacing: 0.5px; }
+  .subtitle { text-align: center; font-size: 13px; color: #64748b; margin-bottom: 40px; }
+
+  /* ── SECTION HEADERS ── */
+  .section-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+    color: #64748b; margin-bottom: 10px; padding-left: 4px;
+  }
+
+  /* ── LAYOUT ── */
+  .diagram { display: flex; flex-direction: column; gap: 0; max-width: 960px; margin: 0 auto; }
+
+  /* ── FLOW ROW ── */
+  .flow-row { display: flex; align-items: center; gap: 0; margin-bottom: 0; }
+  .flow-row.centered { justify-content: center; }
+
+  /* ── NODES ── */
+  .node {
+    border-radius: 10px; padding: 10px 14px; font-size: 12px; font-weight: 600;
+    text-align: center; min-width: 110px; line-height: 1.4; position: relative;
+    border: 1.5px solid transparent; white-space: nowrap;
+  }
+  .node.whatsapp   { background: #064e3b; border-color: #10b981; color: #a7f3d0; }
+  .node.meta       { background: #1e1b4b; border-color: #818cf8; color: #c7d2fe; }
+  .node.render     { background: #0c1a2e; border-color: #38bdf8; color: #bae6fd; }
+  .node.flask      { background: #1a0a00; border-color: #f97316; color: #fed7aa; }
+  .node.db         { background: #1e1b4b; border-color: #a78bfa; color: #ddd6fe; }
+  .node.ai         { background: #0c1a1a; border-color: #34d399; color: #a7f3d0; }
+  .node.report     { background: #1a0c0c; border-color: #f87171; color: #fecaca; }
+  .node.state      { background: #111827; border-color: #6b7280; color: #d1d5db; font-size: 11px; }
+  .node.decision   { background: #1a1500; border-color: #fbbf24; color: #fde68a; }
+  .node.output     { background: #0c1a2e; border-color: #38bdf8; color: #bae6fd; }
+  .node.small      { min-width: 80px; padding: 7px 10px; font-size: 11px; }
+  .node .icon      { font-size: 18px; display: block; margin-bottom: 3px; }
+  .node .sub       { font-size: 10px; font-weight: 400; color: #94a3b8; margin-top: 2px; white-space: normal; }
+
+  /* ── ARROWS ── */
+  .arrow { display: flex; align-items: center; padding: 0 4px; }
+  .arrow-h { width: 36px; height: 2px; background: #334155; position: relative; }
+  .arrow-h::after { content: ''; position: absolute; right: -6px; top: -4px; border: 5px solid transparent; border-left-color: #475569; }
+  .arrow-v { display: flex; flex-direction: column; align-items: center; height: 36px; }
+  .arrow-v .line { width: 2px; flex: 1; background: #334155; }
+  .arrow-v .tip  { width: 0; height: 0; border: 5px solid transparent; border-top-color: #475569; }
+  .arrow-label { font-size: 10px; color: #64748b; text-align: center; padding: 2px 6px; white-space: nowrap; }
+
+  /* ── FULL DIAGRAM GRID ── */
+  .full { display: flex; flex-direction: column; align-items: center; gap: 0; }
+
+  /* ── PHASE STRIP ── */
+  .phase {
+    border-radius: 12px; padding: 18px 20px; margin-bottom: 16px;
+    border: 1px solid #1e293b;
+  }
+  .phase.ingress  { background: #0a1628; border-color: #1e3a5f; }
+  .phase.routing  { background: #0a1a0a; border-color: #1a3a1a; }
+  .phase.collect  { background: #1a0f00; border-color: #3a2500; }
+  .phase.generate { background: #1a0a0a; border-color: #3a1010; }
+  .phase-title    { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #64748b; margin-bottom: 12px; }
+
+  /* ── STATE MACHINE ── */
+  .state-machine { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 20px; }
+  .sm-node { border-radius: 8px; padding: 10px 12px; text-align: center; border: 1.5px solid #334155; background: #0f172a; }
+  .sm-node .sm-name { font-size: 12px; font-weight: 700; color: #e2e8f0; }
+  .sm-node .sm-desc { font-size: 10px; color: #64748b; margin-top: 3px; }
+  .sm-node.active-state { border-color: #10b981; background: #022c22; }
+  .sm-node.active-state .sm-name { color: #a7f3d0; }
+  .sm-arrow { text-align: center; font-size: 10px; color: #475569; padding: 2px 0; }
+
+  /* ── COMPONENT GRID ── */
+  .comp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .comp-card { border-radius: 10px; padding: 14px 16px; border: 1px solid #1e293b; }
+  .comp-card.server  { background: #0a1628; border-color: #1e3a5f; }
+  .comp-card.ai-card { background: #041a14; border-color: #065f46; }
+  .comp-card.db-card { background: #0f0a1e; border-color: #2d1b69; }
+  .comp-card .card-title { font-size: 12px; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+  .comp-card .card-item  { font-size: 11px; color: #94a3b8; padding: 3px 0; border-top: 1px solid #1e293b; }
+  .comp-card .card-item:first-of-type { border-top: none; }
+
+  /* ── FLOW TOP LEVEL ── */
+  .top-flow { display: flex; align-items: center; justify-content: center; gap: 0; flex-wrap: nowrap; margin-bottom: 24px; }
+  .connector { display: flex; flex-direction: column; align-items: center; padding: 0 2px; }
+  .c-line { height: 2px; width: 40px; background: #334155; }
+  .c-label { font-size: 9px; color: #475569; margin-top: 3px; white-space: nowrap; }
+  .c-arrow { font-size: 14px; color: #475569; line-height: 1; margin-top: -8px; }
+
+  /* ── REPORT TYPES ── */
+  .report-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .rcard { border-radius: 8px; padding: 10px 12px; border: 1.5px solid; text-align: center; }
+  .rcard.word  { background: #0c1a2e; border-color: #3b82f6; }
+  .rcard.rb    { background: #0c1a1a; border-color: #10b981; }
+  .rcard.amc   { background: #1a0f00; border-color: #f97316; }
+  .rcard .rt   { font-size: 11px; font-weight: 700; }
+  .rcard .rs   { font-size: 10px; color: #64748b; margin-top: 3px; }
+
+  hr.divider { border: none; border-top: 1px solid #1e293b; margin: 24px 0; }
+
+  /* ── LEGEND ── */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin-top: 24px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #94a3b8; }
+  .legend-dot  { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+
+  /* ── DETAIL FLOW ── */
+  .detail-flow { display: flex; flex-direction: column; gap: 0; }
+  .df-row { display: flex; align-items: stretch; gap: 0; }
+  .df-step {
+    border-radius: 8px; padding: 9px 14px; font-size: 11px; font-weight: 600;
+    border: 1.5px solid #334155; background: #0f172a; min-width: 160px; max-width: 200px;
+  }
+  .df-step .ds-num { font-size: 9px; color: #64748b; font-weight: 700; letter-spacing: 0.5px; }
+  .df-step .ds-text { color: #cbd5e1; margin-top: 2px; }
+  .df-step .ds-code { font-size: 10px; color: #7c3aed; font-family: monospace; margin-top: 2px; }
+  .df-step.highlight { border-color: #f97316; background: #1a0f00; }
+  .df-step.highlight .ds-text { color: #fed7aa; }
+  .df-conn { width: 32px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .df-conn-v { display: flex; flex-direction: column; align-items: center; width: 100%; }
+  .df-conn-v .vl { width: 2px; background: #1e293b; flex: 1; min-height: 10px; }
+  .df-conn-v .va { font-size: 14px; color: #334155; line-height: 1; }
+  .df-label { font-size: 10px; color: #475569; align-self: center; padding-left: 8px; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+</style>
+</head>
+<body>
+
+<h1>🌉 CASAD Bridge Inspection Bot — Architecture & Workflow</h1>
+<p class="subtitle">Full system diagram · Trigger: Inspector types "hi" on WhatsApp</p>
+
+<!-- ═══════════════════════════════════════════════════════ -->
+<!-- TOP-LEVEL ARCHITECTURE -->
+<!-- ═══════════════════════════════════════════════════════ -->
+
+<div style="max-width:960px;margin:0 auto;">
+
+  <div class="section-label">System Components</div>
+  <div class="top-flow" style="margin-bottom:12px;">
+
+    <div class="node whatsapp" style="min-width:100px;">
+      <span class="icon">📱</span>
+      WhatsApp
+      <div class="sub">Inspector's phone</div>
+    </div>
+
+    <div class="connector">
+      <div style="display:flex;align-items:center;">
+        <div class="c-line"></div>
+        <div style="font-size:11px;color:#475569;margin:0 4px;">→</div>
+        <div class="c-line"></div>
+      </div>
+      <div class="c-label">HTTPS webhook POST</div>
+    </div>
+
+    <div class="node meta" style="min-width:110px;">
+      <span class="icon">🌐</span>
+      Meta Cloud API
+      <div class="sub">v19.0 · WhatsApp Business</div>
+    </div>
+
+    <div class="connector">
+      <div style="display:flex;align-items:center;">
+        <div class="c-line"></div>
+        <div style="font-size:11px;color:#475569;margin:0 4px;">→</div>
+        <div class="c-line"></div>
+      </div>
+      <div class="c-label">Webhook delivery</div>
+    </div>
+
+    <div class="node render" style="min-width:120px;">
+      <span class="icon">☁️</span>
+      Render.com
+      <div class="sub">Python 3 · Gunicorn</div>
+    </div>
+
+    <div class="connector">
+      <div style="display:flex;align-items:center;">
+        <div class="c-line"></div>
+        <div style="font-size:11px;color:#475569;margin:0 4px;">→</div>
+        <div class="c-line"></div>
+      </div>
+      <div class="c-label">WSGI</div>
+    </div>
+
+    <div class="node flask" style="min-width:100px;">
+      <span class="icon">🐍</span>
+      Flask App
+      <div class="sub">server.py</div>
+    </div>
+
+  </div>
+
+  <div class="top-flow" style="margin-bottom:28px; margin-top:8px;">
+
+    <div class="node flask" style="min-width:100px;">
+      <span class="icon">🐍</span>
+      Flask App
+      <div class="sub">server.py</div>
+    </div>
+
+    <div class="connector">
+      <div style="display:flex;align-items:center;">
+        <div class="c-line"></div>
+        <div style="font-size:11px;color:#475569;margin:0 4px;">⇄</div>
+        <div class="c-line"></div>
+      </div>
+      <div class="c-label">psycopg2 pool (2–10)</div>
+    </div>
+
+    <div class="node db" style="min-width:120px;">
+      <span class="icon">🐘</span>
+      PostgreSQL
+      <div class="sub">Render add-on · persistent</div>
+    </div>
+
+    <div class="connector">
+      <div style="display:flex;align-items:center;">
+        <div class="c-line"></div>
+        <div style="font-size:11px;color:#475569;margin:0 4px;">→</div>
+        <div class="c-line"></div>
+      </div>
+      <div class="c-label">ThreadPool (max 4)</div>
+    </div>
+
+    <div class="node ai" style="min-width:120px;">
+      <span class="icon">🤖</span>
+      Anthropic API
+      <div class="sub">Claude Sonnet 4.6 (stream)</div>
+    </div>
+
+    <div class="connector">
+      <div style="display:flex;align-items:center;">
+        <div class="c-line"></div>
+        <div style="font-size:11px;color:#475569;margin:0 4px;">→</div>
+        <div class="c-line"></div>
+      </div>
+      <div class="c-label">generates</div>
+    </div>
+
+    <div class="node report" style="min-width:100px;">
+      <span class="icon">📄</span>
+      Report File
+      <div class="sub">.docx / .xlsx</div>
+    </div>
+
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- DETAILED STEP-BY-STEP: "hi" FLOW -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+
+  <div class="section-label" style="margin-bottom:16px;">Step-by-step: Inspector types "hi"</div>
+
+  <div class="two-col" style="margin-bottom:28px;">
+
+    <!-- LEFT COLUMN: Steps 1-9 -->
+    <div>
+      <div style="font-size:11px;color:#475569;font-weight:700;margin-bottom:10px;">📨 INGESTION & ROUTING</div>
+
+      <div style="display:flex;flex-direction:column;gap:0;">
+
+        <div class="df-step highlight">
+          <div class="ds-num">STEP 1 — Inspector</div>
+          <div class="ds-text">Types "hi" on WhatsApp</div>
+        </div>
+
+        <div style="display:flex;align-items:center;padding:2px 0 2px 80px;">
+          <div style="width:2px;height:18px;background:#1e293b;"></div>
+        </div>
+
+        <div class="df-step">
+          <div class="ds-num">STEP 2 — Meta Cloud API</div>
+          <div class="ds-text">Delivers POST to <code style="color:#7c3aed;font-size:10px;">/webhook</code></div>
+          <div class="ds-code">parse_payload(request.json)</div>
+        </div>
+
+        <div style="display:flex;align-items:center;padding:2px 0 2px 80px;">
+          <div style="width:2px;height:18px;background:#1e293b;"></div>
+        </div>
+
+        <div class="df-step">
+          <div class="ds-num">STEP 3 — Dedup check</div>
+          <div class="ds-text">msg_id in processed_ids?</div>
+          <div class="ds-code">if msg_id in processed_ids → skip</div>
+        </div>
+
+        <div style="display:flex;align-items:center;padding:2px 0 2px 80px;">
+          <div style="width:2px;height:18px;background:#1e293b;"></div>
+        </div>
+
+        <div class="df-step">
+          <div class="ds-num">STEP 4 — Gratitude check</div>
+          <div class="ds-text">"hi" is not thanks/emoji → pass</div>
+        </div>
+
+        <div style="display:flex;align-items:center;padding:2px 0 2px 80px;">
+          <div style="width:2px;height:18px;background:#1e293b;"></div>
+        </div>
+
+        <div class="df-step">
+          <div class="ds-num">STEP 5 — Session lookup</div>
+          <div class="ds-text">get_session_status(phone)</div>
+          <div class="ds-code">→ None (no active session)</div>
+        </div>
+
+        <div style="display:flex;align-items:center;padding:2px 0 2px 80px;">
+          <div style="width:2px;height:18px;background:#1e293b;"></div>
+        </div>
+
+        <div class="df-step highlight">
+          <div class="ds-num">STEP 6 — New session</div>
+          <div class="ds-text">store_message(msg) creates session row in PostgreSQL</div>
+          <div class="ds-code">status=active, state=format_select</div>
+        </div>
+
+        <div style="display:flex;align-items:center;padding:2px 0 2px 80px;">
+          <div style="width:2px;height:18px;background:#1e293b;"></div>
+        </div>
+
+        <div class="df-step highlight">
+          <div class="ds-num">STEP 7 — Bot responds</div>
+          <div class="ds-text">Sends format selection menu</div>
+          <div class="ds-code">send_message(phone, FORMAT_SELECT_MSG)</div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- RIGHT COLUMN: State machine -->
+    <div>
+      <div style="font-size:11px;color:#475569;font-weight:700;margin-bottom:10px;">🔄 SESSION STATE MACHINE</div>
+
+      <div style="display:flex;flex-direction:column;gap:0;align-items:center;">
+
+        <div class="sm-node" style="width:100%;border-color:#fbbf24;background:#1a1500;">
+          <div class="sm-name" style="color:#fde68a;">format_select</div>
+          <div class="sm-desc">Inspector picks 1/2/3<br>Word · R&B Excel · AMC Excel</div>
+        </div>
+        <div style="font-size:18px;color:#334155;padding:4px;">↓</div>
+
+        <div class="sm-node" style="width:100%;border-color:#10b981;background:#022c22;">
+          <div class="sm-name" style="color:#a7f3d0;">menu</div>
+          <div class="sm-desc">Main menu · options 1–7<br>Waiting for section selection</div>
+        </div>
+        <div style="font-size:18px;color:#334155;padding:4px;">↓  (picks 1)</div>
+
+        <div class="sm-node" style="width:100%;">
+          <div class="sm-name">'1' — bridge_details</div>
+          <div class="sm-desc">Collecting text/audio about bridge<br>→ type "done" to return to menu</div>
+        </div>
+        <div style="font-size:18px;color:#334155;padding:4px;">↓  (picks 2/3)</div>
+
+        <div class="sm-node" style="width:100%;">
+          <div class="sm-name">'2'/'3' — photos</div>
+          <div class="sm-desc">Receiving general / damaged photos<br>Image → JPEG → stored in DB (BYTEA)</div>
+        </div>
+        <div style="font-size:18px;color:#334155;padding:4px;">↓  (picks 6)</div>
+
+        <div class="sm-node" style="width:100%;border-color:#f87171;background:#1a0c0c;">
+          <div class="sm-name" style="color:#fecaca;">confirm_generate → REPORT</div>
+          <div class="sm-desc">ThreadPool submits _generate_report()<br>Claude AI parses → Excel / Word built</div>
+        </div>
+        <div style="font-size:18px;color:#334155;padding:4px;">↓</div>
+
+        <div class="sm-node" style="width:100%;border-color:#38bdf8;background:#0c1a2e;">
+          <div class="sm-name" style="color:#bae6fd;">done</div>
+          <div class="sm-desc">Report sent via WhatsApp<br>Session ended_at stamped</div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- REPORT GENERATION DETAIL -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+
+  <div class="section-label" style="margin-bottom:16px;">Report Generation Pipeline (Option 6)</div>
+
+  <div class="top-flow" style="margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+
+    <div class="node flask" style="min-width:90px;padding:10px;">
+      <div style="font-size:11px;font-weight:700;">get_session()</div>
+      <div class="sub">all messages + images<br>from PostgreSQL</div>
+    </div>
+
+    <div class="connector"><div class="c-line" style="width:24px;"></div><div style="color:#475569;font-size:12px;">→</div><div class="c-line" style="width:24px;"></div></div>
+
+    <div class="node ai" style="min-width:120px;padding:10px;">
+      <div style="font-size:11px;font-weight:700;">Claude Sonnet (stream)</div>
+      <div class="sub">parse_inspection_excel()<br>or parse_inspection()<br>~32k tokens · JSON out</div>
+    </div>
+
+    <div class="connector"><div class="c-line" style="width:24px;"></div><div style="color:#475569;font-size:12px;">→</div><div class="c-line" style="width:24px;"></div></div>
+
+    <div class="node ai" style="min-width:110px;padding:10px;border-color:#059669;">
+      <div style="font-size:11px;font-weight:700;">Claude Haiku</div>
+      <div class="sub">defect coord detection<br>per damage photo<br>(13s delay × N photos)</div>
+    </div>
+
+    <div class="connector"><div class="c-line" style="width:24px;"></div><div style="color:#475569;font-size:12px;">→</div><div class="c-line" style="width:24px;"></div></div>
+
+    <div class="node report" style="min-width:110px;padding:10px;">
+      <div style="font-size:11px;font-weight:700;">build_excel / build_docx</div>
+      <div class="sub">openpyxl / python-docx<br>Template bytes cached<br>Photos 1200×900px</div>
+    </div>
+
+    <div class="connector"><div class="c-line" style="width:24px;"></div><div style="color:#475569;font-size:12px;">→</div><div class="c-line" style="width:24px;"></div></div>
+
+    <div class="node whatsapp" style="min-width:90px;padding:10px;">
+      <div style="font-size:11px;font-weight:700;">send_document()</div>
+      <div class="sub">File delivered to<br>inspector's WhatsApp</div>
+    </div>
+
+  </div>
+
+  <!-- Report types -->
+  <div class="report-grid" style="margin-top:16px;margin-bottom:28px;">
+    <div class="rcard word">
+      <div class="rt" style="color:#93c5fd;">📝 Word (.docx)</div>
+      <div class="rs">python-docx · CASAD template<br>report_gen.py</div>
+    </div>
+    <div class="rcard rb">
+      <div class="rt" style="color:#a7f3d0;">📊 Excel R&B</div>
+      <div class="rs">openpyxl · R&B template<br>report_gen_excel.py</div>
+    </div>
+    <div class="rcard amc">
+      <div class="rt" style="color:#fed7aa;">📊 Excel AMC</div>
+      <div class="rs">openpyxl · AMC template<br>report_gen_excel_amc.py</div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- DATA STORAGE -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+
+  <div class="section-label" style="margin-bottom:16px;">Data Storage (PostgreSQL)</div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:28px;">
+
+    <div style="border-radius:10px;border:1px solid #2d1b69;background:#0f0a1e;padding:16px;">
+      <div style="font-size:12px;font-weight:700;color:#a78bfa;margin-bottom:10px;">🗄 sessions table</div>
+      <div style="font-size:11px;color:#64748b;font-family:monospace;line-height:2;">
+        id SERIAL PRIMARY KEY<br>
+        phone TEXT &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← WhatsApp number<br>
+        status TEXT &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← active / done / exited<br>
+        state TEXT &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← format_select / menu / 1-5<br>
+        photo_count INTEGER<br>
+        report_format TEXT &nbsp;&nbsp;← word / excel_rb / excel_amc<br>
+        started_at TEXT<br>
+        ended_at TEXT<br>
+        report_path TEXT
+      </div>
+    </div>
+
+    <div style="border-radius:10px;border:1px solid #2d1b69;background:#0f0a1e;padding:16px;">
+      <div style="font-size:12px;font-weight:700;color:#a78bfa;margin-bottom:10px;">📨 messages table</div>
+      <div style="font-size:11px;color:#64748b;font-family:monospace;line-height:2;">
+        id SERIAL PRIMARY KEY<br>
+        session_id INTEGER &nbsp;&nbsp;&nbsp;← FK to sessions<br>
+        phone TEXT<br>
+        type TEXT &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← text / audio / image<br>
+        content TEXT &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← transcribed audio / text<br>
+        category TEXT &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← bridge_details / damaged…<br>
+        media_path TEXT<br>
+        image_data BYTEA &nbsp;&nbsp;&nbsp;&nbsp;← full JPEG survives restart<br>
+        seq INTEGER<br>
+        created_at TEXT
+      </div>
+    </div>
+
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- CONCURRENCY MODEL -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+
+  <div class="section-label" style="margin-bottom:16px;">Concurrency Model (10 simultaneous engineers)</div>
+
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:28px;">
+
+    <div style="border-radius:10px;border:1px solid #1e3a5f;background:#0a1628;padding:14px;text-align:center;">
+      <div style="font-size:22px;margin-bottom:6px;">🔀</div>
+      <div style="font-size:11px;font-weight:700;color:#bae6fd;">Webhook Handler</div>
+      <div style="font-size:10px;color:#64748b;margin-top:4px;">Gunicorn workers<br>handle all incoming<br>messages instantly</div>
+    </div>
+
+    <div style="border-radius:10px;border:1px solid #1e3a5f;background:#0a1628;padding:14px;text-align:center;">
+      <div style="font-size:22px;margin-bottom:6px;">⚙️</div>
+      <div style="font-size:11px;font-weight:700;color:#bae6fd;">ThreadPoolExecutor</div>
+      <div style="font-size:10px;color:#64748b;margin-top:4px;">max_workers=4<br>Report generation<br>runs off webhook path</div>
+    </div>
+
+    <div style="border-radius:10px;border:1px solid #2d1b69;background:#0f0a1e;padding:14px;text-align:center;">
+      <div style="font-size:22px;margin-bottom:6px;">🐘</div>
+      <div style="font-size:11px;font-weight:700;color:#ddd6fe;">DB Connection Pool</div>
+      <div style="font-size:10px;color:#64748b;margin-top:4px;">ThreadedConnectionPool<br>min=2 max=10<br>WAL mode enabled</div>
+    </div>
+
+    <div style="border-radius:10px;border:1px solid #065f46;background:#041a14;padding:14px;text-align:center;">
+      <div style="font-size:22px;margin-bottom:6px;">📦</div>
+      <div style="font-size:11px;font-weight:700;color:#a7f3d0;">Template Cache</div>
+      <div style="font-size:10px;color:#64748b;margin-top:4px;">Bytes loaded once<br>at startup<br>io.BytesIO per report</div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- LEGEND -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#064e3b;border:1.5px solid #10b981;"></div>WhatsApp / Inspector</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#1e1b4b;border:1.5px solid #818cf8;"></div>Meta / External API</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#1a0a00;border:1.5px solid #f97316;"></div>Flask App (server.py)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#1e1b4b;border:1.5px solid #a78bfa;"></div>PostgreSQL Database</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#0c1a1a;border:1.5px solid #34d399;"></div>AI / Claude API</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#1a0c0c;border:1.5px solid #f87171;"></div>Report Generation</div>
+  </div>
+
+  <div style="text-align:center;font-size:10px;color:#334155;margin-top:24px;padding-bottom:8px;">
+    CASAD Bridge Inspection Automation · casad-bridge · Generated by Claude
+  </div>
+
+</div>
+
+</body>
+</html>

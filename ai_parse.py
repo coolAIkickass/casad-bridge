@@ -125,10 +125,7 @@ CRITICAL — Exact value preservation (never override):
 - For angles, preserve the exact symbol/code stated (e.g. "Q" means Q — do NOT convert to "Skew").
 - For no_of_spans, list each side separately: "Anupam Road Side: 10 Nos.\nGomtipur Road Side: 10 Nos.\nRailway Portion: 4 Nos."
 - Leave a field as "" (empty string) if the inspector did NOT mention it — never invent or infer values.
-- Fields that must NEVER be self-filled (leave empty if not explicitly stated by the inspector):
-  carriage_width, footpath_width, total_cost, material_consumed, design_agency, construction_agency,
-  loading_standard, pier_cap_width, abutment_width, abutment_cap_width, scour_level, horizontal_force,
-  width_of_piers, cc_of_piers, pier_width_detail, returns_length.
+  This rule applies to EVERY field without exception. Do not fill any field unless the inspector explicitly stated it.
 
 BRIDGE COMPONENT KNOWLEDGE — use this to correctly classify and map observations:
 
@@ -389,6 +386,78 @@ EXCEL_SCHEMA = {
     "date_of_construction_start": "", # date construction started (dd/mm/yyyy)
     "design_agency":             "",  # name of design agency
     "construction_agency":       "",  # name of construction agency
+
+    # ── Appendix-A Section 3 — Hydraulic Parameters (sub-rows 21–31) ─────────
+    "hydraulic_catchment":      "",   # catchment area
+    "hydraulic_discharge":      "",   # designed discharge
+    "hydraulic_hfl":            "",   # designed HFL
+    "hydraulic_ofl":            "",   # ordinary flood level
+    "hydraulic_clearance":      "",   # vertical clearance
+    "hydraulic_lwl":            "",   # low water level
+    "hydraulic_depth":          "",   # depth of flow during HFL
+    "hydraulic_velocity":       "",   # designed velocity of flood
+    "hydraulic_channel_width":  "",   # width of channel at max HFL
+    "hydraulic_spread":         "",   # spread of water at max HFL
+    "hydraulic_bed_level":      "",   # average bed level
+
+    # ── Appendix-A Section 4 — Sub Soil Particulars (sub-rows 34–39) ─────────
+    "subsoil_type":             "",   # type of soil
+    "subsoil_friction":         "",   # angle of internal friction
+    "subsoil_cohesion":         "",   # cohesion "C"
+    "subsoil_silt_factor":      "",   # silt factor
+    "subsoil_bearing_capacity": "",   # safe bearing capacity
+    "subsoil_foundation_level": "",   # actual foundation level from pile cap bottom
+
+    # ── Appendix-A Section 5 — Design & Structural Data (gaps) ──────────────
+    "loading_standard":         "",   # loading standards / seismic coefficient
+    "design_scour_level":       "",   # designed maximum scour level
+    "design_foundation_level":  "",   # designed foundation level from pile cap bottom
+    "substructure_material":    "",   # (i) masonry / mass concrete / RCC
+    "articulation_details":     "",   # (iii) details of articulation
+    "total_load_foundation":    "",   # total load at foundation level
+    "total_horizontal_force":   "",   # total horizontal force at scour level
+    "protection_works":         "",   # details of protection works
+    "model_studies":            "",   # whether model studies conducted
+    "special_design_features":  "",   # details of special design features
+    "settlement_report":        "",   # report of settlement / scour during construction
+
+    # ── Appendix-A Material Consumed (rows 74–77) ─────────────────────────────
+    "material_cement":          "",   # quantity of cement consumed
+    "material_reinforcement":   "",   # quantity of reinforcing steel
+    "material_structural_steel":"",   # quantity of structural steel
+    "material_hts_steel":       "",   # quantity of HTS steel
+
+    # ── Appendix-A Other Data (gaps) ─────────────────────────────────────────
+    "design_drawings":          "",   # design details and drawings reference
+    "special_features":         "",   # special constructional / design features
+    "total_cost":               "",   # total cost of bridge
+    "cost_per_sqm_carriageway": "",   # rate per sq m carriageway
+    "cost_per_sqm_elevation":   "",   # rate per sq m elevation
+    "cost_per_m_length":        "",   # rate per m length
+
+    # ── Appendix-B Section 10 — Steel sub-rows (71–78) ───────────────────────
+    "steel_paint":              "",   # 10.2.1 condition of paint
+    "steel_corrosion":          "",   # 10.2.2 corrosion
+    "steel_vibration":          "",   # 10.2.3 perceptible vibrations
+    "steel_alignment":          "",   # 10.2.4 alignment of members
+    "steel_connections":        "",   # 10.2.5 condition of connections
+    "steel_camber_deflection":  "",   # 10.2.6 camber and deflection
+    "steel_buckling":           "",   # 10.2.7 buckling
+    "steel_cleanliness":        "",   # 10.2.8 cleanliness of members/joints
+
+    # ── Appendix-B Section 10 — Masonry sub-rows (80–85) ────────────────────
+    "masonry_joints":           "",   # 10.3.1 condition of joints/mortar/pointing
+    "masonry_profile":          "",   # 10.3.2 profile / rise of arch
+    "masonry_cracks":           "",   # 10.3.3 cracks
+    "masonry_drainage":         "",   # 10.3.4 drainage of spandrel fillings
+    "masonry_vegetation":       "",   # 10.3.5 growth of vegetation
+    "masonry_other":            "",   # 10.3.6 any other observations
+
+    # ── Appendix-B Section 10 — Timber sub-rows (87–90) ─────────────────────
+    "timber_paint":             "",   # 10.4.1 condition of paint
+    "timber_decay":             "",   # 10.4.2 decay / wear / structural defects
+    "timber_joints":            "",   # 10.4.3 condition of joints / splices
+    "timber_sag":               "",   # 10.4.4 excessive sag
 
     # ── Appendix-B Section 4 — Approaches (individual rows) ──────────────────
     "approach_side_slopes": "",  # 4.2 side slopes condition
@@ -745,6 +814,74 @@ COMBINED STYLES: When a message mixes explicit labels with unlabelled sequential
 use the labelled fields as anchors and infer the positions of unlabelled values relative
 to those anchors using the Pos order above. Always prefer explicit naming over positional
 inference.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+VOICE INSPECTION PARSING — CRITICAL RULES
+
+Field inspectors work from a printed form. They read each row label aloud as a
+self-prompt, then voice their answer. Voice-to-text captures both as one continuous
+string. You must extract ONLY the ANSWER — the part that semantically resolves the
+row's question — not the row label recitation.
+
+The answer is always the concluding, semantically-final part of the input. The row
+label is a prompt; the answer closes it. Do NOT strip words from the answer just
+because they also appear in the label — judge by position and semantic role.
+
+SUB-CASE 1 — Option-list row labels:
+Row labels sometimes list options (e.g. "(i) Masonry, Mass Concrete, RCC" or
+"high level or submersible"). The inspector reads the options while reciting the
+label, then states their chosen answer last.
+Rule: the LAST meaningful item is the answer.
+- "Mezzanary mass concrete concrete RCC"
+  → label offered "Masonry, Mass Concrete, RCC" as options
+  → answer: "RCC"  (final item = chosen option)
+- "type of bridge high level or submersible not applicable"
+  → label offered "high level or submersible" as options
+  → answer: "Not Applicable"  (conclusive phrase overrides all options)
+- "type of bridge high level or submersible high level"
+  → answer: "High Level"  (final item = chosen, even though it also appears in label)
+
+SUB-CASE 2 — Parenthetical hint labels:
+Some row labels contain parenthetical hints describing what to report
+(e.g. "butterfly / square box / wing type etc."). These are descriptors of what
+to look for, NOT part of the answer.
+Rule: extract only the specific measurement, name, or description the inspector
+gives; discard everything matching the parenthetical hint list in the label.
+- "details of returns butterfly square box wing type 75m low garden side 57.5m ellis bridge side"
+  → answer: "75 m Low Garden side + 57.5 m Ellis Bridge side"
+  → do NOT include "butterfly square box wing type"
+
+SUB-CASE 3 — Safe conclusive words (ALWAYS answers, never label content):
+The following are always the inspector's answer regardless of position:
+  "Not Applicable", "Data Not Available", "Not Available", "Absent", "Good",
+  "Fair", "Poor", "Yes", "No", "Not Visible", any numeric measurement
+  (e.g. "6.5 m", "107.575"), specific dates, place names, agency names, and any
+  material name when the label has already listed the options.
+
+SUB-CASE 4 — Consecutive-row reads in one string:
+When the inspector reads two rows back-to-back, the string contains two labels
+and two answers interleaved. Identify them by recognising a second row-label
+phrase appearing after the first answer.
+- "position of surface utilities electric lines their design details and drawings data not available"
+  → surface_utilities = "Electric lines"
+  → design_drawings = "Data Not Available"
+  ("their design details and drawings" is the next row's label)
+
+RULE B — One answer for multiple named rows:
+When the inspector names two or more fields together before giving a single
+answer, fill EVERY named field with that answer.
+- "detail of prestressing and articulation not applicable"
+  → prestressing_details = "Not Applicable"  AND  articulation_details = "Not Applicable"
+- "total load at foundation level total horizontal force at scour level not applicable"
+  → total_load_foundation = "Not Applicable"  AND  total_horizontal_force = "Not Applicable"
+
+RULE C — "Same as above":
+If the inspector says "same as above" or "same", write the literal text
+"Same as above" in that field. Do NOT copy the content of the previous field.
+
+RULE D — No photo or table references in any field:
+Do NOT append "(Photo No.-X)" or "Refer Table 1/2/3/4" to any field.
+All fields must contain only the inspector's plain words, exactly as stated.
 '''
 
 
@@ -1001,18 +1138,16 @@ def parse_inspection_excel(session: dict) -> dict:
     user_content = (
         f"Schema:\n{json.dumps(EXCEL_SCHEMA, indent=2)}\n\n"
         f"Field notes (grouped by section):\n{grouped_notes}\n\n"
-        f"Photo information (use 'reference' value when citing each photo in observation fields):\n"
+        f"Photo information (for photo title generation only):\n"
         f"{json.dumps(photo_info, indent=2)}\n\n"
         f"Photo file paths (in sequence order):\n{json.dumps(photo_paths)}\n\n"
         "For photo_titles: generate a short title (max 10 words) per photo from its description. "
         "photo_titles must have exactly the same count as photo file paths.\n\n"
         "For photo_categories: use the category values from Photo information — do NOT reclassify. "
         "photo_categories must have exactly the same count as photo file paths.\n\n"
-        "For observation fields (ss_*, sub_*, found_*, bearing_*, approach_*, expansion_joint, "
-        "wearing_coat, vegetation): when a defect is observed, append the 'reference' value from "
-        "matching damage photos, e.g. \"Observed (Photo No.-1), (Photo No.-3)\". "
-        "Only reference damage photos (those with a non-null reference). "
-        "Do NOT add references to Absent / Not Visible / NIL / NA fields.\n\n"
+        "CRITICAL: Do NOT append any photo references (e.g. '(Photo No.-1)') or table references "
+        "(e.g. 'Refer Table 1') to ANY observation field. All fields must contain ONLY the "
+        "inspector's plain words — exactly as stated, nothing added.\n\n"
         "For defect matrices: extract per-pier/span observations. Use \"\" (empty string) for any element not mentioned for a given defect type — do NOT write 'Absent'.\n\n"
     )
 

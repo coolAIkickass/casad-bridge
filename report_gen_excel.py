@@ -249,19 +249,40 @@ def _fill_appendix_a(wb, d):
         'C17': _v('angle_of_crossing'),
         'C18': _v('bridge_level_type') or _v('type_of_bridge'),
 
-        # Section 3 — Hydraulic Parameters
+        # Section 3 — Hydraulic Parameters (header + sub-rows 21–31)
         'C20': _v('hydraulic_parameters'),
+        'C21': _v('hydraulic_catchment'),
+        'C22': _v('hydraulic_discharge'),
+        'C23': _v('hydraulic_hfl'),
+        'C24': _v('hydraulic_ofl'),
+        'C25': _v('hydraulic_clearance'),
+        'C26': _v('hydraulic_lwl'),
+        'C27': _v('hydraulic_depth'),
+        'C28': _v('hydraulic_velocity'),
+        'C29': _v('hydraulic_channel_width'),
+        'C30': _v('hydraulic_spread'),
+        'C31': _v('hydraulic_bed_level'),
 
-        # Section 4 — Sub Soil Particulars
+        # Section 4 — Sub Soil Particulars (header + sub-rows 34–39)
         'C33': _v('subsoil_particulars'),
+        'C34': _v('subsoil_type'),
+        'C35': _v('subsoil_friction'),
+        'C36': _v('subsoil_cohesion'),
+        'C37': _v('subsoil_silt_factor'),
+        'C38': _v('subsoil_bearing_capacity'),
+        'C39': _v('subsoil_foundation_level'),
 
         # Section 5 — Design and Structural Data
+        'C42': _v('loading_standard'),
         'C43': _v('superstructure_type') or _v('bridge_type'),
         'C44': _v('span_arrangement') or _v('span_length'),
         'C45': _v('carriage_width'),
         'C46': _v('deck_level'),
+        'C48': _v('design_scour_level'),
+        'C49': _v('design_foundation_level'),
         'C50': _v('foundation_type'),
-        'C52': _v('substructure_type'),
+        'C51': _v('substructure_type'),
+        'C52': _v('substructure_material'),
         'C53': _v('pier_length'),
         'C54': _v('pier_width_detail'),
         'C55': _v('pier_cap_width'),
@@ -270,20 +291,39 @@ def _fill_appendix_a(wb, d):
         'C58': _v('returns_length'),
         'C59': _v('superstructure_type'),
         'C60': _v('prestressing_details'),
+        'C61': _v('articulation_details'),
+        'C62': _v('total_load_foundation'),
+        'C63': _v('total_horizontal_force'),
         'C64': _v('bearing_type_detail'),
         'C65': _v('wearing_coat'),
         'C66': _v('railing_type'),
         'C67': _v('expansion_joint'),
+        'C68': _v('protection_works'),
+        'C69': _v('model_studies'),
+        'C70': _v('special_design_features'),
+        'C71': _v('settlement_report'),
 
-        # Section 7 — Other Data
+        # Material Consumed (rows 74–77)
+        'C74': _v('material_cement'),
+        'C75': _v('material_reinforcement'),
+        'C76': _v('material_structural_steel'),
+        'C77': _v('material_hts_steel'),
+
+        # Other Data (rows 80–91)
         'C80': _fmt_date(d.get('date_of_construction_start')) if d.get('date_of_construction_start') else None,
         'C81': _fmt_date(d.get('date_of_completion')) if d.get('date_of_completion') else None,
         'C82': _v('surface_utilities'),
+        'C83': _v('design_drawings'),
         'C84': _v('ls_sketch'),
+        'C85': _v('special_features'),
+        'C86': _v('total_cost'),
+        'C87': _v('cost_per_sqm_carriageway'),
+        'C88': _v('cost_per_sqm_elevation'),
+        'C89': _v('cost_per_m_length'),
         'C90': _v('design_agency'),
         'C91': _v('construction_agency'),
 
-        # Section 8-9 — Performance & recording date
+        # Performance & recording date
         'C92': _v('performance'),
         'C93': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else None,
     }

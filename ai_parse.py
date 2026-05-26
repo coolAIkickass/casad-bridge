@@ -952,14 +952,36 @@ All fields must contain only the inspector's plain words, exactly as stated.
 
 RULE E — Explicit "next" row terminator:
 Some inspectors say "next" (or its equivalent in their regional language, meaning
-"move to the next row") between rows as a deliberate separator. When this boundary
-word appears between two field answers, treat it as a hard row boundary —
-everything before belongs to the current field, everything after starts a new row.
+"move to the next row") between rows as a deliberate separator.
 Do NOT include the boundary word itself in any field value.
-- "expansion joint clogged next approach slab not applicable"
+
+CASE 1 — Labelled (text after "next" starts with a recognisable row label):
+attribute the answer to that named row as normal.
+  "expansion joint clogged next approach slab not applicable"
   → exp_jt_debris = "Clogged"  |  approach_slab = "Not Applicable"
-- "bearing condition good next wearing coat damaged"
+  "bearing condition good next wearing coat damaged"
   → bear_pad_condition = "Good"  |  wear_coat_surface = "Damaged"
+
+CASE 2 — Value-only (text after "next" does NOT start with any row label):
+treat it as the answer for the NEXT SEQUENTIAL field after the last field filled,
+using the field order defined in the Section mapping guide above.
+  Example — section 10 (Superstructure) context:
+  "PSC box girder next refer table 3 and 4 next refer table 3 and 4 next not applicable"
+  → super_section_obs  = "PSC Box Girder"        (row 10 header — first in section)
+  → super_spalling_obs = "Refer Table 3 and 4"   (row 10.1.1 — next in section order)
+  → super_cracking_obs = "Refer Table 3 and 4"   (row 10.1.2 — next in section order)
+  → super_corrosion_obs = "Not Applicable"        (row 10.1.3 — next in section order)
+
+  Example — section 8 (Substructure) context:
+  "nil next not applicable next good condition"
+  → sub_section_obs       = "Nil"              (section 8 header)
+  → sub_drainage_backfill = "Not Applicable"   (row 8.1 — next)
+  → sub_cracking_obs      = "Good Condition"   (row 8.2 — next)
+
+  Skipping a row: consecutive "next next" (nothing between them) leaves that row blank
+  and advances two positions.
+  "good next next not applicable"
+  → row N = "Good"  |  row N+1 = ""  (skipped)  |  row N+2 = "Not Applicable"
 '''
 
 

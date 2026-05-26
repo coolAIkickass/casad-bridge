@@ -587,6 +587,7 @@ def _fill_appendix_c(wb, d):
     CAPTION_FONT   = Font(name='Times New Roman', size=11, bold=True)
     CAPTION_ALIGN  = Alignment(horizontal='center', vertical='center', wrap_text=True)
     _thin          = Side(style='thin', color='000000')
+    _none          = Side(style=None)
     CAPTION_BORDER = Border(top=_thin, left=_thin, right=_thin, bottom=_thin)
 
     ws._images.clear()
@@ -598,9 +599,19 @@ def _fill_appendix_c(wb, d):
             except Exception:
                 pass
 
+    # Clear template's fixed-interval bottom-border rows (every 25 rows from row 25).
+    # These were designed for a fixed 20-row-per-photo layout and create stray visible
+    # lines when photos don't align with those positions.
+    for sep_row in range(25, 1060, 25):
+        ws.cell(row=sep_row, column=1).border = Border(left=_thin)
+        ws.cell(row=sep_row, column=9).border = Border(right=_thin)
+        for c in range(2, 9):
+            ws.cell(row=sep_row, column=c).border = Border()
+
     ovals     = []
     shape_ctr = 200   # start higher than R&B module to avoid ID collision
 
+    import math as _math
     row = 3
     for path, title, cat, coords in zip(photos, titles, categories, coords_list):
         if not path or not os.path.exists(path):
@@ -620,9 +631,7 @@ def _fill_appendix_c(wb, d):
                 img.resize((new_w, new_h), PILImage.LANCZOS).save(buf, format='JPEG', quality=90)
             buf.seek(0)
 
-            ph_from_row = row - 1
-            # Approximate rows occupied: default row height ~15pt ≈ 20px at 96 dpi
-            import math as _math
+            ph_from_row = row - 1   # 0-indexed anchor row
             rows_occupied = max(10, _math.ceil(new_h / 20))
             ph_to_row     = ph_from_row + rows_occupied
 
@@ -631,11 +640,17 @@ def _fill_appendix_c(wb, d):
             xl_img.height = new_h
             ws.add_image(xl_img, f'A{row}')
 
+            # Draw top border on the first row of this photo block
+            ws.cell(row=row, column=1).border = Border(left=_thin, top=_thin)
+            ws.cell(row=row, column=9).border = Border(right=_thin, top=_thin)
+            for c in range(2, 9):
+                ws.cell(row=row, column=c).border = Border(top=_thin)
+
             # Schedule editable oval if defect coords available
             if coords and not _has_red_markers(path):
                 x_pct, y_pct = coords
                 span_cols = 8
-                span_rows = ph_to_row - ph_from_row   # 20
+                span_rows = ph_to_row - ph_from_row
                 r_cols = max(1, int(span_cols * 0.07))
                 r_rows = max(1, int(span_rows * 0.07))
                 oval_fc = max(0, int(x_pct * span_cols) - r_cols)
@@ -645,7 +660,7 @@ def _fill_appendix_c(wb, d):
                 shape_ctr += 1
                 ovals.append((ws.title, oval_fc, oval_fr, oval_tc, oval_tr, shape_ctr))
 
-            cap_row = ph_to_row + 2
+            cap_row = ph_to_row + 2   # +1 blank gap row, then caption
             try:
                 ws.merge_cells(start_row=cap_row, start_column=1,
                                end_row=cap_row, end_column=8)
@@ -656,6 +671,7 @@ def _fill_appendix_c(wb, d):
             cap_cell.font      = CAPTION_FONT
             cap_cell.alignment = CAPTION_ALIGN
             cap_cell.border    = CAPTION_BORDER
+            ws.cell(row=cap_row, column=9).border = Border(right=_thin)
             ws.row_dimensions[cap_row].height = 28
 
             row = cap_row + 3

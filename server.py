@@ -149,6 +149,18 @@ def webhook():
 
     status = get_session_status(phone)
 
+    # ── Stale session recovery ────────────────────────────────────────────────
+    # If a session was left active (e.g. server restarted mid-generation before
+    # the new snapshot-based fix was deployed), auto-close it when the user
+    # greets us, rather than silently appending to old session data.
+    if status == 'active' and content_lower in ('hi', 'hello', 'start', 'new', '0'):
+        sess_state, _ = get_session_state(phone)
+        # If they're at menu/format_select it's safe to ask; if mid-section,
+        # leave them — they may genuinely want to continue.
+        if sess_state in ('format_select', 'menu', 'confirm_generate', 'confirm_exit'):
+            reset_session(phone)
+            status = None    # treat as new session below
+
     # ── Exit / restart (any state) ────────────────────────────────────────────
     if content_lower in ('7', 'exit', 'restart', 'new'):
         # If no active session or empty session, exit immediately
@@ -223,9 +235,11 @@ def webhook():
     # ── Confirm-generate state: user was warned about missing bridge details ────
     if state == 'confirm_generate':
         if content_lower == '6':
-            set_session_state(phone, 'menu')
+            session_snapshot = get_session(phone)
+            fmt_snapshot = get_report_format(phone)
+            mark_done(phone)
             send_message(phone, "Generating your report now... I'll share it in a few minutes. 📄\n\n_Note: It takes ~1 min / 5 photo to process._")
-            _report_executor.submit(_generate_report, phone)
+            _report_executor.submit(_generate_report, phone, session_snapshot, fmt_snapshot)
             return 'OK', 200
         elif content_lower == '1':
             set_session_state(phone, '1')
@@ -254,8 +268,15 @@ def webhook():
                 )
                 set_session_state(phone, 'confirm_generate')
                 return 'OK', 200
+            # Snapshot session data and close the session NOW — before the async job
+            # starts. This guarantees that if the server restarts mid-generation,
+            # any new messages from the user begin a fresh session instead of
+            # contaminating this one with stale old data.
+            session_snapshot = get_session(phone)
+            fmt_snapshot = get_report_format(phone)
+            mark_done(phone)   # session is closed; generation uses the snapshot
             send_message(phone, "Generating your report now... I'll share it in a few minutes. 📄\n\n_Note: It takes ~1 min / 5 photo to process._")
-            _report_executor.submit(_generate_report, phone)
+            _report_executor.submit(_generate_report, phone, session_snapshot, fmt_snapshot)
             return 'OK', 200
 
         # Valid section selected
@@ -319,11 +340,15 @@ def webhook():
     return 'OK', 200
 
 
-def _generate_report(phone: str) -> None:
+def _generate_report(phone: str, session: dict, fmt: str) -> None:
+    """Generate and send report from a pre-captured session snapshot.
+
+    The session is already closed (mark_done called) before this runs, so any
+    new messages from the user start a fresh session rather than appending to
+    this one.
+    """
     try:
-        fmt     = get_report_format(phone)
         print(f"[REPORT START] phone={phone} fmt={fmt}", flush=True)
-        session = get_session(phone)
         if fmt == 'excel_rb':
             from report_gen_excel import build_excel
             report_json = parse_inspection_excel(session)
@@ -341,7 +366,6 @@ def _generate_report(phone: str) -> None:
         print(f"[REPORT DONE] phone={phone} fmt={fmt} path={out_path}", flush=True)
         send_document(phone, out_path, caption=caption)
         send_message(phone, "✅ Your inspection report is ready. Please check!")
-        mark_done(phone, report_path=out_path)
     except Exception as e:
         import traceback
         print(f"[REPORT ERROR] phone={phone} fmt={fmt} error={e}", flush=True)

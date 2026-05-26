@@ -90,6 +90,13 @@ BRIDGE_DETAILS_PROMPT = (
     "Type *done* once you are finished with this section."
 )
 
+BRIDGE_DETAILS_PROMPT_EXCEL = (
+    "Ok! Please share *Bridge Details*. "
+    "You can use *Next* to clarify you are going to the next input.\n\n"
+    "You can share all details in text or voice note.\n\n"
+    "Type *done* once you are finished with this section."
+)
+
 CATEGORY_MAP = {
     '1': 'bridge_details',
     '2': 'general',
@@ -243,7 +250,9 @@ def webhook():
             return 'OK', 200
         elif content_lower == '1':
             set_session_state(phone, '1')
-            send_message(phone, BRIDGE_DETAILS_PROMPT)
+            _fmt = get_report_format(phone)
+            _bdp = BRIDGE_DETAILS_PROMPT_EXCEL if _fmt in ('excel_rb', 'excel_amc') else BRIDGE_DETAILS_PROMPT
+            send_message(phone, _bdp)
             return 'OK', 200
         else:
             send_message(phone,
@@ -282,7 +291,9 @@ def webhook():
         # Valid section selected
         set_session_state(phone, content_lower)
         if content_lower == '1':
-            send_message(phone, BRIDGE_DETAILS_PROMPT)
+            _fmt = get_report_format(phone)
+            _bdp = BRIDGE_DETAILS_PROMPT_EXCEL if _fmt in ('excel_rb', 'excel_amc') else BRIDGE_DETAILS_PROMPT
+            send_message(phone, _bdp)
         elif content_lower == '4':
             send_message(phone, OBSERVATIONS_PROMPT)
         else:

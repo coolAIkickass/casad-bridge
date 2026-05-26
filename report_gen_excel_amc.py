@@ -564,7 +564,7 @@ def _fill_appendix_c(wb, d):
     as Excel AutoShapes after save.  Returns oval descriptor list.
     """
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
-    from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+
 
     ws = _find_sheet(wb, 'appendix - photos')
     if ws is None:
@@ -627,12 +627,9 @@ def _fill_appendix_c(wb, d):
             ph_to_row     = ph_from_row + rows_occupied
 
             xl_img        = XLImage(buf)
-            xl_img.width  = new_w   # OneCellAnchor respects these dimensions — no stretching
+            xl_img.width  = new_w
             xl_img.height = new_h
-            anchor        = OneCellAnchor()
-            anchor._from  = AnchorMarker(col=0, row=ph_from_row, colOff=0, rowOff=0)
-            xl_img.anchor = anchor
-            ws.add_image(xl_img)
+            ws.add_image(xl_img, f'A{row}')
 
             # Schedule editable oval if defect coords available
             if coords and not _has_red_markers(path):

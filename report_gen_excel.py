@@ -630,7 +630,7 @@ def _fill_appendix_c(wb, d):
                (0-indexed, matching openpyxl/Excel drawing anchor convention)
     """
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
-    from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
+
 
     photos      = d.get('photos', [])
     categories  = d.get('photo_categories', [])
@@ -686,23 +686,17 @@ def _fill_appendix_c(wb, d):
                         buf, format='JPEG', quality=90)
                 buf.seek(0)
 
-                # Photo anchor: rows row-1 → row+19, cols 0 → 8 (0-indexed)
+                import math as _math
                 photo_from_row = row - 1
-                photo_to_row   = row + 19
+                rows_occupied  = max(10, _math.ceil(new_h / 20))
+                photo_to_row   = photo_from_row + rows_occupied
                 photo_from_col = 0
                 photo_to_col   = 8
 
                 xl_img        = XLImage(buf)
                 xl_img.width  = new_w
                 xl_img.height = new_h
-                anchor        = TwoCellAnchor()
-                anchor._from  = AnchorMarker(col=photo_from_col, row=photo_from_row,
-                                              colOff=0, rowOff=0)
-                anchor.to     = AnchorMarker(col=photo_to_col,   row=photo_to_row,
-                                              colOff=0, rowOff=0)
-                anchor.editAs = 'oneCell'
-                xl_img.anchor = anchor
-                ws.add_image(xl_img)
+                ws.add_image(xl_img, f'A{row}')
 
                 # If defect coords available, schedule an editable oval shape
                 if coords and not _has_red_markers(path):

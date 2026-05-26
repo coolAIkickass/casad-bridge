@@ -655,7 +655,7 @@ BRIDGE DETAILS EXTRACTION RULES (critical for Excel Appendix-A accuracy):
 - abutment_width: width of abutment
 - abutment_cap_width: width of abutment cap
 - returns_length: length of return walls / wing walls (e.g. "100 m Shamal side + 70 m Jivraj side = 170 m")
-- substructure_type: the OVERALL structural form of the substructure — e.g. "Straight Pier", "T-Pier", "Portal Frame", "RCC Straight". This is the SHAPE/FORM description, NOT the material. Leave empty if the inspector did not explicitly state the overall structural form.
+- substructure_type: the OVERALL structural form of the substructure — e.g. "Straight Pier", "T-Pier", "Portal Frame", "Hammerhead", "Wall Pier". This is the SHAPE/FORM description, NOT the material. Leave empty if the inspector did not explicitly state the overall structural form. NEVER combine a material name ("RCC") with a row-label word ("Straight") to construct a value like "RCC Straight" — if the inspector only said "RCC" and the next row title begins with "Straight", that "Straight" belongs to the next row label, not to substructure_type.
 - substructure_material: the material selected from the row "(i) Masonry, Mass Concrete, RCC" — just the chosen material, e.g. "RCC", "Masonry", "Mass Concrete". CRITICAL: when the inspector says only "RCC" (or only "Masonry") in the context of the substructure material option-list, fill ONLY substructure_material; do NOT also fill substructure_type with the same value.
 - material_consumed: the section-level answer for the "Material Consumed" header row — typically "Data Not Available" or "As per approved records". Fill when the inspector gives a general response for the whole section rather than listing individual quantities. Do NOT repeat this value in material_cement / material_reinforcement etc.
 - ls_sketch: for "Diagrammatic sketch / give LS of bridge showing span arrangements, bed profile and RLs of salient features and soil profiles on actual bore data". When inspector says "data not applicable" / "not applicable" for this → ls_sketch = "Data Not Applicable". Voice cue: inspector reads "diagrammatic sketch give ls of bridge showing span arrangement bed profile rls...".
@@ -904,6 +904,10 @@ phrase appearing after the first answer.
   (do NOT also fill material_cement / material_reinforcement etc.)
 - "diagrammatic sketch give ls of bridge showing span arrangement bed profile rls ... data not applicable"
   →  ls_sketch = "Data Not Applicable"  (inspector reads row label then gives answer)
+- "type of substructure masonry mass concrete RCC straight length of pier 6 m"
+  → substructure_material = "RCC"  (inspector reads option list "(i) Masonry, Mass Concrete, RCC", picks last = "RCC")
+  → pier_length = "6 m"  (inspector reads next row label "(ii) Straight length of pier", answers "6 m")
+  → substructure_type = ""  (NOT stated; do NOT construct "RCC Straight" from material + next row title)
 
 RULE B — One answer for multiple named rows:
 When the inspector names two or more fields together before giving a single
@@ -986,7 +990,7 @@ def _find_photo_description(messages: list, photo_idx: int,
 
 
 def _group_messages_by_category(messages: list) -> str:
-    """Present messages to Claude grouped by section for clear context."""
+    """Present messages to Claude grouped by section for clear context (Word format)."""
     buckets = {
         'bridge_details':  [],
         'damaged':         [],
@@ -1016,6 +1020,50 @@ def _group_messages_by_category(messages: list) -> str:
     if buckets['recommendations']:
         parts.append("RECOMMENDATIONS (use for Section C fields):\n" +
                      '\n'.join(buckets['recommendations']))
+    if buckets['general']:
+        parts.append("GENERAL SITE NOTES:\n" + '\n'.join(buckets['general']))
+    return '\n\n'.join(parts)
+
+
+def _group_messages_by_category_excel(messages: list) -> str:
+    """Present messages grouped by section for Excel format.
+
+    Damage photo captions must NOT be used to fill any Appendix-A or Appendix-B
+    field — they are labeled accordingly so Claude does not infer observations
+    from them.
+    """
+    buckets = {
+        'bridge_details':  [],
+        'damaged':         [],
+        'observations':    [],
+        'general':         [],
+        'recommendations': [],
+    }
+    for m in messages:
+        cat = m.get('category', '')
+        text = (m.get('content') or '').strip()
+        if text and cat in buckets:
+            buckets[cat].append(text)
+
+    parts = []
+    if buckets['bridge_details']:
+        parts.append("BRIDGE DETAILS (use for Appendix-A fields only):\n" +
+                     '\n'.join(buckets['bridge_details']))
+    if buckets['damaged']:
+        parts.append(
+            "DAMAGE PHOTO CAPTIONS (use ONLY to generate photo_titles — "
+            "do NOT use to populate any Appendix-A or Appendix-B field):\n" +
+            '\n'.join(buckets['damaged'])
+        )
+    if buckets['observations']:
+        parts.append(
+            "INSPECTOR OBSERVATIONS (use for Appendix-B fields — "
+            "write exactly what the inspector stated; do NOT infer or add 'Observed' "
+            "unless the inspector explicitly said it):\n" +
+            '\n'.join(buckets['observations'])
+        )
+    if buckets['recommendations']:
+        parts.append("RECOMMENDATIONS:\n" + '\n'.join(buckets['recommendations']))
     if buckets['general']:
         parts.append("GENERAL SITE NOTES:\n" + '\n'.join(buckets['general']))
     return '\n\n'.join(parts)
@@ -1153,7 +1201,7 @@ def parse_inspection_excel(session: dict) -> dict:
             # Category is set by the menu state at collection time — no AI classification needed
             photo_categories_from_db.append(m.get('category', 'damaged'))
 
-    grouped_notes = _group_messages_by_category(messages)
+    grouped_notes = _group_messages_by_category_excel(messages)
 
     # Assign figure numbers only to damage photos (these are the numbers used in Appendix B)
     fig_counter = 0

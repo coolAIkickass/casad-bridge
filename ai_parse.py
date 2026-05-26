@@ -664,19 +664,30 @@ APPENDIX-B FIELD EXTRACTION (Inspection Observations):
 Map each inspector observation to the most specific matching field. Write the value EXACTLY as given.
 - "Not Applicable", "Absent", "Not Visible", "Good", "Damaged" etc. are all valid values — write them as-is.
 - Each field maps to exactly one row in Appendix-B. Do NOT combine multiple rows into one field.
+- SOURCE RULE: Appendix-B observation fields must come ONLY from the inspector's typed/spoken field notes. NEVER use photo captions or photo descriptions to fill these fields. If a photo shows a crack but the inspector said "Not Applicable" for that row — write "Not Applicable".
 - If the inspector says "Not Applicable" for an entire section (e.g. "waterway not applicable"), put that value ONLY in the section-level field (waterway_obs) — NOT in individual sub-row fields (waterway_obstruction etc.). Each sub-row field must have its own explicit observation to be filled.
 - For substructure section (sub_section_obs) and superstructure section (super_section_obs): if the inspector explicitly says "refer table 1 and 2" or "refer table 3 and 4", copy that text exactly into the field. Do not add these references on your own.
 
 Section mapping guide:
   approach_settlement → 4.1 (pavement surface condition of approaches)
+    Voice pattern example: "state the condition of pavement surface crack rust vegetation"
+    → inspector reads row label "State the condition of pavement surface..." then answers
+    → approach_settlement = "Crack, rust, vegetation"  (extract the answer after the label)
   approach_side_slopes → 4.2 (side slopes)
   approach_erosion → 4.3 (erosion of embankment)
   approach_slab → 4.4 (approach slab)
   approach_geometrics → 4.5 (approach geometrics)
   approach_other → 4.6 (any other specific observations for approaches)
+    IMPORTANT: if inspector says "not applicable" for approach_other, write "Not Applicable".
+    Do NOT fill this field from photo captions or descriptions — only from inspector's spoken/typed notes.
 
   prot_type → 5.1, prot_damage_layout → 5.2, prot_slope_pitching → 5.3,
   prot_floor_protection → 5.4, prot_scour_extent → 5.5, prot_reserve_stone → 5.6, prot_other → 5.7
+  SECTION 5 SPECIAL RULE: Section 5 (Protective Works) has no section-level observation field.
+  If the inspector says "protective works not applicable" or "section 5 not applicable" without
+  giving individual sub-row observations → fill ALL of prot_type, prot_damage_layout,
+  prot_slope_pitching, prot_floor_protection, prot_scour_extent, prot_reserve_stone, prot_other
+  with "Not Applicable". Do NOT put it only in prot_type.
 
   waterway_obs → section 6 header, waterway_obstruction → 6.1, waterway_scour → 6.2,
   waterway_flow → 6.3, waterway_flood_level → 6.4, waterway_afflux → 6.5,
@@ -1148,14 +1159,15 @@ def parse_inspection_excel(session: dict) -> dict:
     fig_counter = 0
     photo_info  = []
     for i, (d, c) in enumerate(zip(photo_descriptions, photo_categories_from_db)):
+        # NOTE: no "reference" key here — observation fields must never contain photo refs.
+        # Only description and category are needed: description for title generation,
+        # category to preserve the inspector's photo classification.
         entry = {"description": d, "category": c}
         if c in ('damage', 'damaged'):
             fig_counter += 1
             entry["figure_no"] = fig_counter
-            entry["reference"]  = f"(Photo No.-{fig_counter})"
         else:
             entry["figure_no"] = None
-            entry["reference"]  = None   # general photos are not referenced in observations
         photo_info.append(entry)
 
     print(f"PARSE EXCEL: {len(messages)} messages, photos={len(photo_paths)}")
@@ -1165,16 +1177,19 @@ def parse_inspection_excel(session: dict) -> dict:
     user_content = (
         f"Schema:\n{json.dumps(EXCEL_SCHEMA, indent=2)}\n\n"
         f"Field notes (grouped by section):\n{grouped_notes}\n\n"
-        f"Photo information (for photo title generation only):\n"
+        f"Photo information (for photo_titles and photo_categories generation ONLY — "
+        f"do NOT use photo descriptions to populate any observation or data field):\n"
         f"{json.dumps(photo_info, indent=2)}\n\n"
         f"Photo file paths (in sequence order):\n{json.dumps(photo_paths)}\n\n"
         "For photo_titles: generate a short title (max 10 words) per photo from its description. "
         "photo_titles must have exactly the same count as photo file paths.\n\n"
         "For photo_categories: use the category values from Photo information — do NOT reclassify. "
         "photo_categories must have exactly the same count as photo file paths.\n\n"
-        "CRITICAL: Do NOT append any photo references (e.g. '(Photo No.-1)') or table references "
-        "(e.g. 'Refer Table 1') to ANY observation field. All fields must contain ONLY the "
-        "inspector's plain words — exactly as stated, nothing added.\n\n"
+        "CRITICAL: Do NOT use photo captions or photo descriptions to fill any observation field "
+        "(approach_*, prot_*, waterway_*, foundations_*, sub_*, ss_*, found_*, etc.). "
+        "Observation fields must contain ONLY the inspector's spoken/typed field notes. "
+        "Do NOT append any photo references (e.g. '(Photo No.-1)') or table references "
+        "(e.g. 'Refer Table 1') to ANY field — ever.\n\n"
         "For defect matrices: extract per-pier/span observations. Use \"\" (empty string) for any element not mentioned for a given defect type — do NOT write 'Absent'.\n\n"
     )
 

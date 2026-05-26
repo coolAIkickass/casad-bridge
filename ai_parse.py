@@ -114,13 +114,16 @@ Convert informal field notes into a structured JSON object matching the CASAD br
 Notes may be in mixed Hindi/English or fragmented.
 Output ONLY valid JSON — no markdown, no explanation, no preamble.
 
+ALWAYS APPLY — Unit and operator normalization (applies to ALL fields, ALL values, no exceptions):
+- "meter / meters / metre / metres" → "m"  (e.g. "6.5 meter" → "6.5 m")
+- "kilometer / kilometres" → "km"
+- "plus" → "+"  (e.g. "6.5 m plus 2.5 m" → "6.5 m + 2.5 m")
+- "minus" → "−"
+- "into" / "times" / "multiplied by" → "×"
+Apply this normalization throughout every extracted value — these are formatting conventions only.
+
 CRITICAL — Exact value preservation (never override):
-- Copy ALL values EXACTLY as the inspector stated. Do NOT paraphrase, abbreviate, rephrase, or translate technical terms.
-- EXCEPTION — always normalize measurement units and mathematical operators, regardless of how the inspector stated them:
-    "meter / meters / metre / metres" → "m"
-    "kilometer / kilometres / km" → "km"
-    "plus" → "+"    "minus" → "−"    "into" / "times" / "multiplied by" → "×"
-  These are formatting conventions, not changes to meaning.
+- Copy ALL values EXACTLY as the inspector stated (after applying unit/operator normalization above). Do NOT paraphrase, abbreviate, rephrase, or translate technical terms.
 - For span lengths and bridge lengths, preserve EXACTLY what the inspector stated — nothing more, nothing less.
   If the inspector stated a full breakdown: "92 + 6 × 25 + 21 + 13 + 63 = 339.53 m" → write that exactly.
   If the inspector stated only a total: "657 m" → write only "657 m" — NEVER derive or expand a math breakdown.

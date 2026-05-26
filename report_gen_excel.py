@@ -678,7 +678,7 @@ def _fill_appendix_c(wb, d):
                         img = img.convert('RGB')
                     # Do NOT burn circle into image — editable shapes injected later
                     w, h  = img.size
-                    scale = min(1.0, 1200 / w, 900 / h)
+                    scale = min(1.0, 520 / w, 400 / h)
                     new_w = int(w * scale)
                     new_h = int(h * scale)
                     buf   = io.BytesIO()

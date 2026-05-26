@@ -588,7 +588,11 @@ def _fill_appendix_c(wb, d):
     CAPTION_ALIGN  = Alignment(horizontal='center', vertical='center', wrap_text=True)
     _thin          = Side(style='thin', color='000000')
     _none          = Side(style=None)
-    CAPTION_BORDER = Border(top=_thin, left=_thin, right=_thin, bottom=_thin)
+    # right=_thin omitted: on a merged A:H anchor, right renders at the internal A/B
+    # column boundary (not at the H/I edge), creating an unwanted line inside the cell.
+    # Column I carries left=_thin instead, which renders at the H/I boundary as the
+    # visible right edge of the merged region.
+    CAPTION_BORDER = Border(top=_thin, left=_thin, bottom=_thin)
 
     ws._images.clear()
     for rng in list(ws.merged_cells.ranges):
@@ -662,6 +666,9 @@ def _fill_appendix_c(wb, d):
                 ovals.append((ws.title, oval_fc, oval_fr, oval_tc, oval_tr, shape_ctr))
 
             cap_row = ph_to_row + 2   # +1 blank gap row, then caption
+            # Clear template border artifacts in B-H before merging
+            for c in range(2, 9):
+                ws.cell(row=cap_row, column=c).border = Border()
             try:
                 ws.merge_cells(start_row=cap_row, start_column=1,
                                end_row=cap_row, end_column=8)
@@ -672,7 +679,8 @@ def _fill_appendix_c(wb, d):
             cap_cell.font      = CAPTION_FONT
             cap_cell.alignment = CAPTION_ALIGN
             cap_cell.border    = CAPTION_BORDER
-            ws.cell(row=cap_row, column=9).border = Border(right=_thin)
+            # left=_thin on col I renders at H/I boundary — the visual right edge of the caption box
+            ws.cell(row=cap_row, column=9).border = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
             ws.row_dimensions[cap_row].height = 28
 
             # Two explicit gap rows so the next photo has visual breathing room

@@ -382,8 +382,10 @@ def _fill_appendix_b(wb, d):
         'C58': _v('bear_elastomeric_other'),
 
         # Section 10 — Superstructure (row 59 = header, RC/PSC 60–69, steel 70, masonry 79, timber 86)
-        'C59': _v('super_section_obs'),
-        'C60': _v('superstructure_type'),
+        # C59 falls back to superstructure_type when AI recorded the type there instead of super_section_obs.
+        # C60 = row 10.1 "RC and PSC members" sub-section label — always blank; superstructure_type is Appendix-A.
+        'C59': _v('super_section_obs') or _v('superstructure_type'),
+        'C60': None,
         'C61': _v('super_spalling_obs'),
         'C62': _v('super_cracking_obs'),
         'C63': _v('super_corrosion_obs'),

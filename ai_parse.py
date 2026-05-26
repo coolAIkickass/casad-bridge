@@ -679,11 +679,19 @@ Map each inspector observation to the most specific matching field. Write the va
 - SOURCE RULE: Appendix-B observation fields must come ONLY from the inspector's typed/spoken field notes. NEVER use photo captions or photo descriptions to fill these fields. If a photo shows a crack but the inspector said "Not Applicable" for that row — write "Not Applicable".
 - If the inspector says "Not Applicable" or "Refer Table X" for an entire section header, put that value ONLY in the section-level field — NOT in any sub-row fields. Each sub-row field must have its own explicit observation to be filled.
 - For substructure section (sub_section_obs) and superstructure section (super_section_obs): if the inspector explicitly says "refer table 1 and 2" or "refer table 3 and 4", copy that text exactly into the field. Do not add these references on your own. Do NOT repeat or cascade that value into sub-rows (sub_spalling_obs, super_spalling_obs, super_cracking_obs, etc.).
-- Section 10 row label contains defect keywords ("spalling", "disintegration", "honeycombing"): when the inspector recites this label and then answers "Refer Table 3 and 4", those defect words are part of the LABEL, not the answer. Fill only super_section_obs = "Refer Table 3 and 4"; leave all 10.1.x sub-row fields empty.
-  Example: "superstructure psc box girder report spalling disintegration honeycombing refer table three and four"
-  → super_section_obs = "Refer Table 3 and 4"
-  → super_spalling_obs = "" (NOT filled — "spalling" was in the row label, not in the answer)
-  → super_cracking_obs = "" (NOT filled)
+- Section 10 HEADER (super_section_obs): when the inspector begins section 10 by stating the type of superstructure (e.g. "superstructure PSC box girder"), record that type in super_section_obs — NOT in superstructure_type. superstructure_type is for Appendix-A only; in Appendix-B section 10, the type stated at the header level IS the super_section_obs value.
+- Section 10 row label contains defect keywords ("spalling", "disintegration", "honeycombing"): when the inspector recites the 10.1.1 label and then answers "Refer Table 3 and 4", those defect words are part of the LABEL, not the answer. Fill only super_section_obs = "Refer Table 3 and 4" when the inspector collapses the entire section into one global answer; leave all 10.1.x sub-row fields empty in that case.
+  Example A — inspector gives individual row answers (most common):
+  "superstructure psc box girder report spalling disintegration honeycombing refer table three and four report cracking refer table 3 and 4 report corrosion of reinforcement refer table 3 and 4"
+  → super_section_obs = "PSC Box Girder"  (type stated at section header)
+  → super_spalling_obs = "Refer Table 3 and 4"  (row 10.1.1 answer)
+  → super_cracking_obs = "Refer Table 3 and 4"  (row 10.1.2 answer)
+  → super_corrosion_obs = "Refer Table 3 and 4"  (row 10.1.3 answer)
+  Example B — inspector collapses entire section into one global answer:
+  "superstructure psc box girder refer table three and four"
+  → super_section_obs = "PSC Box Girder — Refer Table 3 and 4"
+  → super_spalling_obs = ""  (NOT separately filled)
+  → super_cracking_obs = ""  (NOT separately filled)
 
 Section mapping guide:
   approach_settlement → 4.1 (pavement surface condition of approaches)

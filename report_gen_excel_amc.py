@@ -450,8 +450,12 @@ def _fill_appendix_b(wb, d):
         'C58': _v('bear_elastomeric_other'),
 
         # ── Section 10 — Superstructure (no hardcoded cross-refs) ────────────
-        'C59': _v('super_section_obs'),
-        'C60': _v('superstructure_type'),
+        # C59 = section 10 header; fall back to superstructure_type when the AI
+        # recorded the type there rather than in super_section_obs.
+        # C60 = row 10.1 "RC and PSC members" sub-section label — left blank;
+        # superstructure_type is for Appendix-A, not this row.
+        'C59': _v('super_section_obs') or _v('superstructure_type'),
+        'C60': None,
         'C61': _v('super_spalling_obs'),
         'C62': _v('super_cracking_obs'),
         'C63': _v('super_corrosion_obs'),
@@ -691,6 +695,11 @@ def _fill_appendix_c(wb, d):
 
         except Exception as e:
             print(f"AMC PHOTO INSERT FAILED {path}: {e}")
+
+    # Reset sheet view to top-left so the sheet doesn't open at the bottom
+    ws.sheet_view.topLeftCell = 'A1'
+    ws.sheet_view.selection[0].activeCell = 'A1'
+    ws.sheet_view.selection[0].sqref = 'A1'
 
     return ovals
 

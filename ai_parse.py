@@ -943,17 +943,14 @@ Do NOT append "(Photo No.-X)" or "Refer Table 1/2/3/4" to any field.
 All fields must contain only the inspector's plain words, exactly as stated.
 
 RULE E — Explicit "next" row terminator:
-Some inspectors say a boundary word between rows as a deliberate separator to mark
-the end of one answer and the start of the next row label. Treat the following as
-hard row boundaries (do NOT include the boundary word itself in any field value):
-  English  : "next", "next row"
-  Hindi    : "aage", "agla", "आगे", "अगला"
-  Gujarati : "aagal", "aaglu", "આગળ", "આગળ જાઓ"
-When any of these appear between two field answers, everything before the boundary
-belongs to the current field; everything after starts a new row.
+Some inspectors say "next" (or its equivalent in their regional language, meaning
+"move to the next row") between rows as a deliberate separator. When this boundary
+word appears between two field answers, treat it as a hard row boundary —
+everything before belongs to the current field, everything after starts a new row.
+Do NOT include the boundary word itself in any field value.
 - "expansion joint clogged next approach slab not applicable"
   → exp_jt_debris = "Clogged"  |  approach_slab = "Not Applicable"
-- "bearing condition good aage wearing coat damaged"
+- "bearing condition good next wearing coat damaged"
   → bear_pad_condition = "Good"  |  wear_coat_surface = "Damaged"
 '''
 

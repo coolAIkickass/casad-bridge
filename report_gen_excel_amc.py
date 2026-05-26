@@ -649,14 +649,15 @@ def _fill_appendix_c(wb, d):
             # Schedule editable oval if defect coords available
             if coords and not _has_red_markers(path):
                 x_pct, y_pct = coords
-                span_cols = 8
+                # Estimate cols spanned: default col width ~64px at 96dpi
+                span_cols = max(2, min(8, round(new_w / 64)))
                 span_rows = ph_to_row - ph_from_row
-                r_cols = max(1, int(span_cols * 0.07))
-                r_rows = max(1, int(span_rows * 0.07))
-                oval_fc = max(0, int(x_pct * span_cols) - r_cols)
-                oval_tc = min(span_cols, int(x_pct * span_cols) + r_cols)
-                oval_fr = ph_from_row + max(0, int(y_pct * span_rows) - r_rows)
-                oval_tr = ph_from_row + min(span_rows, int(y_pct * span_rows) + r_rows)
+                r_cols = max(1, round(span_cols * 0.10))
+                r_rows = max(1, round(span_rows * 0.08))
+                oval_fc = max(0, round(x_pct * span_cols) - r_cols)
+                oval_tc = min(span_cols, round(x_pct * span_cols) + r_cols)
+                oval_fr = ph_from_row + max(0, round(y_pct * span_rows) - r_rows)
+                oval_tr = ph_from_row + min(span_rows, round(y_pct * span_rows) + r_rows)
                 shape_ctr += 1
                 ovals.append((ws.title, oval_fc, oval_fr, oval_tc, oval_tr, shape_ctr))
 
@@ -673,6 +674,10 @@ def _fill_appendix_c(wb, d):
             cap_cell.border    = CAPTION_BORDER
             ws.cell(row=cap_row, column=9).border = Border(right=_thin)
             ws.row_dimensions[cap_row].height = 28
+
+            # Two explicit gap rows so the next photo has visual breathing room
+            for gap_r in (cap_row + 1, cap_row + 2):
+                ws.row_dimensions[gap_r].height = 20
 
             row = cap_row + 3
 

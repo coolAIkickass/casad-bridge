@@ -116,18 +116,19 @@ Output ONLY valid JSON — no markdown, no explanation, no preamble.
 
 CRITICAL — Exact value preservation (never override):
 - Copy ALL values EXACTLY as the inspector stated. Do NOT paraphrase, abbreviate, rephrase, or translate technical terms.
-- For span lengths and bridge lengths, ALWAYS preserve the COMPLETE mathematical expression EXACTLY as stated — including all addends before the = sign.
-  CORRECT: "92 + 6 × 25 + 21 + 13 + 63 = 339.53 m (Anupam Cinema Road)"
-  WRONG:   "339.53 m (Anupam Cinema Road)"  ← stripping the math is FORBIDDEN
-  WRONG:   "92+6x25+21+13+63=339.53m"       ← must use × not x, preserve spaces
-- total_length and span_arrangement must ALWAYS contain the full expression with all terms, never just the result.
+- For span lengths and bridge lengths, preserve EXACTLY what the inspector stated — nothing more, nothing less.
+  If the inspector stated a full breakdown: "92 + 6 × 25 + 21 + 13 + 63 = 339.53 m" → write that exactly.
+  If the inspector stated only a total: "657 m" → write only "657 m" — NEVER derive or expand a math breakdown.
+  WRONG: deriving "31.5 + 38.5 + 3×31.5 + … = 657 m" when inspector said only "657 m"
+  For formatting: use × not x, preserve spaces around operators.
 - For GPS coordinates, preserve FULL decimal precision as stated (e.g. "23.007695" not "23").
 - For angles, preserve the exact symbol/code stated (e.g. "Q" means Q — do NOT convert to "Skew").
 - For no_of_spans, list each side separately: "Anupam Road Side: 10 Nos.\nGomtipur Road Side: 10 Nos.\nRailway Portion: 4 Nos."
 - Leave a field as "" (empty string) if the inspector did NOT mention it — never invent or infer values.
 - Fields that must NEVER be self-filled (leave empty if not explicitly stated by the inspector):
   carriage_width, footpath_width, total_cost, material_consumed, design_agency, construction_agency,
-  loading_standard, pier_cap_width, abutment_width, scour_level, horizontal_force.
+  loading_standard, pier_cap_width, abutment_width, abutment_cap_width, scour_level, horizontal_force,
+  width_of_piers, cc_of_piers, pier_width_detail, returns_length.
 
 BRIDGE COMPONENT KNOWLEDGE — use this to correctly classify and map observations:
 

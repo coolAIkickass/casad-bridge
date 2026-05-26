@@ -116,6 +116,11 @@ Output ONLY valid JSON — no markdown, no explanation, no preamble.
 
 CRITICAL — Exact value preservation (never override):
 - Copy ALL values EXACTLY as the inspector stated. Do NOT paraphrase, abbreviate, rephrase, or translate technical terms.
+- EXCEPTION — always normalize measurement units and mathematical operators, regardless of how the inspector stated them:
+    "meter / meters / metre / metres" → "m"
+    "kilometer / kilometres / km" → "km"
+    "plus" → "+"    "minus" → "−"    "into" / "times" / "multiplied by" → "×"
+  These are formatting conventions, not changes to meaning.
 - For span lengths and bridge lengths, preserve EXACTLY what the inspector stated — nothing more, nothing less.
   If the inspector stated a full breakdown: "92 + 6 × 25 + 21 + 13 + 63 = 339.53 m" → write that exactly.
   If the inspector stated only a total: "657 m" → write only "657 m" — NEVER derive or expand a math breakdown.
@@ -609,11 +614,17 @@ Extract from bridge details:
 - bridge_title: official full bridge name
 
 BRIDGE DETAILS EXTRACTION RULES (critical for Excel Appendix-A accuracy):
-- no_of_spans: list EVERY side separately with exact counts, e.g.:
-  "Anupam Road Side: 10 Nos.\nGomtipur Road Side: 10 Nos.\nRailway Portion: 4 Nos."
-- total_length / span_arrangement: preserve the EXACT mathematical expression — never simplify, e.g.:
-  "92 + 6 × 25 + 21 + 13 + 63 = 339.53 m (Anupam Cinema Road)\n92 + 5 × 25 + 113 = 330 m (Gomtipur Road)"
-  The inspector stated "92 plus 6 number into 25 meter plus..." — keep this expanded form.
+- no_of_spans: contains ONLY the span count/arrangement description. Stop extracting into this field
+  the moment you encounter a phrase matching the Row 16 label ("length of bridge between decking" /
+  "total length" / "length of bridge"). That phrase and its answer go to total_length only.
+  Approach lengths (e.g. "75 m approach + 57.5 m approach") DO belong inside no_of_spans — they
+  describe span layout.
+  Format using mathematical notation — convert English words to symbols (per the normalization rule):
+    "11 span of 31.5 m plus 38.5 m one span plus three spans of 31.5 m plus four spans of 28 m
+     plus two spans of 32.5 m plus 75 m approach plus 57.5 m another approach"
+    → "11 Spans: 1 × 31.5 m + 1 × 38.5 m + 3 × 31.5 m + 4 × 28 m + 2 × 32.5 m\n75 m approach + 57.5 m approach"
+- total_length / span_arrangement: preserve the EXACT mathematical expression if given; if only a
+  total is given (e.g. "657 m"), write only that — NEVER derive an expansion.
 - superstructure_type: list each part with span range, e.g.:
   "PSC Girder and Deck Slab (RP1 to P8 — Anupam Cinema Side)\nRCC Solid Slab (P5 to BA1 — Gomtipur Side)\nSteel Truss (Railway Portion)"
 - bridge_level_type / type_of_bridge: "High Level" / "ROB" / "Submersible" — NOT the structural type.
@@ -621,8 +632,10 @@ BRIDGE DETAILS EXTRACTION RULES (critical for Excel Appendix-A accuracy):
 - latitude / longitude: preserve FULL decimal precision exactly as stated.
 - cc_of_piers: ONLY the C/C (centre-to-centre) spacing per side, e.g.:
   "25 m (Anupam Cinema side)\n12.5 m (Gomtipur Road Side)"
-- width_of_piers: ONLY the pier width per side, e.g.:
-  "1.25 m (Anupam Cinema side)\n1.2 m (Gomtipur Road Side)"
+- width_of_piers: ONLY populate when the inspector mentions pier width in the context of NUMBER OF
+  SPANS or span layout (e.g. "C/C 25 m, pier width 1.25 m"). If pier width is mentioned only in
+  the substructure section (while describing pier dimensions/type) → put it in pier_width_detail
+  only; leave width_of_piers empty.
 - span_length: legacy combined field — if the inspector gives C/C and pier width together (e.g. "C/C 25m, pier width 1.25m"), populate span_length AND also extract cc_of_piers and width_of_piers separately if distinguishable.
 - hydraulic_parameters: if inspector says "hydraulic parameters not applicable" or similar, output "Not Applicable". For ROBs, this is always "Not Applicable".
 - subsoil_particulars: if inspector says "as per approved GAD" or "as per approved design", output exactly that phrase. Leave empty if not mentioned.

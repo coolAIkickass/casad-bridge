@@ -429,13 +429,15 @@ EXCEL_SCHEMA = {
     "special_design_features":  "",   # details of special design features
     "settlement_report":        "",   # report of settlement / scour during construction
 
-    # ── Appendix-A Material Consumed (rows 74–77) ─────────────────────────────
+    # ── Appendix-A Material Consumed (row 73 header + rows 74–77) ────────────
+    "material_consumed":        "",   # section-level: "Data Not Available" or similar
     "material_cement":          "",   # quantity of cement consumed
     "material_reinforcement":   "",   # quantity of reinforcing steel
     "material_structural_steel":"",   # quantity of structural steel
     "material_hts_steel":       "",   # quantity of HTS steel
 
-    # ── Appendix-A Other Data (gaps) ─────────────────────────────────────────
+    # ── Appendix-A Other Data (row 84 = LS sketch, row 83 = design drawings) ─
+    "ls_sketch":                "",   # diagrammatic sketch / LS of bridge showing span arrangements, bed profile and RLs
     "design_drawings":          "",   # design details and drawings reference
     "special_features":         "",   # special constructional / design features
     "total_cost":               "",   # total cost of bridge
@@ -647,11 +649,16 @@ BRIDGE DETAILS EXTRACTION RULES (critical for Excel Appendix-A accuracy):
 - date_of_construction_start: dd/mm/yyyy format — from "date of starting construction"
 - construction_agency: name of the contractor/construction agency
 - design_agency: name of the design agency
-- pier_width_detail: width of piers (e.g. "1.2 m and 0.6 m") — different from width_of_piers which is used in the spans cell
-- pier_cap_width: width of pier cap
+- pier_width_detail: width of piers (e.g. "1.2 m and 0.6 m") — IMPORTANT: apply unit normalization throughout the ENTIRE value, including every occurrence of "meter" within the string. e.g. "6 meter and 3 meter" → "6 m and 3 m" (BOTH occurrences normalized, not just the first).
+- pier_length: same normalization rule — "6 meter and 3 meter" → "6 m and 3 m"
+- pier_cap_width: same normalization rule — every "meter" in the value → "m"
 - abutment_width: width of abutment
 - abutment_cap_width: width of abutment cap
 - returns_length: length of return walls / wing walls (e.g. "100 m Shamal side + 70 m Jivraj side = 170 m")
+- substructure_type: the OVERALL structural form of the substructure — e.g. "Straight Pier", "T-Pier", "Portal Frame", "RCC Straight". This is the SHAPE/FORM description, NOT the material. Leave empty if the inspector did not explicitly state the overall structural form.
+- substructure_material: the material selected from the row "(i) Masonry, Mass Concrete, RCC" — just the chosen material, e.g. "RCC", "Masonry", "Mass Concrete". CRITICAL: when the inspector says only "RCC" (or only "Masonry") in the context of the substructure material option-list, fill ONLY substructure_material; do NOT also fill substructure_type with the same value.
+- material_consumed: the section-level answer for the "Material Consumed" header row — typically "Data Not Available" or "As per approved records". Fill when the inspector gives a general response for the whole section rather than listing individual quantities. Do NOT repeat this value in material_cement / material_reinforcement etc.
+- ls_sketch: for "Diagrammatic sketch / give LS of bridge showing span arrangements, bed profile and RLs of salient features and soil profiles on actual bore data". When inspector says "data not applicable" / "not applicable" for this → ls_sketch = "Data Not Applicable". Voice cue: inspector reads "diagrammatic sketch give ls of bridge showing span arrangement bed profile rls...".
 
 APPENDIX-B FIELD EXTRACTION (Inspection Observations):
 Map each inspector observation to the most specific matching field. Write the value EXACTLY as given.
@@ -882,6 +889,10 @@ phrase appearing after the first answer.
   → surface_utilities = "Electric lines"
   → design_drawings = "Data Not Available"
   ("their design details and drawings" is the next row's label)
+- "material consumed data not available"  →  material_consumed = "Data Not Available"
+  (do NOT also fill material_cement / material_reinforcement etc.)
+- "diagrammatic sketch give ls of bridge showing span arrangement bed profile rls ... data not applicable"
+  →  ls_sketch = "Data Not Applicable"  (inspector reads row label then gives answer)
 
 RULE B — One answer for multiple named rows:
 When the inspector names two or more fields together before giving a single

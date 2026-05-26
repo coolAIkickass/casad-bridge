@@ -260,7 +260,8 @@ def _fill_appendix_a(wb, d):
         'C70': _v('special_design_features'),
         'C71': _v('settlement_report'),
 
-        # Material Consumed (rows 74–77)
+        # Material Consumed (row 73 header + rows 74–77)
+        'C73': _v('material_consumed'),
         'C74': _v('material_cement'),
         'C75': _v('material_reinforcement'),
         'C76': _v('material_structural_steel'),

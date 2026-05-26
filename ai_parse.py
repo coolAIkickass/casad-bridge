@@ -612,6 +612,18 @@ For defect matrices (defect_sub1, defect_sub2, defect_super1, defect_super2):
 - If a defect IS observed at a pier/span, write the specific description
 - If only one side is mentioned, leave side2 empty list
 
+NUMBER-WORD TO NUMERAL NORMALISATION:
+When the inspector uses word-form numbers in "Table" or "Figure/Picture/Photo" references,
+convert them to digits in the stored value. Apply this to every occurrence in the value.
+Examples:
+  "refer table one and two"        → "Refer Table 1 and 2"
+  "refer table three and four"     → "Refer Table 3 and 4"
+  "refer picture one"              → "Refer Picture 1"
+  "figure one two three"           → "Figure 1, 2, 3"
+  "photo number two"               → "Photo No.-2"
+Mapping: one→1, two→2, three→3, four→4, five→5, six→6, seven→7, eight→8, nine→9, ten→10
+This rule applies only inside table/figure/picture/photo reference phrases, not to other values.
+
 Extract from bridge details:
 - client_name: the government/municipal body that commissioned the inspection
 - project_name: the broader project name (e.g. "Bridge Inspection Work Ahmedabad City")

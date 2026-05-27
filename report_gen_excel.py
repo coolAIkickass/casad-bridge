@@ -327,6 +327,7 @@ def _fill_appendix_b(wb, d):
         'C12': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else None,
 
         # Section 4 — Approaches (row 13 = header, data rows 14–19)
+        'C13': _v('approaches_obs'),
         'C14': _v('approach_settlement'),
         'C15': _v('approach_side_slopes'),
         'C16': _v('approach_erosion'),
@@ -369,6 +370,7 @@ def _fill_appendix_b(wb, d):
         'C46': _v('sub_other_obs'),
 
         # Section 9 — Bearings (row 47 = header, metallic 48–54, elastomeric 55–58)
+        'C47': _v('bearings_obs'),
         'C48': _v('bear_metallic_type'),
         'C49': _v('bear_metallic_condition'),
         'C50': _v('bear_metallic_functioning'),
@@ -400,6 +402,7 @@ def _fill_appendix_b(wb, d):
         'C86': _v('timber_obs'),
 
         # Section 11 — Expansion Joints (row 91 = header, data rows 92–99)
+        'C91': _v('exp_jt_type'),
         'C92': _v('exp_jt_functioning'),
         'C93': _v('exp_jt_sealing'),
         'C94': _v('exp_jt_fixing'),
@@ -423,11 +426,13 @@ def _fill_appendix_b(wb, d):
         'C108': _v('drain_other'),
 
         # Section 14 — Handrail (row 109 = header, data rows 110–112)
+        'C109': _v('handrail_type'),
         'C110': _v('handrail_condition'),
         'C111': _v('handrail_collision'),
         'C112': _v('handrail_alignment'),
 
         # Section 15 — Footpath (row 113 = header, data rows 114–116)
+        'C113': _v('footpath_type'),
         'C114': _v('footpath_condition'),
         'C115': _v('footpath_missing_slab'),
         'C116': _v('footpath_other'),
@@ -440,9 +445,11 @@ def _fill_appendix_b(wb, d):
         'C121': _v('util_other_damage'),
 
         # Section 17 — Bridge Number (row 122 = header, 123 = observation)
+        'C122': _v('bridge_num_obs'),
         'C123': _v('bridge_num_condition'),
 
         # Section 18 — Aesthetics (row 124 = header, 125 = observation)
+        'C124': _v('aesthetics_obs'),
         'C125': _v('aesthetics_intrusion'),
 
         # Section 19 — Maintenance history (row 126)

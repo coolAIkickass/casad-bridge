@@ -470,6 +470,7 @@ EXCEL_SCHEMA = {
     "timber_sag":               "",   # 10.4.4 excessive sag
 
     # ── Appendix-B Section 4 — Approaches (individual rows) ──────────────────
+    "approaches_obs":       "",  # 4 section header (e.g. "Not Applicable")
     "approach_side_slopes": "",  # 4.2 side slopes condition
     "approach_slab":        "",  # 4.4 approach slab condition
     "approach_geometrics":  "",  # 4.5 approach geometrics
@@ -509,6 +510,7 @@ EXCEL_SCHEMA = {
     "sub_other_obs":        "",  # 8.4 any other observation
 
     # ── Appendix-B Section 9 — Bearings ──────────────────────────────────────
+    "bearings_obs":             "",  # 9 section header (general observation)
     "bear_metallic_type":       "",  # 9.1 metallic bearings (type / "Not Applicable")
     "bear_metallic_condition":  "",  # 9.1.1 condition
     "bear_metallic_functioning":"",  # 9.1.2 functioning
@@ -537,6 +539,7 @@ EXCEL_SCHEMA = {
     "timber_obs":            "",  # 10.4 timber members summary
 
     # ── Appendix-B Section 11 — Expansion Joints ─────────────────────────────
+    "exp_jt_type":          "",  # 11 section header / type (e.g. "BTJ", "Asphaltic Plug")
     "exp_jt_functioning":   "",  # 11.1 functioning / gap condition
     "exp_jt_sealing":       "",  # 11.2 sealing material condition
     "exp_jt_fixing":        "",  # 11.3 condition at fixing points
@@ -560,11 +563,13 @@ EXCEL_SCHEMA = {
     "drain_other":          "",  # 13.5 any other
 
     # ── Appendix-B Section 14 — Handrail ─────────────────────────────────────
+    "handrail_type":        "",  # 14 section header / type (e.g. "crash barrier with steel pipe")
     "handrail_condition":   "",  # 14.1 general condition
     "handrail_collision":   "",  # 14.2 collision damage
     "handrail_alignment":   "",  # 14.3 alignment
 
     # ── Appendix-B Section 15 — Footpath ─────────────────────────────────────
+    "footpath_type":        "",  # 15 section header / type (e.g. "RCC slab", "Not Applicable")
     "footpath_condition":   "",  # 15.1 general condition
     "footpath_missing_slab":"",  # 15.2 missing footpath slab
     "footpath_other":       "",  # 15.3 any other observation
@@ -577,7 +582,9 @@ EXCEL_SCHEMA = {
     "util_other_damage":    "",  # 16.4 other utility damage
 
     # ── Appendix-B Section 17-19 & Overall ───────────────────────────────────
+    "bridge_num_obs":         "",  # 17 section header (general observation)
     "bridge_num_condition":   "",  # 17.1 bridge number / painting condition
+    "aesthetics_obs":         "",  # 18 section header (general observation)
     "aesthetics_intrusion":   "",  # 18.1 visual intrusion
     "maintenance_history":    "",  # 19 maintenance done since last inspection
     "overall_condition_visual":"", # overall visual condition (unlabelled row)
@@ -703,6 +710,7 @@ Map each inspector observation to the most specific matching field. Write the va
   → super_cracking_obs = ""  (NOT separately filled)
 
 Section mapping guide:
+  approaches_obs → 4 (section header — e.g. "Not Applicable" if whole section is N/A)
   approach_settlement → 4.1 (pavement surface condition of approaches)
     Voice pattern example: "state the condition of pavement surface crack rust vegetation"
     → inspector reads row label "State the condition of pavement surface..." then answers
@@ -733,6 +741,10 @@ Section mapping guide:
   sub_section_obs → section 8 header, sub_drainage_backfill → 8.1, sub_cracking_obs → 8.2,
   sub_subway_obs → 8.3, sub_other_obs → 8.4
 
+  approaches_obs → section 4 header, approach_settlement → 4.1, approach_side_slopes → 4.2,
+  approach_erosion → 4.3, approach_slab → 4.4, approach_geometrics → 4.5, approach_other → 4.6
+
+  bearings_obs → section 9 header,
   bear_metallic_type → 9.1, bear_metallic_condition → 9.1.1, bear_metallic_functioning → 9.1.2,
   bear_metallic_greasing → 9.1.3, bear_pedestal_cracks → 9.1.4, bear_metallic_anchor → 9.1.5,
   bear_metallic_other → 9.1.6, bear_elastomeric_type → 9.2, bear_pad_condition → 9.2.1,
@@ -743,56 +755,58 @@ Section mapping guide:
   super_vibration → 10.1.6, super_deflection → 10.1.7, super_anchorage_cracks → 10.1.8,
   super_hinge_deflection → 10.1.9, steel_obs → 10.2, masonry_obs → 10.3, timber_obs → 10.4
 
-  exp_jt_functioning → 11.1, exp_jt_sealing → 11.2, exp_jt_fixing → 11.3,
-  exp_jt_sliding_plate → 11.4, exp_jt_locking → 11.5, exp_jt_debris → 11.6,
-  exp_jt_rattling → 11.7, exp_jt_other → 11.8
+  exp_jt_type → section 11 header, exp_jt_functioning → 11.1, exp_jt_sealing → 11.2,
+  exp_jt_fixing → 11.3, exp_jt_sliding_plate → 11.4, exp_jt_locking → 11.5,
+  exp_jt_debris → 11.6, exp_jt_rattling → 11.7, exp_jt_other → 11.8
 
   wear_coat_type → 12, wear_coat_surface → 12.1, wear_coat_evidence → 12.2
 
   drain_type → 13, drain_clogging → 13.1, drain_projection → 13.2,
   drain_adequacy → 13.3, drain_subway → 13.4, drain_other → 13.5
 
-  handrail_condition → 14.1, handrail_collision → 14.2, handrail_alignment → 14.3
-  footpath_condition → 15.1, footpath_missing_slab → 15.2, footpath_other → 15.3
+  handrail_type → section 14 header, handrail_condition → 14.1,
+  handrail_collision → 14.2, handrail_alignment → 14.3
+
+  footpath_type → section 15 header, footpath_condition → 15.1,
+  footpath_missing_slab → 15.2, footpath_other → 15.3
+
   utilities_obs → section 16 header, util_water_leakage → 16.1, util_cable_damage → 16.2,
   util_lighting → 16.3, util_other_damage → 16.4
-  bridge_num_condition → 17.1, aesthetics_intrusion → 18.1
+
+  bridge_num_obs → section 17 header, bridge_num_condition → 17.1
+  aesthetics_obs → section 18 header, aesthetics_intrusion → 18.1
   maintenance_history → 19, overall_condition_visual → overall condition row
 
-  SECTION HEADER RULE (critical — applies to all of Appendix-B):
-  Some sections have a HEADER ROW (section number + section name) with NO fillable
-  observation cell. When the inspector reads the section header and optionally describes
-  the component TYPE (e.g. "handrail crash barrier with steel pipe", "expansion joint BTJ"),
-  that type description goes to NO field — it is context only.
+  SECTION HEADER RULE (applies to ALL sections in Appendix-B):
+  Every section has a header row with a fillable observation cell. When the inspector
+  reads a section header and describes the component TYPE (e.g. "handrail crash barrier
+  with steel pipe", "expansion joint BTJ type"), that type description goes to the
+  section-level header field. Then sub-row answers fill the numbered sub-fields.
   Do NOT route section-header type descriptions to Appendix-A fields like railing_type.
 
-  Sections WITH a fillable section-level TYPE field (type = a JSON field at the header level):
-    Section 12 "Wearing Coat":  wear_coat_type → 12  (inspector says "wearing coat AC/BC/WBM")
-    Section 13 "Drainage":      drain_type → 13      (inspector says "drainage pipe spout type")
-    Section 16 "Utilities":     utilities_obs → 16   (inspector says "utilities — …")
-
-  Sections with NO section-level type field (header context ignored; first fillable row shown):
-    Section 11 "Expansion Joints": first fillable = 11.1 (exp_jt_functioning)
-    Section 14 "Handrail":         first fillable = 14.1 (handrail_condition)
-    Section 15 "Footpath":         first fillable = 15.1 (footpath_condition)
-    Section 17 "Bridge Number":    first fillable = 17.1 (bridge_num_condition)
-    Section 18 "Aesthetics":       first fillable = 18.1 (aesthetics_intrusion)
-
   Voice pattern examples:
-  "handrail crash barrier with steel pipe report general condition good reports damage"
-    → handrail_condition = "Good"    (14.1 — "report general condition" label + "good" answer)
-    → handrail_collision = "Damage"  (14.2 — "reports damage" label + "damage" answer)
-    ["crash barrier with steel pipe" = handrail type context — NOT written to any field]
+  "handrail crash barrier with steel pipe report general condition good reports damage due to collision absent check alignment good"
+    → handrail_type      = "crash barrier with steel pipe"  (14 — section header type)
+    → handrail_condition = "Good"    (14.1 — "report general condition" label)
+    → handrail_collision = "Absent"  (14.2 — "reports damage due to collision" label)
+    → handrail_alignment = "Good"    (14.3 — "check alignment" label)
 
   "expansion joint BTJ type functioning clogged sealing material clogged fixing not visible"
+    → exp_jt_type        = "BTJ"         (11 — section header type)
     → exp_jt_functioning = "Clogged"     (11.1)
     → exp_jt_sealing     = "Clogged"     (11.2)
     → exp_jt_fixing      = "Not Visible" (11.3)
-    ["BTJ type" = expansion joint type context — NOT written to any field]
 
   "footpath RCC slab report general condition damaged"
-    → footpath_condition = "Damaged"  (15.1)
-    ["RCC slab" = footpath type context — NOT written to any field]
+    → footpath_type      = "RCC slab"   (15 — section header type)
+    → footpath_condition = "Damaged"    (15.1)
+
+  "bridge number good"  (no type description, just a general observation at the header)
+    → bridge_num_obs = "Good"  (17 — section header)
+
+  "aesthetics visual intrusion not applicable"
+    → aesthetics_obs        = ""  (no description at section level)
+    → aesthetics_intrusion  = "Not Applicable"  (18.1)
 
   Section 20 (maintenance recommendations): DO NOT fill any field for this — leave blank.
   The engineer fills recommendations manually.

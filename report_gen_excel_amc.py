@@ -395,6 +395,7 @@ def _fill_appendix_b(wb, d):
         'C12': _fmt_date(d.get('date_of_survey')) if d.get('date_of_survey') else None,
 
         # ── Section 4 — Approaches ────────────────────────────────────────────
+        'C13': _v('approaches_obs'),
         'C14': _v('approach_settlement'),
         'C15': _v('approach_side_slopes'),
         'C16': _v('approach_erosion'),
@@ -437,6 +438,7 @@ def _fill_appendix_b(wb, d):
         'C46': _v('sub_other_obs'),
 
         # ── Section 9 — Bearings ──────────────────────────────────────────────
+        'C47': _v('bearings_obs'),
         'C48': _v('bear_metallic_type'),
         'C49': _v('bear_metallic_condition'),
         'C50': _v('bear_metallic_functioning'),
@@ -488,6 +490,7 @@ def _fill_appendix_b(wb, d):
         'C90': _v('timber_sag'),
 
         # ── Section 11 — Expansion Joints ────────────────────────────────────
+        'C91': _v('exp_jt_type'),
         'C92': _v('exp_jt_functioning'),
         'C93': _v('exp_jt_sealing'),
         'C94': _v('exp_jt_fixing'),
@@ -511,11 +514,13 @@ def _fill_appendix_b(wb, d):
         'C108': _v('drain_other'),
 
         # ── Section 14 — Handrail ─────────────────────────────────────────────
+        'C109': _v('handrail_type'),
         'C110': _v('handrail_condition'),
         'C111': _v('handrail_collision'),
         'C112': _v('handrail_alignment'),
 
         # ── Section 15 — Footpath ─────────────────────────────────────────────
+        'C113': _v('footpath_type'),
         'C114': _v('footpath_condition'),
         'C115': _v('footpath_missing_slab'),
         'C116': _v('footpath_other'),
@@ -528,9 +533,11 @@ def _fill_appendix_b(wb, d):
         'C121': _v('util_other_damage'),
 
         # ── Section 17 — Bridge Number ────────────────────────────────────────
+        'C122': _v('bridge_num_obs'),
         'C123': _v('bridge_num_condition'),
 
         # ── Section 18 — Aesthetics ───────────────────────────────────────────
+        'C124': _v('aesthetics_obs'),
         'C125': _v('aesthetics_intrusion'),
 
         # ── Section 19 — Maintenance History ─────────────────────────────────

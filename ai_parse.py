@@ -777,36 +777,65 @@ Section mapping guide:
   aesthetics_obs → section 18 header, aesthetics_intrusion → 18.1
   maintenance_history → 19, overall_condition_visual → overall condition row
 
-  SECTION HEADER RULE (applies to ALL sections in Appendix-B):
-  Every section has a header row with a fillable observation cell. When the inspector
-  reads a section header and describes the component TYPE (e.g. "handrail crash barrier
-  with steel pipe", "expansion joint BTJ type"), that type description goes to the
-  section-level header field. Then sub-row answers fill the numbered sub-fields.
-  Do NOT route section-header type descriptions to Appendix-A fields like railing_type.
+  SECTION HEADER FILL RULE (critical — read carefully):
 
-  Voice pattern examples:
-  "handrail crash barrier with steel pipe report general condition good reports damage due to collision absent check alignment good"
-    → handrail_type      = "crash barrier with steel pipe"  (14 — section header type)
-    → handrail_condition = "Good"    (14.1 — "report general condition" label)
-    → handrail_collision = "Absent"  (14.2 — "reports damage due to collision" label)
-    → handrail_alignment = "Good"    (14.3 — "check alignment" label)
+  The section header field (handrail_type, drain_type, exp_jt_type, bridge_num_obs,
+  footpath_type, etc.) is filled ONLY when the inspector provides a TYPE DESCRIPTION
+  or STANDALONE OBSERVATION **directly after the section name**, BEFORE reading any
+  sub-row cell label.
+
+  The section header field stays BLANK when the inspector reads the section name and
+  immediately reads a sub-row cell label. In that case the following answer goes to
+  the sub-row field, NOT the section header.
+
+  KEY DISCRIMINATOR — is there a sub-row cell label between the section name and the
+  first answer?
+    • Sub-row cell labels are imperative phrases that introduce a question/task:
+      "Report ...", "Check ...", "State ...", "Detail ...", "For X report ...",
+      "Any other ...", "Inspect ...", "Note ..."
+    • If a cell label appears BEFORE the answer → section header = blank, answer → sub-row
+    • If the first word after the section name is a VALUE (not a cell label) → value → section header
+
+  PATTERN A — type description given BEFORE sub-row labels (section header FILLED):
+  "handrail crash barrier with steel pipe report general condition good report damage due to collision absent check alignment good"
+    → handrail_type      = "crash barrier with steel pipe"  ← value before any cell label
+    → handrail_condition = "Good"    (14.1)
+    → handrail_collision = "Absent"  (14.2)
+    → handrail_alignment = "Good"    (14.3)
 
   "expansion joint BTJ type functioning clogged sealing material clogged fixing not visible"
-    → exp_jt_type        = "BTJ"         (11 — section header type)
+    → exp_jt_type        = "BTJ"         ← value before any cell label
     → exp_jt_functioning = "Clogged"     (11.1)
     → exp_jt_sealing     = "Clogged"     (11.2)
     → exp_jt_fixing      = "Not Visible" (11.3)
 
   "footpath RCC slab report general condition damaged"
-    → footpath_type      = "RCC slab"   (15 — section header type)
-    → footpath_condition = "Damaged"    (15.1)
+    → footpath_type      = "RCC slab"  ← value before any cell label
+    → footpath_condition = "Damaged"   (15.1)
 
-  "bridge number good"  (no type description, just a general observation at the header)
-    → bridge_num_obs = "Good"  (17 — section header)
+  PATTERN B — section name only, then IMMEDIATELY a cell label (section header BLANK):
+  "bridge number report condition of painting or number plates data not available"
+    → bridge_num_obs       = ""               ← blank: "Report condition..." is a cell label
+    → bridge_num_condition = "Data Not Available"  (17.1)
 
-  "aesthetics visual intrusion not applicable"
-    → aesthetics_obs        = ""  (no description at section level)
-    → aesthetics_intrusion  = "Not Applicable"  (18.1)
+  "drainage spouts check clogging detail exteriorization damage clogged due to debris check projection good report adequacy yes"
+    → drain_type      = ""                   ← blank: "Check clogging..." is a cell label
+    → drain_clogging  = "Clogged Due to Debris"  (13.1)
+    → drain_projection = "Good"              (13.2)
+    → drain_adequacy   = "Yes"               (13.3)
+
+  PATTERN C — section is entirely N/A, no sub-row labels (section header FILLED):
+  "footpath not applicable"
+    → footpath_type = "Not Applicable"  ← value directly after section name, no cell label
+
+  PATTERN D — sub-row label read but no answer given (inspector skips that sub-row):
+  "bearings metallic bearings not applicable elastomeric bearings check pad condition good"
+    → bear_metallic_type = "Not Applicable"   (9.1 — value directly after sub-section label)
+    → bear_pad_condition = "Good"             (9.2.1)
+  If the inspector reads a cell label aloud but gives NO answer before the next cell label,
+  leave that sub-row field blank — do NOT put the cell label text as the value.
+
+  Do NOT route section-header type descriptions to Appendix-A fields like railing_type.
 
   Section 20 (maintenance recommendations): DO NOT fill any field for this — leave blank.
   The engineer fills recommendations manually.

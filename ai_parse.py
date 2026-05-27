@@ -640,8 +640,14 @@ BRIDGE DETAILS EXTRACTION RULES (critical for Excel Appendix-A accuracy):
     "11 span of 31.5 m plus 38.5 m one span plus three spans of 31.5 m plus four spans of 28 m
      plus two spans of 32.5 m plus 75 m approach plus 57.5 m another approach"
     → "11 Spans: 1 × 31.5 m + 1 × 38.5 m + 3 × 31.5 m + 4 × 28 m + 2 × 32.5 m\n75 m approach + 57.5 m approach"
-- total_length / span_arrangement: preserve the EXACT mathematical expression if given; if only a
-  total is given (e.g. "657 m"), write only that — NEVER derive an expansion.
+- total_length: Section 2 field — total length of the bridge as a simple number (e.g. "657 m").
+  NEVER a mathematical breakdown. Preserve exactly as stated.
+- span_arrangement: Section 5 (c) field — a SEPARATE row from the Section 2 span details. This row
+  accepts either:
+  (a) the full mathematical span breakdown (e.g. "6×25+10=160 m"), OR
+  (b) the literal text "Same as above" when the inspector says "same as above" or "same" (RULE C applies).
+  Do NOT leave this field blank when the inspector states "same as above" for span arrangement.
+  NEVER derive or reconstruct a breakdown — preserve the EXACT expression given.
 - superstructure_type: list each part with span range, e.g.:
   "PSC Girder and Deck Slab (RP1 to P8 — Anupam Cinema Side)\nRCC Solid Slab (P5 to BA1 — Gomtipur Side)\nSteel Truss (Railway Portion)"
 - bridge_level_type / type_of_bridge: "High Level" / "ROB" / "Submersible" — NOT the structural type.
@@ -959,6 +965,17 @@ answer, fill EVERY named field with that answer.
   → prestressing_details = "Not Applicable"  AND  articulation_details = "Not Applicable"
 - "total load at foundation level total horizontal force at scour level not applicable"
   → total_load_foundation = "Not Applicable"  AND  total_horizontal_force = "Not Applicable"
+
+  RULE B EXCEPTION — section header + sub-item:
+  When one of the named labels is a SECTION HEADER (e.g. "Type of sub-structure") and
+  the next label is a SUB-ITEM under it (e.g. "(i) Masonry, Mass Concrete, RCC"), the
+  answer goes ONLY to the sub-item field. The section header itself has no separate answer.
+  - "type of sub-structure (i) masonry mass concrete RCC RCC"
+    → substructure_material = "RCC"  (answer for sub-item (i))
+    → substructure_type = ""  (section header — no standalone answer given)
+  - "type of sub-structure (i) masonry mass concrete RCC not applicable"
+    → substructure_material = "Not Applicable"
+    → substructure_type = ""
 
 RULE C — "Same as above":
 If the inspector says "same as above" or "same", write the literal text

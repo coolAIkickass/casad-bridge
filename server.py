@@ -380,7 +380,13 @@ def _generate_report(phone: str, session: dict, fmt: str) -> None:
         try:
             from checker import check_report, correct_report, log_issues
             print(f"[CHECKER] Running checks on {out_path}", flush=True)
-            check_result = check_report(out_path, report_json, fmt)
+            raw_bd = '\n'.join(
+                m.get('content', '')
+                for m in session.get('messages', [])
+                if m.get('category') == 'bridge_details' and m.get('content')
+            ).strip() or None
+            check_result = check_report(out_path, report_json, fmt,
+                                        raw_bridge_details=raw_bd)
             if check_result.has_issues:
                 n = len(check_result.issues)
                 print(f"[CHECKER] {n} issue(s) found — running corrector", flush=True)

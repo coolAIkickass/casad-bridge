@@ -253,7 +253,7 @@ SCHEMA = {
     "cc_of_piers":          "",    # C/C spacing per side: "25 m (Anupam Cinema side)\n12.5 m (Gomtipur Road Side)"
     "width_of_piers":       "",    # pier width per side: "1.25 m (Anupam Cinema side)\n1.2 m (Gomtipur Road Side)"
     "span_length":          "",    # legacy combined field (C/C + pier widths) — keep for backward compat
-    "span_arrangement":     "",    # EXACT mathematical breakdown: "92+6×25+21+13+63=339.53m (Anupam)..."
+    "span_arrangement":     "",    # EXACT mathematical breakdown: "92+6×25+21+13+63=339.53m" — OR "Same as above"
     "total_length":         "",    # same as span_arrangement — full expression
     "bridge_type":          "",    # structural type (PSC Girder / RCC Slab / Steel Truss)
     "bridge_level_type":    "",    # high level / submersible / ROB — from "type of bridge whether high level..."
@@ -788,17 +788,21 @@ STYLE 2 — SEQUENTIAL VALUES WITH CONNECTOR WORDS (user goes field-by-field wit
   Pos 09  division                 Division Name
   Pos 10  circle                   Circle Name
   Pos 11  no_of_spans              Number of Spans (per side, e.g. "10 Nos.")
+            NOTE: cc_of_piers and width_of_piers are sub-labels within the no_of_spans row,
+            not separate form rows. Only populate them when explicitly stated together with
+            span count (e.g. "10 spans, C/C 25 m, pier width 1.25 m"). They are NEVER
+            reachable via sequential "next" navigation.
   Pos 12  total_length             Total Length of Bridge
-  Pos 13  cc_of_piers              C/C of Piers (centre-to-centre spacing)
-  Pos 14  width_of_piers           Width of Piers
-  Pos 15  angle_of_crossing        Angle of Crossing
-  Pos 16  bridge_level_type        Type: High Level / ROB / Submersible
-  Pos 17  hydraulic_parameters     Hydraulic Parameters ("Not Applicable" for ROB)
-  Pos 18  subsoil_particulars      Sub Soil Particulars ("As per approved GAD" or actual)
-  Pos 19  superstructure_type      Type of Superstructure (PSC Girder / RCC Slab / Steel Truss)
-  Pos 20  span_arrangement         Span Arrangement (full math expression, e.g. "6×25=150 m")
-  Pos 21  carriage_width           Carriage Width (and footpath width if stated together)
-  Pos 22  deck_level               Deck Level (in metres)
+  Pos 13  angle_of_crossing        Angle of Crossing
+  Pos 14  bridge_level_type        Type: High Level / ROB / Submersible
+  Pos 15  hydraulic_parameters     Hydraulic Parameters ("Not Applicable" for ROB)
+  Pos 16  subsoil_particulars      Sub Soil Particulars ("As per approved GAD" or actual)
+  Pos 17  superstructure_type      Type of Superstructure (PSC Girder / RCC Slab / Steel Truss)
+  Pos 18  span_arrangement         Span Arrangement (full math expression, e.g. "6×25=150 m")
+  Pos 19  carriage_width           Carriage Width (and footpath width if stated together)
+  Pos 20  deck_level               Deck Level (in metres)
+  Pos 21  design_scour_level       Designed Maximum Scour Level — form row (f)
+  Pos 22  design_foundation_level  Designed Foundation Level from Pile Cap Bottom — form row (g)
   Pos 23  foundation_type          Type of Foundation (pile / open / well)
   Pos 24  substructure_type        Type of Substructure (RCC pier / masonry abutment etc.)
   Pos 25  pier_length              Length / Height of Piers
@@ -807,17 +811,23 @@ STYLE 2 — SEQUENTIAL VALUES WITH CONNECTOR WORDS (user goes field-by-field wit
   Pos 28  abutment_width           Width of Abutment
   Pos 29  abutment_cap_width       Width of Abutment Cap
   Pos 30  returns_length           Length of Returns / Wing Walls
-  Pos 31  prestressing_details     Details of Prestressing
-  Pos 32  bearing_type_detail      Type of Bearings
-  Pos 33  wearing_coat             Wearing Coat Type
-  Pos 34  railing_type             Type of Railing / Parapet / Crash Barrier
-  Pos 35  expansion_joint          Type of Expansion Joint
-  Pos 36  date_of_construction_start  Date of Starting Construction (dd/mm/yyyy)
-  Pos 37  date_of_completion       Date of Completion (dd/mm/yyyy)
-  Pos 38  surface_utilities        Surface Utilities on Bridge
-  Pos 39  design_agency            Design Agency
-  Pos 40  construction_agency      Construction Agency
-  Pos 41  performance              Overall Performance (Good / Fair / Poor)
+  Pos 31  superstructure_type      (j)(i) Type of superstructure — second occurrence in the form (C59)
+            NOTE: superstructure_type appears TWICE in the form — first at (b) Type of Bridge
+            (Pos 17, C43) and again at (j)(i) Type of superstructure (Pos 31, C59). The inspector
+            says the structural type both times. Map both to superstructure_type — the generator
+            writes the same value to both C43 and C59.
+  Pos 32  prestressing_details     (j)(ii) Details of Prestressing
+  Pos 33  articulation_details     (j)(iii) Details of Articulation
+  Pos 34  bearing_type_detail      Type of Bearings
+  Pos 35  wearing_coat             Wearing Coat Type
+  Pos 36  railing_type             Type of Railing / Parapet / Crash Barrier
+  Pos 37  expansion_joint          Type of Expansion Joint
+  Pos 38  date_of_construction_start  Date of Starting Construction (dd/mm/yyyy)
+  Pos 39  date_of_completion       Date of Completion (dd/mm/yyyy)
+  Pos 40  surface_utilities        Surface Utilities on Bridge
+  Pos 41  design_agency            Design Agency
+  Pos 42  construction_agency      Construction Agency
+  Pos 43  performance              Overall Performance (Good / Fair / Poor)
 
 STYLE 3 — PARTIAL / ABBREVIATED FIELD NAMES (user says a shortened or paraphrased
   version of the official field name; you must still map it to the correct field):
@@ -839,7 +849,8 @@ STYLE 3 — PARTIAL / ABBREVIATED FIELD NAMES (user says a shortened or paraphra
   "total length" / "bridge length" / "length"     → total_length
   "C/C" / "c to c" / "centre to centre" / "c/c of piers" → cc_of_piers
   "pier width" (without "cap" keyword)            → width_of_piers or pier_width_detail
-  "pier cap" / "cap width" / "width of cap"       → pier_cap_width
+  "pier cap" / "cap width" / "width of cap"
+    / "pier gap" / "width of pier gap"             → pier_cap_width
   "abutment cap" / "abutment cap width"           → abutment_cap_width
   "abutment width" / "width of abutment"          → abutment_width
   "angle" / "skew" / "skew angle" / "crossing angle" → angle_of_crossing
@@ -852,11 +863,18 @@ STYLE 3 — PARTIAL / ABBREVIATED FIELD NAMES (user says a shortened or paraphra
   "carriage" / "carriageway" / "carriage width"   → carriage_width
   "footpath" / "footpath width"                   → footpath_width (fill separately)
   "deck level" / "deck"                           → deck_level
+  "designed maximum scour level" / "design scour level"
+    / "maximum scour level"                        → design_scour_level
+  "designed foundation level" / "design foundation level"
+    / "foundation level from pile cap"             → design_foundation_level
   "foundation type" / "type of foundation"        → foundation_type
   "substructure type" / "type of substructure"    → substructure_type
   "pier length" / "height of pier" / "pier height" → pier_length
   "return walls" / "wing walls" / "returns"       → returns_length
-  "prestressing" / "prestress" / "prestress details" → prestressing_details
+  "prestressing" / "prestress" / "prestress details"
+    / "details of prestressing"                    → prestressing_details
+  "articulation" / "articulation details"
+    / "details of articulation"                    → articulation_details
   "bearing type" / "type of bearing" / "bearings" → bearing_type_detail
   "expansion joint" / "EJ" / "EJ type"           → expansion_joint
   "wearing coat" / "WC" / "WC type"              → wearing_coat

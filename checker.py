@@ -472,6 +472,119 @@ def _appendix_b_expected(addr: str, d: dict, fmt: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Rule 5 — Raw input validation (raw_bridge_details → report_json)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# (label pattern lowercase, field_name, Appendix-A cell addr)
+LABEL_FIELD_MAP = [
+    # Section 2 — Spans / geometry
+    ('span arrangement',               'span_arrangement',          'C44'),
+    ('angle of crossing',              'angle_of_crossing',         'C17'),
+    # Section 5 — Design data (commonly missed because not in STYLE 3 mapping)
+    ('designed maximum scour level',   'design_scour_level',        'C48'),
+    ('design scour level',             'design_scour_level',        'C48'),
+    ('maximum scour level',            'design_scour_level',        'C48'),
+    ('designed foundation level',      'design_foundation_level',   'C49'),
+    ('design foundation level',        'design_foundation_level',   'C49'),
+    ('foundation level from pile cap', 'design_foundation_level',   'C49'),
+    # Substructure dimensions
+    ('straight length of pier',        'pier_length',               'C53'),
+    ('pier length',                    'pier_length',               'C53'),
+    ('width of pier gap',              'pier_cap_width',            'C55'),
+    ('pier gap',                       'pier_cap_width',            'C55'),
+    ('width of pier cap',              'pier_cap_width',            'C55'),
+    ('pier cap',                       'pier_cap_width',            'C55'),
+    ('width of abutment cap',          'abutment_cap_width',        'C57'),
+    ('abutment cap',                   'abutment_cap_width',        'C57'),
+    ('width of abutment',              'abutment_width',            'C56'),
+    # Superstructure construction details (sub-section j)
+    ('details of prestressing',        'prestressing_details',      'C60'),
+    ('details of articulation',        'articulation_details',      'C61'),
+    # Agencies / dates
+    ('design agency',                  'design_agency',             'C90'),
+    ('construction agency',            'construction_agency',       'C91'),
+    ('date of completion',             'date_of_completion',        'C81'),
+    ('date of construction',           'date_of_construction_start','C80'),
+]
+
+_NORMALIZE = {
+    'not applicable': 'Not Applicable',
+    'n/a': 'Not Applicable',
+    'data not available': 'Data Not Available',
+    'not available': 'Data Not Available',
+    'same as above': 'Same as above',
+    'absent': 'Absent',
+    'not visible': 'Not Visible',
+    'as per approved gad': 'As per approved GAD',
+}
+_STOP_WORDS = ['next ', ' and then ', '\n']
+
+
+def _extract_value_after_label(raw_text: str, pattern: str) -> Optional[str]:
+    """Extract the value following a label pattern in raw text.
+
+    Conservative: only returns when the result is unambiguous (special phrase
+    or simple numeric measurement). Returns None when uncertain.
+    """
+    import re as _re
+    lower = raw_text.lower()
+    idx = lower.find(pattern)
+    if idx == -1:
+        return None
+    remainder = raw_text[idx + len(pattern):].strip()
+    # Trim at next recognised stop boundary
+    end = len(remainder)
+    for stop in _STOP_WORDS:
+        p = remainder.lower().find(stop)
+        if 0 < p < end:
+            end = p
+    chunk = remainder[:end].strip().rstrip('.,')
+    if not chunk:
+        return None
+    # Match against normalised special values
+    chunk_lower = chunk.lower()
+    for key, val in _NORMALIZE.items():
+        if chunk_lower.startswith(key):
+            return val
+    # Match a simple measurement: number + optional unit
+    m = _re.match(r'^(\d+(?:\.\d+)?)\s*(m|meter|metre|mtr)?\b', chunk, _re.IGNORECASE)
+    if m:
+        num = m.group(1)
+        unit = (m.group(2) or '').lower()
+        return f"{num} m" if unit in ('m', 'meter', 'metre', 'mtr', '') else num
+    # Free-text: return as-is only if short enough to be unambiguous
+    return chunk if len(chunk) <= 80 else None
+
+
+def _check_raw_input(raw_text: str, d: dict, result: CheckResult) -> None:
+    """Rule 5: labels found in raw bridge_details text must have non-null JSON values."""
+    import re as _re
+    lower = raw_text.lower()
+    seen_fields: Set[str] = set()
+    for pattern, field, cell in LABEL_FIELD_MAP:
+        if field in seen_fields:
+            continue
+        if pattern not in lower:
+            continue
+        seen_fields.add(field)
+        if _vj(d, field) is not None:
+            continue  # already populated — no issue
+        extracted = _extract_value_after_label(raw_text, pattern)
+        fixable = extracted is not None and (
+            extracted in _NORMALIZE.values()
+            or bool(_re.match(r'^\d', extracted))
+        )
+        result.issues.append(CheckIssue(
+            severity='warning',
+            rule=5,
+            cell_or_field=f'Appendix-A:{cell}',
+            found='(blank in report_json)',
+            expected=extracted or f'(value after label "{pattern}")',
+            auto_fixable=fixable,
+        ))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Rule 1 — Lost inputs  (Excel)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -735,15 +848,19 @@ def _check_rule4_word(doc, d: dict, result: CheckResult) -> None:
 #  check_report() entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def check_report(report_path: str, report_json: dict, fmt: str) -> CheckResult:
+def check_report(report_path: str, report_json: dict, fmt: str,
+                 raw_bridge_details: Optional[str] = None) -> CheckResult:
     """
-    Run all 4 quality checks on the generated report file.
+    Run all quality checks on the generated report file.
 
     Parameters
     ----------
-    report_path : str   path to the generated .xlsx or .docx
-    report_json : dict  structured JSON produced by ai_parse.py
-    fmt         : str   'excel_rb' | 'excel_amc' | 'word'
+    report_path         : str            path to the generated .xlsx or .docx
+    report_json         : dict           structured JSON produced by ai_parse.py
+    fmt                 : str            'excel_rb' | 'excel_amc' | 'word'
+    raw_bridge_details  : str | None     joined text of all bridge_details messages;
+                                         when provided, Rule 5 (raw input validation)
+                                         is also run
 
     Returns
     -------
@@ -766,6 +883,11 @@ def check_report(report_path: str, report_json: dict, fmt: str) -> CheckResult:
             doc = Document(report_path)
             _check_rule1_word(doc, report_json, result)
             _check_rule4_word(doc, report_json, result)
+
+        # Rule 5 — raw input validation (Excel only; independent of file open)
+        if raw_bridge_details and fmt in ('excel_rb', 'excel_amc'):
+            _check_raw_input(raw_bridge_details, report_json, result)
+
     except Exception as exc:
         print(f'[CHECKER] check_report failed: {exc}', flush=True)
 
@@ -889,6 +1011,14 @@ def _correct_excel(report_path: str, d: dict, fmt: str, issues: List[CheckIssue]
                 elif sheet_tag == 'Appendix-B':
                     ws = _find_ws(wb, 'Appendix-B')
                 if ws is not None:
+                    _write_cell(ws, addr, issue.expected)
+                    issue.was_corrected = True
+                    modified = True
+
+            # ── Rule 5: write value extracted from raw input ─────────────────
+            elif issue.rule == 5:
+                ws = _find_ws(wb, 'Appendix-A')
+                if ws is not None and issue.expected and not issue.expected.startswith('('):
                     _write_cell(ws, addr, issue.expected)
                     issue.was_corrected = True
                     modified = True

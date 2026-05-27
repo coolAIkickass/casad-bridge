@@ -375,6 +375,35 @@ def _generate_report(phone: str, session: dict, fmt: str) -> None:
             out_path    = build_docx(report_json)
             caption     = f"CASAD Bridge Inspection Report — {report_json.get('river_name', '')} / {report_json.get('road_name', '')}"
         print(f"[REPORT DONE] phone={phone} fmt={fmt} path={out_path}", flush=True)
+
+        # ── Quality check and correction (before delivery) ────────────────────
+        try:
+            from checker import check_report, correct_report, log_issues
+            print(f"[CHECKER] Running checks on {out_path}", flush=True)
+            check_result = check_report(out_path, report_json, fmt)
+            if check_result.has_issues:
+                n = len(check_result.issues)
+                print(f"[CHECKER] {n} issue(s) found — running corrector", flush=True)
+                out_path = correct_report(out_path, report_json, fmt, check_result)
+            else:
+                print("[CHECKER] No issues found", flush=True)
+            bridge_name = (report_json.get('bridge_title')
+                           or report_json.get('river_name', 'unknown'))
+            log_issues(check_result, phone, bridge_name, fmt)
+            for issue in check_result.issues:
+                status = 'CORRECTED' if issue.was_corrected else 'OPEN'
+                print(
+                    f"[CHECKER] rule={issue.rule} {issue.severity.upper()} "
+                    f"{issue.cell_or_field} [{status}]",
+                    flush=True,
+                )
+        except Exception as chk_exc:
+            import traceback as _tb
+            print(f"[CHECKER] checker/corrector error (report still delivered): {chk_exc}",
+                  flush=True)
+            _tb.print_exc()
+        # ─────────────────────────────────────────────────────────────────────
+
         send_document(phone, out_path, caption=caption)
         send_message(phone, "✅ Your inspection report is ready. Please check!")
     except Exception as e:

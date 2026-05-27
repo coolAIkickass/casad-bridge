@@ -651,6 +651,9 @@ BRIDGE DETAILS EXTRACTION RULES (critical for Excel Appendix-A accuracy):
 - superstructure_type: list each part with span range, e.g.:
   "PSC Girder and Deck Slab (RP1 to P8 — Anupam Cinema Side)\nRCC Solid Slab (P5 to BA1 — Gomtipur Side)\nSteel Truss (Railway Portion)"
 - bridge_level_type / type_of_bridge: "High Level" / "ROB" / "Submersible" — NOT the structural type.
+  CRITICAL: do NOT infer this from the bridge name or title (e.g. a bridge named "Railway Over Bridge"
+  does NOT mean bridge_level_type = "ROB"). Only fill when the inspector explicitly states the bridge
+  type in their input (e.g. "type of bridge ROB", "high level bridge", "submersible bridge").
 - angle_of_crossing: copy EXACTLY as stated — if inspector says "Q", output "Q" (not "Skew").
 - latitude / longitude: preserve FULL decimal precision exactly as stated.
 - cc_of_piers: ONLY the C/C (centre-to-centre) spacing per side, e.g.:
@@ -755,6 +758,41 @@ Section mapping guide:
   util_lighting → 16.3, util_other_damage → 16.4
   bridge_num_condition → 17.1, aesthetics_intrusion → 18.1
   maintenance_history → 19, overall_condition_visual → overall condition row
+
+  SECTION HEADER RULE (critical — applies to all of Appendix-B):
+  Some sections have a HEADER ROW (section number + section name) with NO fillable
+  observation cell. When the inspector reads the section header and optionally describes
+  the component TYPE (e.g. "handrail crash barrier with steel pipe", "expansion joint BTJ"),
+  that type description goes to NO field — it is context only.
+  Do NOT route section-header type descriptions to Appendix-A fields like railing_type.
+
+  Sections WITH a fillable section-level TYPE field (type = a JSON field at the header level):
+    Section 12 "Wearing Coat":  wear_coat_type → 12  (inspector says "wearing coat AC/BC/WBM")
+    Section 13 "Drainage":      drain_type → 13      (inspector says "drainage pipe spout type")
+    Section 16 "Utilities":     utilities_obs → 16   (inspector says "utilities — …")
+
+  Sections with NO section-level type field (header context ignored; first fillable row shown):
+    Section 11 "Expansion Joints": first fillable = 11.1 (exp_jt_functioning)
+    Section 14 "Handrail":         first fillable = 14.1 (handrail_condition)
+    Section 15 "Footpath":         first fillable = 15.1 (footpath_condition)
+    Section 17 "Bridge Number":    first fillable = 17.1 (bridge_num_condition)
+    Section 18 "Aesthetics":       first fillable = 18.1 (aesthetics_intrusion)
+
+  Voice pattern examples:
+  "handrail crash barrier with steel pipe report general condition good reports damage"
+    → handrail_condition = "Good"    (14.1 — "report general condition" label + "good" answer)
+    → handrail_collision = "Damage"  (14.2 — "reports damage" label + "damage" answer)
+    ["crash barrier with steel pipe" = handrail type context — NOT written to any field]
+
+  "expansion joint BTJ type functioning clogged sealing material clogged fixing not visible"
+    → exp_jt_functioning = "Clogged"     (11.1)
+    → exp_jt_sealing     = "Clogged"     (11.2)
+    → exp_jt_fixing      = "Not Visible" (11.3)
+    ["BTJ type" = expansion joint type context — NOT written to any field]
+
+  "footpath RCC slab report general condition damaged"
+    → footpath_condition = "Damaged"  (15.1)
+    ["RCC slab" = footpath type context — NOT written to any field]
 
   Section 20 (maintenance recommendations): DO NOT fill any field for this — leave blank.
   The engineer fills recommendations manually.

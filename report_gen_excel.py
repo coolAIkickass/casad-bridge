@@ -628,8 +628,11 @@ def _fill_appendix_c(wb, d):
     editable Excel AutoShape ovals via _inject_oval_shapes().
 
     Returns:
-        ovals: list of (sheet_name, from_col, from_row, to_col, to_row, shape_id)
-               (0-indexed, matching openpyxl/Excel drawing anchor convention)
+        ovals: list of (sheet_name, anchor_col, anchor_row, col_off_emu, row_off_emu,
+                        cx_emu, cy_emu, shape_id)
+               anchor_col/row: 0-indexed cell the oval is anchored to (same as image)
+               col_off/row_off: pixel-precise EMU offsets from the anchor cell top-left
+               cx/cy: oval width/height in EMU
     """
     from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 
@@ -703,17 +706,17 @@ def _fill_appendix_c(wb, d):
                 # If defect coords available, schedule an editable oval shape
                 if coords and not _has_red_markers(path):
                     x_pct, y_pct = coords
-                    span_cols = photo_to_col - photo_from_col   # 8
-                    span_rows = photo_to_row - photo_from_row   # 20
-                    # Oval occupies ~14% of photo width/height centred on defect
-                    r_cols = max(1, int(span_cols * 0.07))
-                    r_rows = max(1, int(span_rows * 0.07))
-                    oval_fc = photo_from_col + max(0, int(x_pct * span_cols) - r_cols)
-                    oval_tc = photo_from_col + min(span_cols, int(x_pct * span_cols) + r_cols)
-                    oval_fr = photo_from_row + max(0, int(y_pct * span_rows) - r_rows)
-                    oval_tr = photo_from_row + min(span_rows, int(y_pct * span_rows) + r_rows)
+                    PX = 9525  # pixels → EMU at 96 dpi
+                    r_w = max(20, int(new_w * 0.10))
+                    r_h = max(15, int(new_h * 0.08))
+                    col_off = max(0, int((x_pct * new_w - r_w) * PX))
+                    row_off = max(0, int((y_pct * new_h - r_h) * PX))
+                    cx     = int(2 * r_w * PX)
+                    cy     = int(2 * r_h * PX)
                     shape_ctr[0] += 1
-                    ovals.append((ws.title, oval_fc, oval_fr, oval_tc, oval_tr, shape_ctr[0]))
+                    # Anchor at same cell as image (photo_from_col=0, photo_from_row)
+                    ovals.append((ws.title, photo_from_col, photo_from_row,
+                                  col_off, row_off, cx, cy, shape_ctr[0]))
 
                 cap_row = photo_to_row + 2   # two blank rows below photo block
                 try:
@@ -753,13 +756,14 @@ def _fill_appendix_c(wb, d):
 def _inject_oval_shapes(xlsx_path: str, ovals: list):
     """Inject editable red oval AutoShapes into an already-saved xlsx file.
 
-    ovals: list of (sheet_name, from_col, from_row, to_col, to_row, shape_id)
-           — from_col/from_row/to_col/to_row are 0-indexed Excel drawing anchors.
+    ovals: list of (sheet_name, anchor_col, anchor_row,
+                    col_off_emu, row_off_emu, cx_emu, cy_emu, shape_id)
+           Uses oneCellAnchor (same type as photos) so ovals render on top.
 
     The function:
       1. Opens the xlsx as a ZIP archive.
       2. Resolves each sheet name → its drawing XML file via workbook rels.
-      3. Appends <xdr:twoCellAnchor> oval elements to each drawing.
+      3. Appends <xdr:oneCellAnchor> oval elements to each drawing.
       4. Writes a new xlsx (atomic replace).
     """
     if not ovals:
@@ -777,13 +781,12 @@ def _inject_oval_shapes(xlsx_path: str, ovals: list):
     R   = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
     REL = 'http://schemas.openxmlformats.org/package/2006/relationships'
 
-    def _oval_xml(sid, fc, fr, tc, tr):
+    def _oval_xml(sid, col, row, col_off, row_off, cx, cy):
         return (
-            f'<xdr:twoCellAnchor xmlns:xdr="{XDR}" xmlns:a="{A}" editAs="oneCell">'
-            f'<xdr:from><xdr:col>{fc}</xdr:col><xdr:colOff>0</xdr:colOff>'
-            f'<xdr:row>{fr}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>'
-            f'<xdr:to><xdr:col>{tc}</xdr:col><xdr:colOff>0</xdr:colOff>'
-            f'<xdr:row>{tr}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>'
+            f'<xdr:oneCellAnchor xmlns:xdr="{XDR}" xmlns:a="{A}">'
+            f'<xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>{col_off}</xdr:colOff>'
+            f'<xdr:row>{row}</xdr:row><xdr:rowOff>{row_off}</xdr:rowOff></xdr:from>'
+            f'<xdr:ext cx="{cx}" cy="{cy}"/>'
             f'<xdr:sp macro="" textlink="">'
             f'<xdr:nvSpPr>'
             f'<xdr:cNvPr id="{sid}" name="DefectCircle{sid}"/>'
@@ -796,7 +799,7 @@ def _inject_oval_shapes(xlsx_path: str, ovals: list):
             f'</xdr:spPr>'
             f'<xdr:txBody><a:bodyPr rtlCol="0" anchor="ctr"/>'
             f'<a:lstStyle/><a:p/></xdr:txBody>'
-            f'</xdr:sp><xdr:clientData/></xdr:twoCellAnchor>'
+            f'</xdr:sp><xdr:clientData/></xdr:oneCellAnchor>'
         )
 
     # --- Load all files from the xlsx ZIP ---
@@ -845,8 +848,8 @@ def _inject_oval_shapes(xlsx_path: str, ovals: list):
 
     # --- Group ovals by sheet ---
     ovals_by_sheet = {}
-    for sname, fc, fr, tc, tr, sid in ovals:
-        ovals_by_sheet.setdefault(sname, []).append((fc, fr, tc, tr, sid))
+    for sname, col, row, col_off, row_off, cx, cy, sid in ovals:
+        ovals_by_sheet.setdefault(sname, []).append((col, row, col_off, row_off, cx, cy, sid))
 
     # --- Inject ovals into drawing XMLs ---
     modified = False
@@ -857,11 +860,11 @@ def _inject_oval_shapes(xlsx_path: str, ovals: list):
             continue
 
         drw_root = _parse(files[drw_key])
-        for fc, fr, tc, tr, sid in oval_list:
-            oval_el = etree.fromstring(_oval_xml(sid, fc, fr, tc, tr))
+        for col, row, col_off, row_off, cx, cy, sid in oval_list:
+            oval_el = etree.fromstring(_oval_xml(sid, col, row, col_off, row_off, cx, cy))
             drw_root.append(oval_el)
             print(f"OVAL INJECT: shape {sid} → sheet '{sname}' "
-                  f"cols {fc}-{tc}, rows {fr}-{tr}")
+                  f"col {col} row {row} off ({col_off},{row_off}) size {cx}x{cy}")
 
         files[drw_key] = etree.tostring(drw_root, xml_declaration=True,
                                          encoding='UTF-8', standalone=True)

@@ -657,17 +657,17 @@ def _fill_appendix_c(wb, d):
             # Schedule editable oval if defect coords available
             if coords and not _has_red_markers(path):
                 x_pct, y_pct = coords
-                # Estimate cols spanned: default col width ~64px at 96dpi
-                span_cols = max(2, min(8, round(new_w / 64)))
-                span_rows = ph_to_row - ph_from_row
-                r_cols = max(1, round(span_cols * 0.10))
-                r_rows = max(1, round(span_rows * 0.08))
-                oval_fc = max(0, round(x_pct * span_cols) - r_cols)
-                oval_tc = min(span_cols, round(x_pct * span_cols) + r_cols)
-                oval_fr = ph_from_row + max(0, round(y_pct * span_rows) - r_rows)
-                oval_tr = ph_from_row + min(span_rows, round(y_pct * span_rows) + r_rows)
+                PX = 9525  # pixels → EMU at 96 dpi
+                r_w = max(20, int(new_w * 0.10))
+                r_h = max(15, int(new_h * 0.08))
+                col_off = max(0, int((x_pct * new_w - r_w) * PX))
+                row_off = max(0, int((y_pct * new_h - r_h) * PX))
+                cx     = int(2 * r_w * PX)
+                cy     = int(2 * r_h * PX)
                 shape_ctr += 1
-                ovals.append((ws.title, oval_fc, oval_fr, oval_tc, oval_tr, shape_ctr))
+                # Anchor at same cell as image (col=0, ph_from_row)
+                ovals.append((ws.title, 0, ph_from_row,
+                               col_off, row_off, cx, cy, shape_ctr))
 
             cap_row = ph_to_row + 2   # +1 blank gap row, then caption
             # Clear template border artifacts in B-H before merging

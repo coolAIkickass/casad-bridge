@@ -13,12 +13,12 @@ def transcribe_audio(audio_bytes: bytes) -> str:
     transcript = client.audio.transcriptions.create(
         model='whisper-large-v3',
         file=audio_file,
-        # Prompt primes Whisper to retain decimal values (e.g. 0.45 m, 7.5 m)
-        # which it otherwise drops in repetitive measurement chains near segment boundaries.
+        # Prompt teaches Whisper decimal formatting. Values differ from real inspection
+        # figures so Whisper doesn't treat this as a prior-transcript prefix.
         prompt=(
-            "Bridge inspection report. Measurements use decimals: 0.45 m, 7.5 m, "
-            "10.1 m, 22.4 m, 0.9 m. Span lengths: 10.1 meter, 23.5 meter. "
-            "Carriageway: 0.45 m crash barrier plus 7.5 m carriageway plus 0.9 m median."
+            "Measurements use decimals like 0.45 m, 7.5 m, 10.1 m, 0.5 m. "
+            "Span lengths: 10.1 meter, 23.5 meter. "
+            "Carriageway: 0.45 m, barrier 7.5 m + 0.3 m median."
         ),
         # No language forced — Whisper auto-detects Hindi/Gujarati/English
     )

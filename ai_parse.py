@@ -657,10 +657,11 @@ BRIDGE DETAILS EXTRACTION RULES (critical for Excel Appendix-A accuracy):
   NEVER derive or reconstruct a breakdown — preserve the EXACT expression given.
 - superstructure_type: list each part with span range, e.g.:
   "PSC Girder and Deck Slab (RP1 to P8 — Anupam Cinema Side)\nRCC Solid Slab (P5 to BA1 — Gomtipur Side)\nSteel Truss (Railway Portion)"
-- bridge_level_type / type_of_bridge: "High Level" / "ROB" / "Submersible" — NOT the structural type.
-  CRITICAL: do NOT infer this from the bridge name or title (e.g. a bridge named "Railway Over Bridge"
-  does NOT mean bridge_level_type = "ROB"). Only fill when the inspector explicitly states the bridge
-  type in their input (e.g. "type of bridge ROB", "high level bridge", "submersible bridge").
+- bridge_level_type / type_of_bridge: "High Level" / "ROB" / "Submersible" / "Not Applicable" —
+  NOT the structural type. CRITICAL: do NOT infer this from the bridge name or title (e.g. a bridge
+  named "Railway Over Bridge" does NOT mean bridge_level_type = "ROB"). Only fill when the inspector
+  explicitly states the bridge type (e.g. "type of bridge ROB", "high level bridge",
+  "submersible bridge", "type of bridge not applicable").
 - angle_of_crossing: copy EXACTLY as stated — if inspector says "Q", output "Q" (not "Skew").
 - latitude / longitude: preserve FULL decimal precision exactly as stated.
 - cc_of_piers: ONLY the C/C (centre-to-centre) spacing per side, e.g.:
@@ -880,8 +881,11 @@ STYLE 2 — SEQUENTIAL VALUES WITH CONNECTOR WORDS (user goes field-by-field wit
             span count (e.g. "10 spans, C/C 25 m, pier width 1.25 m"). They are NEVER
             reachable via sequential "next" navigation.
   Pos 12  total_length             Total Length of Bridge
-  Pos 13  angle_of_crossing        Angle of Crossing
-  Pos 14  bridge_level_type        Type: High Level / ROB / Submersible
+            ALSO labelled in the form as "Length of bridge between ends of decking" — same field.
+  Pos 13  angle_of_crossing        Angle of Crossing (geometric — "Square" / "Q" / "90°" / "15° skew")
+            NEVER a length in metres. If a value in metres appears at this position, it belongs
+            to total_length (Pos 12), not angle_of_crossing. Shift it back.
+  Pos 14  bridge_level_type        Type: High Level / ROB / Submersible / Not Applicable
   Pos 15  hydraulic_parameters     Hydraulic Parameters ("Not Applicable" for ROB)
   Pos 16  subsoil_particulars      Sub Soil Particulars ("As per approved GAD" or actual)
   Pos 17  superstructure_type      Type of Superstructure (PSC Girder / RCC Slab / Steel Truss)
@@ -933,7 +937,10 @@ STYLE 3 — PARTIAL / ABBREVIATED FIELD NAMES (user says a shortened or paraphra
     / "benchmark" / "BM GTS" / "arbitrary level"  → bm_gts_level
   "division" / "circle"                           → division / circle (match by context)
   "no of spans" / "number of spans" / "spans"     → no_of_spans
-  "total length" / "bridge length" / "length"     → total_length
+  "total length" / "bridge length" / "length"
+    / "length of bridge between ends of decking"
+    / "length of bridge between abutment faces"
+    / "between ends of decking" / "overall length" → total_length
   "C/C" / "c to c" / "centre to centre" / "c/c of piers" → cc_of_piers
   "pier width" (without "cap" keyword)            → width_of_piers or pier_width_detail
   "pier cap" / "cap width" / "width of cap"

@@ -13,13 +13,15 @@ def transcribe_audio(audio_bytes: bytes) -> str:
     transcript = client.audio.transcriptions.create(
         model='whisper-large-v3',
         file=audio_file,
-        # Prompt teaches Whisper decimal formatting. Values differ from real inspection
-        # figures so Whisper doesn't treat this as a prior-transcript prefix.
+        # Prompt teaches the "X m plus Y m" decimal pattern with values that differ
+        # from actual audio so Whisper doesn't treat it as a prior-transcript prefix.
+        # temperature=0.2 reduces greedy shortcutting through repetitive measurement chains.
         prompt=(
-            "Measurements use decimals like 0.45 m, 7.5 m, 10.1 m, 0.5 m. "
-            "Span lengths: 10.1 meter, 23.5 meter. "
-            "Carriageway: 0.45 m, barrier 7.5 m + 0.3 m median."
+            "Bridge inspection report. Decimal measurements: span 10.1 m, width 8.0 m. "
+            "Both side 0.6 m crash barrier plus 8.0 m carriageway plus 1.2 m median "
+            "plus 8.0 m carriageway plus 0.6 m crash barrier, no footpath provided."
         ),
+        temperature=0.2,
         # No language forced — Whisper auto-detects Hindi/Gujarati/English
     )
     return transcript.text

@@ -95,41 +95,105 @@ Return ONLY valid JSON with this structure (no markdown, no extra text):
 Use null for any value not found or not legible.
 """
 
+REVIEW_PROMPT = """You are doing a quality review of a CASAD bridge engineering drawing (Pile-Pilecap-Pier foundation type).
+
+Scan the ENTIRE drawing image carefully and return findings for each of the four checks below.
+For every finding include a bbox: {"x": <left%>, "y": <top%>, "w": <width%>, "h": <height%>} as % of image dimensions.
+
+CHECK 1 — Required views/sections
+For each view listed, report whether it is present and what scale is shown on it:
+SECTION A-A FOR PILE, SECTION Z-Z (PILE), SECTION Z1-Z1 (PILE),
+SECTION A-A FOR PILECAP & PIER, SECTION B-B FOR PILECAP & PIER,
+SECTION C-C, SECTION D-D,
+PLAN OF PILECAP, REINFORCEMENT PLAN OF PILECAP,
+DETAIL A (ring details), DETAIL A' (ring details),
+TABLE-1, LAP LENGTH TABLE, SCHEDULE OF REINFORCEMENT
+
+CHECK 2 — Notes completeness
+Check whether the NOTES section contains each of these items and extract its value:
+pile length, pile fixity length, pile diameter, maximum load on pile (tonnes),
+bore log reference number, concrete grade for pile, concrete grade for pilecap,
+concrete grade for pier, steel grade (Fe415/Fe500/Fe550/Fe550D),
+projection of pile into pilecap, reference to IS/IRC codes
+
+CHECK 3 — Label & annotation quality
+Scan all visible text labels and annotations for:
+- Grammar/spelling errors (e.g. "BUNDLE BAR" vs "BUNDLE BARS")
+- Wrong or missing units on dimensions
+- Bar mark labels in section views that don't match the schedule
+- Scale labels that are missing or inconsistent
+- Any label pointing to the wrong component
+- Truncated or incomplete text
+- Detail callout text inconsistencies (e.g. ring provided as circular vs helical)
+
+CHECK 4 — Dimension completeness
+Check that key dimensions are shown in the views:
+- Pile cap overall dimensions (length × width × depth)
+- Pile spacing (centre-to-centre)
+- Pile projection into pile cap
+- Pier cross-section dimensions
+- Cover dimensions where required
+
+Return ONLY valid JSON (no markdown):
+{
+  "sections": [
+    {"name": "SECTION Z-Z (PILE)", "present": true, "scale": "1:30", "bbox": {"x":5,"y":60,"w":18,"h":15}}
+  ],
+  "notes_check": [
+    {"item": "pile_length", "present": true, "value": "12.0 M", "bbox": {"x":40,"y":70,"w":20,"h":3}},
+    {"item": "bore_log_ref", "present": false, "value": null, "bbox": null}
+  ],
+  "label_issues": [
+    {"category": "Grammar", "description": "BUNDLE BAR should be BUNDLE BARS", "suggestion": "Change to BUNDLE BARS", "bbox": {"x":10,"y":55,"w":15,"h":3}}
+  ],
+  "dimension_issues": [
+    {"description": "Pile cap depth not dimensioned in SECTION C-C", "suggestion": "Add depth dimension", "bbox": {"x":25,"y":20,"w":20,"h":25}}
+  ]
+}
+"""
+
 
 def extract_from_drawing(pdf_bytes: bytes) -> dict:
     """Main entry point. Returns structured drawing data dict."""
-    text_data = _extract_text(pdf_bytes)
-    vision_data = _extract_via_vision(pdf_bytes)
+    text_data  = _extract_text(pdf_bytes)
+    images_b64 = _pdf_to_image_b64(pdf_bytes)   # render once, reuse for both calls
 
-    # Merge: vision data is primary, text_data fills gaps
+    vision_data = _call_vision(images_b64, EXTRACTION_PROMPT) if images_b64 else None
+    review_data = _call_vision(images_b64, REVIEW_PROMPT)     if images_b64 else None
+
     result = {
-        'title_block': {},
-        'schedule': {},
-        'notes': {},
-        'table_1': [],
-        'raw_text': text_data.get('raw_lines', []),
+        'title_block':    {},
+        'schedule':       {},
+        'notes':          {},
+        'table_1':        [],
+        'sections':       [],
+        'notes_check':    [],
+        'label_issues':   [],
+        'dimension_issues': [],
+        'raw_text':       text_data.get('raw_lines', []),
     }
 
     if vision_data:
         result['title_block'] = vision_data.get('title_block') or {}
         result['notes']       = vision_data.get('notes') or {}
         result['table_1']     = vision_data.get('table_1') or []
-        # Index schedule by component → bar_mark
         raw_sched = vision_data.get('schedule') or []
         for row in raw_sched:
             comp = (row.get('component') or 'unknown').lower()
             bm   = (row.get('bar_mark') or '').strip().lower()
-            if not bm:
-                continue
-            result['schedule'].setdefault(comp, {})[bm] = row
+            if bm:
+                result['schedule'].setdefault(comp, {})[bm] = row
 
-    # Fill title block gaps from pdfplumber text
-    tb = result['title_block']
+    if review_data:
+        result['sections']        = review_data.get('sections')        or []
+        result['notes_check']     = review_data.get('notes_check')     or []
+        result['label_issues']    = review_data.get('label_issues')    or []
+        result['dimension_issues']= review_data.get('dimension_issues')or []
+
+    # Fill title block / notes gaps from pdfplumber text
     for key, val in text_data.get('title_block', {}).items():
-        if not tb.get(key):
-            tb[key] = val
-
-    # Fill notes gaps
+        if not result['title_block'].get(key):
+            result['title_block'][key] = val
     for key, val in text_data.get('notes', {}).items():
         if not result['notes'].get(key):
             result['notes'][key] = val
@@ -294,40 +358,34 @@ def _parse_json_with_repair(raw: str) -> dict | None:
         return None
 
 
-def _extract_via_vision(pdf_bytes: bytes) -> dict | None:
-    if not ANTHROPIC_API_KEY:
+def _call_vision(images_b64: list, prompt: str) -> dict | None:
+    """Send pre-rendered page images + prompt to Claude. Returns parsed JSON or None."""
+    if not ANTHROPIC_API_KEY or not images_b64:
         return None
-    images_b64 = _pdf_to_image_b64(pdf_bytes)
-    if not images_b64:
-        log.error('No images rendered from PDF — vision extraction aborted')
-        return None
-
+    raw = ''
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        log.info('Sending %d page image(s) to Claude vision API', len(images_b64[:3]))
+        log.info('Vision call: sending %d image(s), prompt length=%d chars',
+                 len(images_b64[:3]), len(prompt))
 
-        content = []
-        for b64 in images_b64[:3]:
-            content.append({
-                'type': 'image',
-                'source': {'type': 'base64', 'media_type': 'image/png', 'data': b64},
-            })
-        content.append({'type': 'text', 'text': EXTRACTION_PROMPT})
+        content = [
+            {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': b64}}
+            for b64 in images_b64[:3]
+        ]
+        content.append({'type': 'text', 'text': prompt})
 
         response = client.messages.create(
             model='claude-sonnet-4-6',
-            max_tokens=8192,   # increased from 4096 — full PPP schedule needs ~6-7k tokens
+            max_tokens=8192,
             messages=[{'role': 'user', 'content': content}],
         )
         raw = response.content[0].text.strip()
-        log.info('Claude vision response received, length=%d chars, stop_reason=%s',
-                 len(raw), response.stop_reason)
+        log.info('Vision response: length=%d chars, stop_reason=%s', len(raw), response.stop_reason)
 
         if response.stop_reason == 'max_tokens':
-            log.warning('Response hit max_tokens limit — JSON may be truncated, attempting repair')
+            log.warning('Response hit max_tokens — attempting JSON repair')
 
-        # Strip markdown fences if present
         if raw.startswith('```'):
             raw = re.sub(r'^```(?:json)?\n?', '', raw)
             raw = re.sub(r'\n?```$', '', raw)
@@ -336,15 +394,14 @@ def _extract_via_vision(pdf_bytes: bytes) -> dict | None:
         if parsed is None:
             raise json.JSONDecodeError('Could not parse or repair JSON', raw, 0)
 
-        schedule_rows = len(parsed.get('schedule') or [])
-        log.info('Vision extraction OK — schedule rows=%d', schedule_rows)
+        log.info('Vision call OK — top-level keys: %s', list(parsed.keys()))
         return parsed
 
     except json.JSONDecodeError as e:
-        log.error('Claude returned non-JSON: %s … (first 200 chars: %s)', e, raw[:200])
+        log.error('Non-JSON response: %s … (first 200: %s)', e, raw[:200])
         print(f'[ED Checker] Vision JSON parse error: {e}', flush=True)
         return None
     except Exception as e:
-        log.error('Claude vision API error: %s', e, exc_info=True)
+        log.error('Claude API error: %s', e, exc_info=True)
         print(f'[ED Checker] Claude API error: {e}', flush=True)
         return None

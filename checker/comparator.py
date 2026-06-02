@@ -112,6 +112,10 @@ def compare(design_data: dict, drawing_data: dict) -> list:
     issues += _check_notes(drawing_data.get('notes') or {}, design_data)
     issues += _check_schedule(drawing_data.get('schedule') or {}, design_data)
     issues += _check_table1(drawing_data.get('table_1') or [], design_data)
+    issues += _check_sections(drawing_data.get('sections') or [])
+    issues += _check_notes_completeness(drawing_data.get('notes_check') or [])
+    issues += _check_label_issues(drawing_data.get('label_issues') or [])
+    issues += _check_dimension_issues(drawing_data.get('dimension_issues') or [])
 
     return issues
 
@@ -390,4 +394,124 @@ def _check_table1(table1: list, design: dict) -> list:
                     'error', 'table_1'
                 ))
 
+    return issues
+
+
+# ── Sections / views ──────────────────────────────────────────────────────────
+
+REQUIRED_SECTIONS = [
+    'SECTION A-A FOR PILE',
+    'SECTION Z-Z (PILE)',
+    'SECTION A-A FOR PILECAP & PIER',
+    'SECTION B-B FOR PILECAP & PIER',
+    'PLAN OF PILECAP',
+    'REINFORCEMENT PLAN OF PILECAP',
+    'DETAIL A',
+    'TABLE-1',
+    'LAP LENGTH TABLE',
+    'SCHEDULE OF REINFORCEMENT',
+]
+
+def _check_sections(sections: list) -> list:
+    issues = []
+    if not sections:
+        issues.append(_issue(
+            'Drawing Completeness', 'Could not verify required sections',
+            'The drawing review did not return a sections inventory. Required views could not be checked.',
+            'Ensure ANTHROPIC_API_KEY is configured and the drawing is legible.',
+            'warning', 'default'
+        ))
+        return issues
+
+    found_names = {s.get('name', '').upper() for s in sections if s.get('present')}
+
+    for req in REQUIRED_SECTIONS:
+        present = any(req.upper() in name for name in found_names)
+        if not present:
+            issues.append(_issue(
+                'Drawing Completeness', f'Missing view: {req}',
+                f'"{req}" was not found in the drawing.',
+                f'Add the "{req}" view to the drawing.',
+                'error', 'default'
+            ))
+
+    # Check each present section has a scale
+    for sec in sections:
+        if sec.get('present') and not sec.get('scale'):
+            issues.append(_issue(
+                'Drawing Completeness', f'Scale missing on {sec.get("name", "view")}',
+                f'The view "{sec.get("name")}" does not show a scale (e.g. SCALE 1:30).',
+                'Add a scale label to this view.',
+                'warning', 'default', sec.get('bbox')
+            ))
+
+    return issues
+
+
+# ── Notes completeness ────────────────────────────────────────────────────────
+
+REQUIRED_NOTES = {
+    'pile_length':       'Pile length not specified in notes',
+    'pile_fixity':       'Pile fixity length not specified in notes',
+    'pile_diameter':     'Pile diameter not specified in notes',
+    'concrete_pile':     'Concrete grade for pile not specified in notes',
+    'concrete_pilecap':  'Concrete grade for pilecap not specified in notes',
+    'concrete_pier':     'Concrete grade for pier not specified in notes',
+    'steel_grade':       'Steel grade (Fe415/Fe500/Fe550) not specified in notes',
+}
+
+def _check_notes_completeness(notes_check: list) -> list:
+    issues = []
+    if not notes_check:
+        return issues
+
+    found = {n.get('item'): n for n in notes_check}
+
+    for item_key, missing_msg in REQUIRED_NOTES.items():
+        entry = found.get(item_key)
+        if not entry or not entry.get('present'):
+            issues.append(_issue(
+                'Notes', missing_msg,
+                f'The note for "{item_key.replace("_", " ")}" is missing or not legible in the drawing.',
+                f'Add the required note for {item_key.replace("_", " ")}.',
+                'error' if 'concrete' in item_key or 'steel' in item_key else 'warning',
+                'notes', entry.get('bbox') if entry else None
+            ))
+
+    return issues
+
+
+# ── Label & annotation quality ────────────────────────────────────────────────
+
+def _check_label_issues(label_issues: list) -> list:
+    issues = []
+    for li in (label_issues or []):
+        desc = li.get('description', '')
+        if not desc:
+            continue
+        issues.append(_issue(
+            'Labels & Annotations',
+            desc,
+            desc,
+            li.get('suggestion', 'Review and correct this label.'),
+            'warning', 'default', li.get('bbox')
+        ))
+    return issues
+
+
+# ── Dimension completeness ────────────────────────────────────────────────────
+
+def _check_dimension_issues(dimension_issues: list) -> list:
+    issues = []
+    for di in (dimension_issues or []):
+        desc = di.get('description', '')
+        if not desc:
+            continue
+        issues.append(_issue(
+            'Dimensions',
+            desc,
+            desc,
+            di.get('suggestion', 'Add the missing dimension.'),
+            'warning', 'default', di.get('bbox')
+        ))
     return issues

@@ -9,6 +9,7 @@ let currentViewport = null;
 let allIssues      = [];
 let selectedId     = null;
 let renderTask     = null;
+let activeFilter   = null;   // null | 'error' | 'warning' | 'resolved'
 
 const canvas      = document.getElementById('pdf-canvas');
 const ctx         = canvas.getContext('2d');
@@ -83,7 +84,7 @@ function renderHighlights(pageNum) {
   hlLayer.style.height = currentViewport.height + 'px';
 
   let num = 0;
-  allIssues
+  visibleIssues()
     .filter(i => i.page_num === pageNum)
     .forEach(issue => {
       num++;
@@ -105,22 +106,46 @@ function pct(val, dim) { return val / 100 * dim; }
 
 // ── Issue panel ──────────────────────────────────────
 
+function visibleIssues() {
+  if (!activeFilter) return allIssues;
+  if (activeFilter === 'resolved') return allIssues.filter(i => i.status === 'resolved');
+  return allIssues.filter(i => i.severity === activeFilter && i.status !== 'resolved');
+}
+
 function renderIssuePanel() {
   const panel = document.getElementById('issue-list');
-
-  // Group by category preserving insertion order
-  const categories = {};
-  allIssues.forEach(i => {
-    if (!categories[i.category]) categories[i.category] = [];
-    categories[i.category].push(i);
-  });
+  const filtered = visibleIssues();
 
   panel.innerHTML = '';
+
+  // Filter banner when a filter is active
+  if (activeFilter) {
+    const label = activeFilter === 'resolved' ? 'Resolved' : activeFilter === 'error' ? 'Errors' : 'Warnings';
+    const banner = document.createElement('div');
+    banner.className = 'filter-banner';
+    banner.innerHTML = `Showing ${filtered.length} ${label.toLowerCase()} <button onclick="clearFilter()">Show all</button>`;
+    panel.appendChild(banner);
+  }
 
   if (allIssues.length === 0) {
     panel.innerHTML = '<div class="no-issues-msg"><span class="no-issues-icon">✓</span><strong>No issues found</strong><p>The drawing passed all checks. No errors or warnings were raised.</p></div>';
     return;
   }
+
+  if (filtered.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'no-issues-msg';
+    empty.innerHTML = `<span class="no-issues-icon">✓</span><strong>None in this category</strong><p>No ${activeFilter} items found.</p>`;
+    panel.appendChild(empty);
+    return;
+  }
+
+  // Group by category preserving insertion order
+  const categories = {};
+  filtered.forEach(i => {
+    if (!categories[i.category]) categories[i.category] = [];
+    categories[i.category].push(i);
+  });
 
   const openCount = allIssues.filter(i => i.status === 'open').length;
   if (openCount === 0 && allIssues.length > 0) {
@@ -265,6 +290,30 @@ async function toggleResolve(id) {
   updateSummary();
   renderHighlights(currentPage);
 }
+
+// ── Filter ────────────────────────────────────────────
+
+function setFilter(severity) {
+  activeFilter = (activeFilter === severity) ? null : severity;   // toggle off if same
+  document.querySelectorAll('.summary-stat').forEach(el => el.classList.remove('active'));
+  if (activeFilter) {
+    const map = { error: 'stat-error', warning: 'stat-warning', resolved: 'stat-resolved' };
+    document.querySelector('.' + map[activeFilter])?.classList.add('active');
+  }
+  renderIssuePanel();
+  renderHighlights(currentPage);
+}
+
+function clearFilter() {
+  activeFilter = null;
+  document.querySelectorAll('.summary-stat').forEach(el => el.classList.remove('active'));
+  renderIssuePanel();
+  renderHighlights(currentPage);
+}
+
+document.querySelector('.stat-error')   ?.addEventListener('click', () => setFilter('error'));
+document.querySelector('.stat-warning') ?.addEventListener('click', () => setFilter('warning'));
+document.querySelector('.stat-resolved')?.addEventListener('click', () => setFilter('resolved'));
 
 // ── Controls ──────────────────────────────────────────
 

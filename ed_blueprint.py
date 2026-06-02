@@ -148,7 +148,7 @@ def upload():
     conn.commit()
 
     try:
-        issues = run_check(pdf_bytes, design_data)
+        issues, detected_type = run_check(pdf_bytes, design_data)
         for err in parse_errors:
             issues.append({
                 'category': 'Input', 'title': 'Design input parse error',
@@ -159,6 +159,7 @@ def upload():
             })
         _save_issues(review_id, issues, cur)
         cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
+        cur.execute("UPDATE drawings SET drawing_type=%s WHERE id=%s", (detected_type, drawing_id))
     except Exception as e:
         _save_issues(review_id, [{
             'category': 'System', 'title': 'Checker error',
@@ -344,7 +345,7 @@ def reupload(drawing_id):
     conn.commit()
 
     try:
-        issues = run_check(pdf_bytes, design_data)
+        issues, detected_type = run_check(pdf_bytes, design_data)
         for err in parse_errors:
             issues.append({
                 'category': 'Input', 'title': 'Design input parse error',
@@ -355,6 +356,7 @@ def reupload(drawing_id):
             })
         _save_issues(review_id, issues, cur)
         cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
+        cur.execute("UPDATE drawings SET drawing_type=%s WHERE id=%s", (detected_type, drawing_id))
     except Exception as e:
         _save_issues(review_id, [{
             'category': 'System', 'title': 'Checker error',

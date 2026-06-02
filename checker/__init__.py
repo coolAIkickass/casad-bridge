@@ -43,7 +43,27 @@ def parse_design_inputs(design_files: list) -> tuple:
     return design_data, parse_errors
 
 
-def run_check(drawing_pdf_bytes: bytes, design_data: dict) -> list:
+def detect_drawing_type(drawing_data: dict) -> str:
+    """Infer drawing type from extracted drawing content."""
+    schedule   = drawing_data.get('schedule', {})
+    sections   = drawing_data.get('sections', []) or []
+    section_names = ' '.join((s.get('name') or '') for s in sections).upper()
+    title      = (drawing_data.get('title_block', {}).get('title') or '').upper()
+
+    all_text = section_names + ' ' + title
+
+    if 'pile' in schedule or 'pilecap' in schedule or 'PILE' in all_text:
+        return 'Pile Pilecap Pier'
+    if 'ABUTMENT' in all_text:
+        return 'Abutment'
+    if 'SUPERSTRUCTURE' in all_text or 'GIRDER' in all_text or 'DECK' in all_text:
+        return 'Superstructure'
+    if 'BEARING' in all_text:
+        return 'Bearing'
+    return 'General'
+
+
+def run_check(drawing_pdf_bytes: bytes, design_data: dict) -> tuple:
     """
     drawing_pdf_bytes : raw bytes of the drawing PDF
     design_data       : already-parsed design data dict (from parse_design_inputs)
@@ -102,7 +122,8 @@ def run_check(drawing_pdf_bytes: bytes, design_data: dict) -> list:
     else:
         issues = compare(design_data or None, drawing_data)
 
-    return issues
+    detected_type = detect_drawing_type(drawing_data)
+    return issues, detected_type
 
 
 def _ext(filename: str) -> str:

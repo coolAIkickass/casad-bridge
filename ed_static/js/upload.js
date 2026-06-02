@@ -27,11 +27,10 @@ function setFile(file) {
   submitBtn.disabled = false;
   submitBtn.textContent = 'Review drawing';
 
-  // Auto-populate drawing name from filename (strip .pdf extension)
+  // Auto-set hidden drawing name from filename — strip extension, clean separators, cap 60 chars
   const nameInput = document.getElementById('drawing_name');
-  if (!nameInput.value) {
-    nameInput.value = file.name.replace(/\.pdf$/i, '').replace(/[_-]/g, ' ');
-  }
+  const raw = file.name.replace(/\.pdf$/i, '').replace(/[_\-]+/g, ' ').trim();
+  nameInput.value = raw.length > 60 ? raw.slice(0, 57) + '…' : raw;
 }
 
 function clearFile() {

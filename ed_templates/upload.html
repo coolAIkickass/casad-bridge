@@ -9,21 +9,9 @@
 
     <form id="upload-form" action="/ed/upload" method="POST" enctype="multipart/form-data">
 
-      <!-- Drawing name + type — fills in first so context is set before uploading -->
-      <div class="form-row" style="margin-bottom:20px">
-        <div class="form-group">
-          <label for="drawing_name">Drawing Name</label>
-          <input type="text" id="drawing_name" name="drawing_name" placeholder="Auto-filled from filename">
-        </div>
-        <div class="form-group">
-          <label for="drawing_type">Drawing Type</label>
-          <select id="drawing_type" name="drawing_type">
-            <option value="Pile Pilecap Pier">Pile Pilecap Pier</option>
-            <option value="Foundation">Foundation</option>
-            <option value="General" selected>General</option>
-          </select>
-        </div>
-      </div>
+      <!-- Drawing name auto-set from filename; type auto-detected after check -->
+      <input type="hidden" id="drawing_name" name="drawing_name">
+      <input type="hidden" name="drawing_type" value="General">
 
       <!-- Slot 1: Drawing PDF (mandatory) -->
       <div class="slot-label">
@@ -78,7 +66,9 @@
 
   {% if recent %}
   <div class="recent-section">
-    <h2 class="recent-title">Recent Reviews</h2>
+    <div class="recent-header">
+      <h2 class="recent-title">Recent Reviews</h2>
+    </div>
     <table class="recent-table">
       <thead>
         <tr>

@@ -231,6 +231,60 @@ def _pdf_to_image_b64(pdf_bytes: bytes) -> list:
         return []
 
 
+def _parse_json_with_repair(raw: str) -> dict | None:
+    """Try direct JSON parse; if truncated, close open structures and retry."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Walk the string tracking bracket/brace depth and string state,
+    # recording the position after each top-level array item completes.
+    # Then close all open structures from the last safe point.
+    depth = 0
+    in_str = False
+    escape = False
+    last_safe = 0
+
+    for i, ch in enumerate(raw):
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_str:
+            escape = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch in '{[':
+            depth += 1
+        elif ch in '}]':
+            depth -= 1
+            if depth == 1:          # just closed one top-level item
+                last_safe = i + 1
+
+    if last_safe == 0:
+        return None
+
+    # Truncate at last complete item and close outer array + object
+    fragment = raw[:last_safe].rstrip().rstrip(',')
+
+    # Count still-open brackets to close them
+    open_sq = fragment.count('[') - fragment.count(']')
+    open_cu = fragment.count('{') - fragment.count('}')
+    fragment += ']' * open_sq + '}' * open_cu
+
+    try:
+        result = json.loads(fragment)
+        log.warning('JSON repaired by truncating at char %d (original length %d)',
+                    last_safe, len(raw))
+        return result
+    except json.JSONDecodeError:
+        return None
+
+
 def _extract_via_vision(pdf_bytes: bytes) -> dict | None:
     if not ANTHROPIC_API_KEY:
         return None
@@ -253,19 +307,26 @@ def _extract_via_vision(pdf_bytes: bytes) -> dict | None:
         content.append({'type': 'text', 'text': EXTRACTION_PROMPT})
 
         response = client.messages.create(
-            model='claude-sonnet-4-6',   # corrected from claude-sonnet-4-5
-            max_tokens=4096,
+            model='claude-sonnet-4-6',
+            max_tokens=8192,   # increased from 4096 — full PPP schedule needs ~6-7k tokens
             messages=[{'role': 'user', 'content': content}],
         )
         raw = response.content[0].text.strip()
-        log.info('Claude vision response received, length=%d chars', len(raw))
+        log.info('Claude vision response received, length=%d chars, stop_reason=%s',
+                 len(raw), response.stop_reason)
+
+        if response.stop_reason == 'max_tokens':
+            log.warning('Response hit max_tokens limit — JSON may be truncated, attempting repair')
 
         # Strip markdown fences if present
         if raw.startswith('```'):
             raw = re.sub(r'^```(?:json)?\n?', '', raw)
             raw = re.sub(r'\n?```$', '', raw)
 
-        parsed = json.loads(raw)
+        parsed = _parse_json_with_repair(raw)
+        if parsed is None:
+            raise json.JSONDecodeError('Could not parse or repair JSON', raw, 0)
+
         schedule_rows = len(parsed.get('schedule') or [])
         log.info('Vision extraction OK — schedule rows=%d', schedule_rows)
         return parsed

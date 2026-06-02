@@ -16,7 +16,11 @@ ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 
 EXTRACTION_PROMPT = """You are analyzing a CASAD AutoCAD engineering drawing for a bridge structure (Pile-Pilecap-Pier foundation).
 
-Extract ALL of the following as precisely as possible from the drawing image:
+IMPORTANT: For every item you extract, also estimate its bounding box as a percentage of the full image dimensions:
+  "bbox": {"x": <left edge %>, "y": <top edge %>, "w": <width %>, "h": <height %>}
+This is used to highlight the exact location in the drawing when an error is flagged.
+
+Extract ALL of the following as precisely as possible:
 
 1. SCHEDULE OF REINFORCEMENT — multiple sections may exist (Pilecap, Pile per pile, Pier).
    For EACH row in any schedule table, extract:
@@ -31,10 +35,12 @@ Extract ALL of the following as precisely as possible from the drawing image:
      "length_m": 13.425,
      "total_length_m": 563.85,
      "unit_wt_kg_m": 3.857,
-     "total_wt_kg": 2174.77
+     "total_wt_kg": 2174.77,
+     "bbox": {"x": 65.0, "y": 32.5, "w": 30.0, "h": 2.5}
    }
    Note: spacing_mm is null for longitudinal bars (marked "-"). For stirrups/rings extract the c/c spacing.
    For count like "4×13 = 52", set count=52 and count_text="4×13 = 52".
+   The bbox should cover just that single row in the schedule table.
 
 2. TITLE BLOCK — extract:
    {
@@ -49,7 +55,8 @@ Extract ALL of the following as precisely as possible from the drawing image:
      "design_by": "M.M.MODY",
      "approved_by": "J.B.GANDHI",
      "date": "21-04-2026",
-     "scale": "AS SHOWN"
+     "scale": "AS SHOWN",
+     "bbox": {"x": 63.0, "y": 77.0, "w": 35.0, "h": 21.0}
    }
 
 3. NOTES — extract these specific values if present:
@@ -63,7 +70,8 @@ Extract ALL of the following as precisely as possible from the drawing image:
      "concrete_pilecap": "M35",
      "concrete_pier": "M35",
      "steel_grade": "Fe550",
-     "lap_length_concrete_grade": "M35"
+     "lap_length_concrete_grade": "M35",
+     "bbox": {"x": 40.0, "y": 68.0, "w": 22.0, "h": 10.0}
    }
 
 4. TABLE-1 (levels table, if visible) — for each pier row:
@@ -73,7 +81,8 @@ Extract ALL of the following as precisely as possible from the drawing image:
      "top_pier_m": null,
      "top_pilecap_m": null,
      "bottom_pilecap_m": null,
-     "ground_level_m": null
+     "ground_level_m": null,
+     "bbox": {"x": 82.0, "y": 2.0, "w": 16.0, "h": 3.0}
    }
 
 Return ONLY valid JSON with this structure (no markdown, no extra text):

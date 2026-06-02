@@ -18,6 +18,13 @@ function setFile(file) {
   dropLabel.style.display    = 'none';
   dropSelected.style.display = '';
   submitBtn.disabled = false;
+  submitBtn.textContent = 'Review drawing';
+
+  // Auto-populate drawing name from filename (strip .pdf extension)
+  const nameInput = document.getElementById('drawing_name');
+  if (!nameInput.value) {
+    nameInput.value = file.name.replace(/\.pdf$/i, '').replace(/[_-]/g, ' ');
+  }
 }
 
 function clearFile() {
@@ -25,6 +32,8 @@ function clearFile() {
   dropLabel.style.display    = '';
   dropSelected.style.display = 'none';
   submitBtn.disabled = true;
+  submitBtn.textContent = 'Select a drawing to continue';
+  document.getElementById('drawing_name').value = '';
 }
 
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });

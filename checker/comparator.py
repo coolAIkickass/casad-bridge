@@ -4,27 +4,30 @@ Returns a list of issue dicts matching the DB schema.
 """
 import re
 
-# Bounding boxes (% of page) calibrated to the PPP drawing layout:
-#   Left ~62%  : section views, plan views, detail views
-#   Right ~38% : schedule of reinforcement table + title block + TABLE-1
-BBOX = {
-    'pilecap_schedule': {'x': 62, 'y': 20, 'w': 36, 'h': 60},  # full schedule table
-    'pile_schedule':    {'x': 62, 'y': 20, 'w': 36, 'h': 60},  # same table, different rows
-    'pier_schedule':    {'x': 62, 'y': 20, 'w': 36, 'h': 60},
-    'title_block':      {'x': 62, 'y': 76, 'w': 36, 'h': 22},
-    'notes':            {'x': 62, 'y': 66, 'w': 36, 'h': 10},
-    'table_1':          {'x': 82, 'y': 1,  'w': 16, 'h': 18},
-    'default':          {'x': 62, 'y': 20, 'w': 36, 'h': 10},
+# Fallback bounding boxes used only when Claude didn't return a bbox for that item.
+# Right side of PPP drawing layout: left ~62% = views, right ~38% = schedule + title block
+BBOX_FALLBACK = {
+    'pilecap_schedule': {'x': 63, 'y': 22, 'w': 34, 'h':  4},  # single-row height
+    'pile_schedule':    {'x': 63, 'y': 22, 'w': 34, 'h':  4},
+    'pier_schedule':    {'x': 63, 'y': 22, 'w': 34, 'h':  4},
+    'title_block':      {'x': 63, 'y': 77, 'w': 34, 'h': 20},
+    'notes':            {'x': 63, 'y': 67, 'w': 34, 'h':  9},
+    'table_1':          {'x': 82, 'y':  1, 'w': 16, 'h':  4},
+    'default':          {'x': 63, 'y': 22, 'w': 34, 'h':  4},
 }
 
 
-def _bbox(zone):
-    b = BBOX.get(zone, BBOX['default'])
+def _bbox(zone, drawing_bbox=None):
+    """Return (x, y, w, h). Uses Claude-extracted bbox when available, else fallback."""
+    if drawing_bbox and all(k in drawing_bbox for k in ('x', 'y', 'w', 'h')):
+        b = drawing_bbox
+        return b['x'], b['y'], b['w'], b['h']
+    b = BBOX_FALLBACK.get(zone, BBOX_FALLBACK['default'])
     return b['x'], b['y'], b['w'], b['h']
 
 
-def _issue(category, title, description, suggestion, severity, zone, bar_mark=None):
-    x, y, w, h = _bbox(zone)
+def _issue(category, title, description, suggestion, severity, zone, drawing_bbox=None):
+    x, y, w, h = _bbox(zone, drawing_bbox)
     return {
         'category':    category,
         'title':       title,
@@ -255,14 +258,15 @@ def _check_schedule(schedule: dict, design: dict) -> list:
                 ))
                 continue
 
-            # Use totals from first design_bar entry if list
             d_bar = design_bars[0]
-            issues += _compare_bar(bm, comp, d_bar, drawing_bar, zone, design_bars)
+            # Pass Claude's extracted bbox for this bar so highlights land on the right row
+            bar_bbox = drawing_bar.get('bbox')
+            issues += _compare_bar(bm, comp, d_bar, drawing_bar, zone, design_bars, bar_bbox)
 
     return issues
 
 
-def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None):
+def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, bar_bbox=None):
     issues = []
     prefix = f"Bar '{bm}' ({comp})"
 
@@ -274,10 +278,10 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None):
             'Reinforcement', f"{prefix}: Diameter mismatch — design {d_dia}mm, drawing {w_dia}mm",
             f"Design input specifies {d_dia}mm diameter for bar '{bm}' ({comp}). Drawing shows {w_dia}mm.",
             f"Change bar diameter to {d_dia}mm as per design input.",
-            'error', zone
+            'error', zone, bar_bbox
         ))
 
-    # Spacing check (skip for longitudinal bars where spacing is legitimately null)
+    # Spacing check
     d_spacing = design_bar.get('spacing_mm')
     w_spacing = _norm_float(drawing_bar.get('spacing_mm'))
     if d_spacing and w_spacing:
@@ -287,20 +291,19 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None):
                 'Reinforcement', f"{prefix}: Spacing mismatch — design {d_spacing}mm c/c, drawing {w_spacing}mm c/c",
                 f"Design input specifies {d_spacing}mm c/c for bar '{bm}' ({comp}). Drawing shows {w_spacing}mm c/c.",
                 f"Update spacing to {d_spacing}mm c/c.",
-                'error', zone
+                'error', zone, bar_bbox
             ))
     elif d_spacing and not w_spacing:
         issues.append(_issue(
             'Reinforcement', f"{prefix}: Spacing not found in drawing ({d_spacing}mm expected)",
             f"Design input specifies spacing of {d_spacing}mm c/c for bar '{bm}' but drawing schedule does not show spacing.",
             f"Add {d_spacing}mm c/c spacing for bar '{bm}'.",
-            'warning', zone
+            'warning', zone, bar_bbox
         ))
 
     # Count check
     d_count = design_bar.get('count')
     if all_design_bars and len(all_design_bars) > 1:
-        # Sum counts across duplicate marks (e.g., two 'y' rows)
         d_count = sum(b.get('count') or 0 for b in all_design_bars if b.get('count'))
     w_count = _norm_count(drawing_bar.get('count') or drawing_bar.get('count_text', ''))
     if d_count and w_count and d_count != w_count:
@@ -308,7 +311,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None):
             'Reinforcement', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
             f"Design input specifies {d_count} bars for '{bm}' ({comp}). Drawing schedule shows {w_count} bars.",
             f"Update count to {d_count} nos.",
-            'error', zone
+            'error', zone, bar_bbox
         ))
 
     # Length check
@@ -321,10 +324,10 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None):
                 'Reinforcement', f"{prefix}: Bar length mismatch — design {d_len}m, drawing {w_len}m",
                 f"Design input bar length = {d_len}m for '{bm}' ({comp}). Drawing shows {w_len}m.",
                 f"Update bar length to {d_len}m.",
-                'error', zone
+                'error', zone, bar_bbox
             ))
 
-    # Weight sanity check (drawing total weight vs count × length × unit_wt)
+    # Weight sanity check
     w_total_wt = _norm_float(drawing_bar.get('total_wt_kg'))
     w_total_len = _norm_float(drawing_bar.get('total_length_m'))
     w_unit_wt = _norm_float(drawing_bar.get('unit_wt_kg_m'))
@@ -336,7 +339,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None):
                 'Reinforcement', f"{prefix}: Schedule weight arithmetic error",
                 f"Bar '{bm}' ({comp}): total length × unit weight = {calc_wt:.1f}kg but schedule shows {w_total_wt:.1f}kg.",
                 f"Recheck weight calculation for bar '{bm}'.",
-                'error', zone
+                'error', zone, bar_bbox
             ))
 
     return issues

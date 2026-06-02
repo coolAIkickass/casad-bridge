@@ -1,0 +1,257 @@
+"""
+Extract structured data from an AutoCAD engineering drawing PDF.
+Step 1: pdfplumber text extraction (title block, note labels, grades).
+Step 2: PyMuPDF → image → Claude vision API (schedule tables, TABLE-1, notes).
+"""
+import io
+import os
+import re
+import json
+import base64
+import pdfplumber
+
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+
+EXTRACTION_PROMPT = """You are analyzing a CASAD AutoCAD engineering drawing for a bridge structure (Pile-Pilecap-Pier foundation).
+
+Extract ALL of the following as precisely as possible from the drawing image:
+
+1. SCHEDULE OF REINFORCEMENT — multiple sections may exist (Pilecap, Pile per pile, Pier).
+   For EACH row in any schedule table, extract:
+   {
+     "bar_mark": "a",
+     "component": "pilecap" | "pile" | "pier",
+     "reinforcement_text": "25Φ – 42 NOS.",
+     "bar_dia_mm": 25,
+     "spacing_mm": null,
+     "count_text": "42",
+     "count": 42,
+     "length_m": 13.425,
+     "total_length_m": 563.85,
+     "unit_wt_kg_m": 3.857,
+     "total_wt_kg": 2174.77
+   }
+   Note: spacing_mm is null for longitudinal bars (marked "-"). For stirrups/rings extract the c/c spacing.
+   For count like "4×13 = 52", set count=52 and count_text="4×13 = 52".
+
+2. TITLE BLOCK — extract:
+   {
+     "project_name": "...",
+     "drawing_number": "IND/RAJ/PPP-01A",
+     "revision": "R2",
+     "title": "DETAILS OF PILE, PILECAP AND PIER",
+     "spans": "30.0M - 30.0M",
+     "width": "16.6M",
+     "pier_range": "P3 TO P7",
+     "drawn_by": "H.R.ROHIT",
+     "design_by": "M.M.MODY",
+     "approved_by": "J.B.GANDHI",
+     "date": "21-04-2026",
+     "scale": "AS SHOWN"
+   }
+
+3. NOTES — extract these specific values if present:
+   {
+     "pile_length_m": 12.0,
+     "pile_fixity_m": 7.9,
+     "pile_dia_m": 1.2,
+     "max_pile_load_t": null,
+     "bore_log_ref": null,
+     "concrete_pile": "M40",
+     "concrete_pilecap": "M35",
+     "concrete_pier": "M35",
+     "steel_grade": "Fe550",
+     "lap_length_concrete_grade": "M35"
+   }
+
+4. TABLE-1 (levels table, if visible) — for each pier row:
+   {
+     "pier_id": "P7",
+     "top_pier_cap_m": 98.5,
+     "top_pier_m": null,
+     "top_pilecap_m": null,
+     "bottom_pilecap_m": null,
+     "ground_level_m": null
+   }
+
+Return ONLY valid JSON with this structure (no markdown, no extra text):
+{
+  "schedule": [...],
+  "title_block": {...},
+  "notes": {...},
+  "table_1": [...]
+}
+Use null for any value not found or not legible.
+"""
+
+
+def extract_from_drawing(pdf_bytes: bytes) -> dict:
+    """Main entry point. Returns structured drawing data dict."""
+    text_data = _extract_text(pdf_bytes)
+    vision_data = _extract_via_vision(pdf_bytes)
+
+    # Merge: vision data is primary, text_data fills gaps
+    result = {
+        'title_block': {},
+        'schedule': {},
+        'notes': {},
+        'table_1': [],
+        'raw_text': text_data.get('raw_lines', []),
+    }
+
+    if vision_data:
+        result['title_block'] = vision_data.get('title_block') or {}
+        result['notes']       = vision_data.get('notes') or {}
+        result['table_1']     = vision_data.get('table_1') or []
+        # Index schedule by component → bar_mark
+        raw_sched = vision_data.get('schedule') or []
+        for row in raw_sched:
+            comp = (row.get('component') or 'unknown').lower()
+            bm   = (row.get('bar_mark') or '').strip().lower()
+            if not bm:
+                continue
+            result['schedule'].setdefault(comp, {})[bm] = row
+
+    # Fill title block gaps from pdfplumber text
+    tb = result['title_block']
+    for key, val in text_data.get('title_block', {}).items():
+        if not tb.get(key):
+            tb[key] = val
+
+    # Fill notes gaps
+    for key, val in text_data.get('notes', {}).items():
+        if not result['notes'].get(key):
+            result['notes'][key] = val
+
+    return result
+
+
+# ── pdfplumber text pass ──────────────────────────────────────────────────────
+
+def _extract_text(pdf_bytes: bytes) -> dict:
+    title_block = {}
+    notes = {}
+    raw_lines = []
+
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                words = page.extract_words() or []
+                rows = {}
+                for w in words:
+                    y = round(w['top'] / 4) * 4
+                    rows.setdefault(y, []).append(w)
+
+                for y in sorted(rows):
+                    line = ' '.join(w['text'] for w in sorted(rows[y], key=lambda x: x['x0']))
+                    raw_lines.append(line)
+
+                    # Title block fields
+                    if 'DRG. NO.' in line or 'IND /' in line:
+                        m = re.search(r'IND\s*/\s*\w+\s*/\s*\w+\s*-\s*\w+', line)
+                        if m:
+                            title_block['drawing_number'] = re.sub(r'\s+', '', m.group()).replace('/', '/')
+                    if re.search(r'\bR\d+\b', line) and 'DATE' not in line and len(line) < 10:
+                        title_block['revision'] = line.strip()
+                    if '30.0M' in line or '25.0M' in line:
+                        m = re.search(r'(\d+\.\d+M\s*[-–]\s*\d+\.\d+M)', line)
+                        if m:
+                            title_block['spans'] = m.group(1)
+                        m2 = re.search(r'(\d+\.\d+M)\s+WIDE', line)
+                        if m2:
+                            title_block['width'] = m2.group(1)
+                    if re.search(r'FOR PIER\s+P\d+\s+TO\s+P\d+', line, re.IGNORECASE):
+                        m = re.search(r'P\d+\s+TO\s+P\d+', line, re.IGNORECASE)
+                        if m:
+                            title_block['pier_range'] = m.group()
+                    if 'DRAWN BY' in line:
+                        pass  # next line has the name; hard to do in single-line pass
+                    # Names: look for X.Y.NAME pattern anywhere in line
+                    for name_m in re.finditer(r'[A-Z]\.[A-Z]\.\w+', line):
+                        name = name_m.group()
+                        # Determine role by x-position of the name word relative to line layout
+                        # Heuristic: if 'DESIGN BY' appears earlier in the same line → approved_by
+                        # Otherwise assign to first unfilled slot
+                        if 'DESIGN BY' in line:
+                            if not title_block.get('approved_by'):
+                                title_block['approved_by'] = name
+                        elif not title_block.get('drawn_by'):
+                            title_block['drawn_by'] = name
+                        elif not title_block.get('design_by'):
+                            title_block['design_by'] = name
+                    if re.match(r'\d{2}-\d{2}-\d{4}', line):
+                        title_block['date'] = line.strip()
+                    if 'AS SHOWN' in line:
+                        title_block['scale'] = 'AS SHOWN'
+                    if 'DETAILS OF PILE' in line:
+                        title_block['title'] = line.strip()
+
+                    # Notes
+                    m = re.search(r'LAP\s+LENGTH\s+FOR\s+BAR\s+FOR\s+(M\d+)', line, re.IGNORECASE)
+                    if m:
+                        notes['lap_length_concrete_grade'] = m.group(1).upper()
+
+                    for comp, pattern in [('pile', r'\(M40\)'), ('pilecap', r'\(M35\)'), ('pier', r'\(M35\)')]:
+                        if re.search(pattern, line):
+                            notes.setdefault(f'concrete_{comp}', pattern[1:-1])
+
+    except Exception as e:
+        raw_lines.append(f'[pdfplumber error: {e}]')
+
+    return {'title_block': title_block, 'notes': notes, 'raw_lines': raw_lines}
+
+
+# ── Claude vision pass ────────────────────────────────────────────────────────
+
+def _pdf_to_image_b64(pdf_bytes: bytes) -> list:
+    """Render each PDF page to a PNG and return list of base64 strings."""
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+        images = []
+        for page in doc:
+            # ~96 dpi — keeps memory low on shared Render instance; still readable by Claude
+            mat = fitz.Matrix(1.0, 1.0)
+            pix = page.get_pixmap(matrix=mat)
+            images.append(base64.standard_b64encode(pix.tobytes('png')).decode())
+        doc.close()
+        return images
+    except Exception:
+        return []
+
+
+def _extract_via_vision(pdf_bytes: bytes) -> dict | None:
+    if not ANTHROPIC_API_KEY:
+        return None
+    images_b64 = _pdf_to_image_b64(pdf_bytes)
+    if not images_b64:
+        return None
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+        content = []
+        for b64 in images_b64[:3]:  # max 3 pages
+            content.append({
+                'type': 'image',
+                'source': {'type': 'base64', 'media_type': 'image/png', 'data': b64},
+            })
+        content.append({'type': 'text', 'text': EXTRACTION_PROMPT})
+
+        response = client.messages.create(
+            model='claude-sonnet-4-5',
+            max_tokens=4096,
+            messages=[{'role': 'user', 'content': content}],
+        )
+        raw = response.content[0].text.strip()
+
+        # Strip markdown fences if present
+        if raw.startswith('```'):
+            raw = re.sub(r'^```(?:json)?\n?', '', raw)
+            raw = re.sub(r'\n?```$', '', raw)
+
+        return json.loads(raw)
+
+    except Exception:
+        return None

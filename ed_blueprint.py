@@ -5,6 +5,7 @@ import psycopg2
 import psycopg2.extras
 from datetime import datetime
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, Response
+from checker import run_check
 
 ed_bp = Blueprint(
     'ed',
@@ -62,87 +63,23 @@ def init_ed_db():
     print("ED Checker DB initialised", flush=True)
 
 
-DUMMY_ISSUES = [
-    {
-        "category": "Title Block",
-        "title": "Missing Revision Number",
-        "description": "The title block does not contain a revision number. All drawings must carry a revision entry (R0, R1 …) before submission.",
-        "suggestion": "Add revision number 'R0' in the Revision field of the title block.",
-        "severity": "error", "page_num": 1,
-        "x": 63, "y": 80, "width": 32, "height": 6,
-    },
-    {
-        "category": "Title Block",
-        "title": "Drawing Scale Not Specified",
-        "description": "The scale field in the title block is empty. Drawings without an explicit scale are non-compliant with CASAD standards.",
-        "suggestion": "Specify the drawing scale (e.g. 1:50) in the title block scale field.",
-        "severity": "error", "page_num": 1,
-        "x": 63, "y": 87, "width": 16, "height": 5,
-    },
-    {
-        "category": "Dimensions",
-        "title": "Pile Cap Depth Not Dimensioned",
-        "description": "Overall pile cap length × width are shown but depth is missing from the section view.",
-        "suggestion": "Add the pile cap depth dimension in the section view. Refer IRC:78 Cl. 709 for minimum thickness.",
-        "severity": "error", "page_num": 1,
-        "x": 15, "y": 25, "width": 30, "height": 22,
-    },
-    {
-        "category": "Dimensions",
-        "title": "Pedestal Height Not Dimensioned",
-        "description": "Pedestal height above pile cap is not shown in the elevation view.",
-        "suggestion": "Add vertical dimension: top of pile cap to top of pedestal.",
-        "severity": "error", "page_num": 1,
-        "x": 46, "y": 20, "width": 10, "height": 35,
-    },
-    {
-        "category": "Reinforcement",
-        "title": "Pile Bar Diameter Not Called Out",
-        "description": "Longitudinal bars are shown but bar diameter and count are not annotated. IRC:78 requires full reinforcement specification.",
-        "suggestion": "Add callout in format: N-TφD@S (e.g. 12-T16@200) per IRC:78 notation.",
-        "severity": "error", "page_num": 1,
-        "x": 62, "y": 35, "width": 22, "height": 18,
-    },
-    {
-        "category": "Reinforcement",
-        "title": "Stirrup Spacing Not Specified",
-        "description": "Pile cap stirrups are drawn but spacing is not dimensioned or noted anywhere.",
-        "suggestion": "Specify stirrup spacing in the section detail or add a note referencing the reinforcement schedule.",
-        "severity": "warning", "page_num": 1,
-        "x": 18, "y": 52, "width": 25, "height": 14,
-    },
-    {
-        "category": "Cross-References",
-        "title": "Section Mark Missing in Plan View",
-        "description": "Section A-A is detailed but the cutting plane line and reference mark are absent from the plan view.",
-        "suggestion": "Add section cut line A-A with direction arrows in the plan view, referencing the detail sheet number.",
-        "severity": "warning", "page_num": 1,
-        "x": 5, "y": 10, "width": 55, "height": 68,
-    },
-    {
-        "category": "Notes",
-        "title": "Concrete Grade Not Specified",
-        "description": "General notes do not state the concrete grade for pile cap and piles. IRC:78 requires this to be explicit.",
-        "suggestion": "Add note: 'Concrete for piles and pile cap: M35 as per IS:456.' Confirm grade with design engineer.",
-        "severity": "warning", "page_num": 1,
-        "x": 5, "y": 68, "width": 28, "height": 8,
-    },
-]
-
-
-def _seed_issues(review_id, conn):
-    cur = conn.cursor()
-    for issue in DUMMY_ISSUES:
+def _save_issues(review_id, issues, cur):
+    for issue in issues:
         cur.execute(
             '''INSERT INTO issues
                (id, review_id, category, title, description, suggestion,
                 severity, page_num, x, y, width, height, status)
                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'open')''',
-            (str(uuid.uuid4()), review_id, issue['category'], issue['title'],
-             issue['description'], issue['suggestion'], issue['severity'],
-             issue['page_num'], issue['x'], issue['y'], issue['width'], issue['height'])
+            (str(uuid.uuid4()), review_id,
+             issue.get('category', 'General'),
+             issue.get('title', 'Issue'),
+             issue.get('description', ''),
+             issue.get('suggestion', ''),
+             issue.get('severity', 'warning'),
+             issue.get('page_num', 1),
+             issue.get('x', 5), issue.get('y', 5),
+             issue.get('width', 20), issue.get('height', 10))
         )
-    cur.close()
 
 
 @ed_bp.route('/')
@@ -176,6 +113,13 @@ def upload():
     pdf_bytes = f.read()
     name  = request.form.get('drawing_name', '').strip() or f.filename
     dtype = request.form.get('drawing_type', 'General')
+
+    design_files = [
+        (u.filename, u.read())
+        for u in request.files.getlist('design_inputs')
+        if u and u.filename
+    ]
+
     drawing_id = str(uuid.uuid4())
     review_id  = str(uuid.uuid4())
     now = datetime.now().isoformat()
@@ -185,9 +129,24 @@ def upload():
                 (drawing_id, name, dtype, now))
     cur.execute(
         'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at) VALUES (%s,%s,1,%s,%s,%s)',
-        (review_id, drawing_id, psycopg2.Binary(pdf_bytes), 'complete', now)
+        (review_id, drawing_id, psycopg2.Binary(pdf_bytes), 'processing', now)
     )
-    _seed_issues(review_id, conn)
+    conn.commit()
+
+    try:
+        issues = run_check(pdf_bytes, design_files)
+        _save_issues(review_id, issues, cur)
+        cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
+    except Exception as e:
+        _save_issues(review_id, [{
+            'category': 'System', 'title': 'Checker error',
+            'description': f'An unexpected error occurred: {e}',
+            'suggestion': 'Check server logs.',
+            'severity': 'error', 'page_num': 1,
+            'x': 5, 'y': 5, 'width': 30, 'height': 8,
+        }], cur)
+        cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
+
     conn.commit()
     cur.close()
     conn.close()
@@ -287,6 +246,13 @@ def reupload(drawing_id):
         cur.close(); conn.close()
         return "Only PDF files are accepted.", 400
     pdf_bytes = f.read()
+
+    design_files = [
+        (u.filename, u.read())
+        for u in request.files.getlist('design_inputs')
+        if u and u.filename
+    ]
+
     cur.execute('SELECT MAX(version) AS v FROM reviews WHERE drawing_id=%s', (drawing_id,))
     last = cur.fetchone()
     new_ver   = (last['v'] or 0) + 1
@@ -294,9 +260,24 @@ def reupload(drawing_id):
     now = datetime.now().isoformat()
     cur.execute(
         'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at) VALUES (%s,%s,%s,%s,%s,%s)',
-        (review_id, drawing_id, new_ver, psycopg2.Binary(pdf_bytes), 'complete', now)
+        (review_id, drawing_id, new_ver, psycopg2.Binary(pdf_bytes), 'processing', now)
     )
-    _seed_issues(review_id, conn)
+    conn.commit()
+
+    try:
+        issues = run_check(pdf_bytes, design_files)
+        _save_issues(review_id, issues, cur)
+        cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
+    except Exception as e:
+        _save_issues(review_id, [{
+            'category': 'System', 'title': 'Checker error',
+            'description': f'An unexpected error occurred: {e}',
+            'suggestion': 'Check server logs.',
+            'severity': 'error', 'page_num': 1,
+            'x': 5, 'y': 5, 'width': 30, 'height': 8,
+        }], cur)
+        cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
+
     conn.commit()
     cur.close()
     conn.close()

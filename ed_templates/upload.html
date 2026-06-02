@@ -8,18 +8,41 @@
     <p class="upload-subtitle">Upload a PDF drawing to get an AI-powered review against CASAD and IRC/IS standards.</p>
 
     <form id="upload-form" action="/ed/upload" method="POST" enctype="multipart/form-data">
+
+      <!-- Slot 1: Drawing to review (mandatory) -->
+      <div class="slot-label">
+        <span class="slot-num">1</span>
+        <span>Drawing to Review <span class="slot-required">required</span></span>
+      </div>
       <div class="drop-zone" id="drop-zone">
         <input type="file" id="file-input" name="file" accept=".pdf" hidden>
         <div class="drop-zone-inner" id="drop-label">
-          <span class="drop-icon">📄</span>
+          <span class="drop-icon-text">PDF</span>
           <p class="drop-primary">Drag &amp; drop PDF here</p>
           <p class="drop-secondary">or <button type="button" class="link-btn" onclick="document.getElementById('file-input').click()">browse to upload</button></p>
         </div>
         <div class="drop-zone-selected" id="drop-selected" style="display:none">
-          <span class="drop-icon">✅</span>
+          <span class="drop-icon-text drop-ok">OK</span>
           <p class="drop-primary" id="selected-filename"></p>
           <button type="button" class="link-btn" onclick="clearFile()">Remove</button>
         </div>
+      </div>
+
+      <!-- Slot 2: Design inputs (optional, multiple) -->
+      <div class="slot-label" style="margin-top:24px">
+        <span class="slot-num slot-num-opt">2</span>
+        <span>Design Inputs <span class="slot-optional">optional — upload one or more</span></span>
+      </div>
+      <div class="design-input-zone" id="design-drop-zone">
+        <input type="file" id="design-input" name="design_inputs"
+               accept=".xlsx,.xls,.pdf,.jpg,.jpeg,.png" multiple hidden>
+        <div class="design-inner" id="design-label">
+          <span class="drop-icon-text di-icon">XLS / PDF / IMG</span>
+          <p class="drop-primary">E2E design input Excel, reference drawing PDF, or notes image</p>
+          <p class="drop-secondary"><button type="button" class="link-btn" onclick="document.getElementById('design-input').click()">Browse files</button></p>
+        </div>
+        <ul class="design-file-list" id="design-file-list"></ul>
+        <p class="design-hint">Without design inputs, only title-block format and schedule arithmetic can be checked.</p>
       </div>
 
       <div class="form-row">
@@ -30,10 +53,10 @@
         <div class="form-group">
           <label for="drawing_type">Drawing Type</label>
           <select id="drawing_type" name="drawing_type">
-            <option value="Foundation">Foundation</option>
+            <option value="Foundation">Foundation (Pile-Pilecap-Pier)</option>
             <option value="GAD">GAD (General Arrangement)</option>
-            <option value="Structural">Structural</option>
-            <option value="Reinforcement">Reinforcement Detail</option>
+            <option value="Abutment">Abutment</option>
+            <option value="Superstructure">Superstructure</option>
             <option value="Bearing">Bearing Detail</option>
             <option value="General" selected>General</option>
           </select>
@@ -41,7 +64,7 @@
       </div>
 
       <button type="submit" class="btn btn-primary btn-upload" id="submit-btn" disabled>
-        Review Drawing
+        Run AI Check
       </button>
     </form>
   </div>

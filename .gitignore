@@ -1,4 +1,7 @@
 .env
 *.db
 media/
+__pycache__/
+*.pyc
+*.pyo
 # Excel templates are committed as slim versions (images stripped)

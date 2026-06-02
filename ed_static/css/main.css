@@ -167,6 +167,36 @@ button { cursor: pointer; font: inherit; }
 
 .btn-upload { width: 100%; justify-content: center; padding: 11px; font-size: 14px; }
 
+/* Slot labels */
+.slot-label { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+.slot-num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--blue); color: #fff; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+.slot-num-opt { background: var(--border-dark); }
+.slot-required { font-size: 11px; font-weight: 600; color: var(--red); background: rgba(220,38,38,.08); padding: 2px 7px; border-radius: 4px; }
+.slot-optional  { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+
+/* Drop icon text badge */
+.drop-icon-text { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .05em; padding: 4px 10px; border-radius: 5px; background: var(--border-dark); color: var(--text-muted); margin-bottom: 10px; }
+.drop-icon-text.drop-ok { background: rgba(22,163,74,.12); color: #15803d; }
+.drop-icon-text.di-icon { background: rgba(37,99,235,.1); color: var(--blue); }
+
+/* Design input zone */
+.design-input-zone {
+  border: 2px dashed var(--border-dark);
+  border-radius: 8px;
+  background: var(--slate-bg);
+  padding: 18px 20px;
+  cursor: pointer;
+  transition: border-color .2s;
+  margin-bottom: 20px;
+}
+.design-input-zone.dragover { border-color: var(--blue); }
+.design-inner { text-align: center; }
+.design-file-list { list-style: none; margin: 10px 0 0; padding: 0; }
+.di-file-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; background: var(--surface); border-radius: 5px; margin-bottom: 5px; font-size: 13px; border: 1px solid var(--border); }
+.di-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.di-remove { font-size: 12px; color: var(--red); flex-shrink: 0; }
+.design-hint { font-size: 12px; color: var(--text-muted); margin: 8px 0 0; text-align: center; }
+
 /* Recent table */
 .recent-section  { margin-top: 36px; }
 .recent-title    { font-size: 16px; font-weight: 700; margin-bottom: 14px; }

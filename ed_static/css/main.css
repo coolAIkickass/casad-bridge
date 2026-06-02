@@ -487,17 +487,21 @@ button { cursor: pointer; font: inherit; }
 .highlight::before {
   content: attr(data-num);
   position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  left: -30px;          /* sits in the margin to the LEFT of the schedule table */
-  font-size: 10px; font-weight: 700;
-  padding: 1px 5px;
+  top: -14px;           /* float ABOVE the highlight box, not inside the drawing row */
+  left: 2px;
+  transform: none;
+  font-size: 9px; font-weight: 700;
+  padding: 0px 4px;
   border-radius: 3px;
   color: white;
-  line-height: 1.5;
+  line-height: 1.6;
   pointer-events: none;
   white-space: nowrap;
+  opacity: 0.4;         /* ghosted at rest so drawing text stays readable */
+  transition: opacity .15s;
 }
+.highlight:hover::before,
+.highlight.selected::before { opacity: 1; }   /* fully visible on hover / selection */
 .highlight.sev-error::before   { background: rgba(220,38,38,.9); }
 .highlight.sev-warning::before { background: rgba(217,119,6,.9); }
 .highlight.resolved::before    { background: var(--text-faint); }

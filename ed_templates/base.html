@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}CASAD ED Checker{% endblock %}</title>
+  <link rel="stylesheet" href="/ed/static/css/main.css">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="app-header">
+    <a href="/ed/" class="header-brand">
+      <span class="brand-logo">⬡</span>
+      <span class="brand-name">CASAD <span class="brand-sub">ED Checker</span></span>
+    </a>
+    <nav class="header-nav">
+      <a href="/ed/">All Drawings</a>
+    </nav>
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

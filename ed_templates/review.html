@@ -1,0 +1,83 @@
+{% extends 'base.html' %}
+{% block title %}{{ review.name }} v{{ review.version }} — CASAD ED Checker{% endblock %}
+
+{% block content %}
+<div class="review-toolbar">
+  <div class="toolbar-left">
+    <a href="/ed/" class="back-link">← All Drawings</a>
+    <span class="toolbar-divider">/</span>
+    <span class="toolbar-name">{{ review.name }}</span>
+    <span class="version-badge">v{{ review.version }}</span>
+    <span class="type-tag">{{ review.drawing_type }}</span>
+    {% if versions|length > 1 %}
+    <select class="version-select" onchange="window.location='/review/'+this.value" title="Switch version">
+      {% for v in versions %}
+      <option value="{{ v.id }}" {% if v.id == review.id %}selected{% endif %}>Version {{ v.version }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+  </div>
+  <div class="toolbar-right">
+    <a href="/ed/reupload/{{ review.drawing_id }}" class="btn btn-primary btn-sm">↑ Upload Corrected Version</a>
+  </div>
+</div>
+
+<div class="review-layout">
+
+  <!-- PDF Panel -->
+  <div class="pdf-panel">
+    <div class="pdf-controls">
+      <button id="btn-prev" class="ctrl-btn" disabled title="Previous page">&#9664;</button>
+      <span class="page-info">Page <strong id="current-page">1</strong> of <span id="total-pages">—</span></span>
+      <button id="btn-next" class="ctrl-btn" title="Next page">&#9654;</button>
+      <span class="ctrl-sep"></span>
+      <button id="btn-zoom-out" class="ctrl-btn" title="Zoom out">−</button>
+      <span id="zoom-label" class="zoom-label">150%</span>
+      <button id="btn-zoom-in" class="ctrl-btn" title="Zoom in">+</button>
+    </div>
+    <div class="pdf-scroll-area">
+      <div class="pdf-wrapper" id="pdf-wrapper">
+        <canvas id="pdf-canvas"></canvas>
+        <div id="highlights-layer"></div>
+      </div>
+      <div id="pdf-loading" class="pdf-loading">Loading PDF…</div>
+    </div>
+  </div>
+
+  <!-- Issue Panel -->
+  <div class="issue-panel">
+    <div class="summary-bar" id="summary-bar">
+      <div class="summary-stat stat-error">
+        <span class="stat-num" id="summary-errors">—</span>
+        <span class="stat-label">Errors</span>
+      </div>
+      <div class="summary-stat stat-warning">
+        <span class="stat-num" id="summary-warnings">—</span>
+        <span class="stat-label">Warnings</span>
+      </div>
+      <div class="summary-stat stat-resolved">
+        <span class="stat-num" id="summary-resolved">—</span>
+        <span class="stat-label">Resolved</span>
+      </div>
+    </div>
+
+    <div class="issue-list" id="issue-list">
+      <div class="panel-loading">Analysing drawing…</div>
+    </div>
+
+    <div class="panel-footer">
+      <a href="/ed/reupload/{{ review.drawing_id }}" class="btn btn-primary btn-block">
+        ↑ Upload Corrected Version
+      </a>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  window.REVIEW_ID = '{{ review.id }}';
+  window.PDF_URL   = '/pdf/{{ review.id }}';
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="/static/js/review.js"></script>
+{% endblock %}

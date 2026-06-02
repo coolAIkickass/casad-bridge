@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% block title %}Re-upload — {{ drawing.name }} — CASAD ED Checker{% endblock %}
+
+{% block content %}
+<div class="upload-page">
+  <div class="upload-card">
+    <div class="reupload-header">
+      <a href="/ed/" class="back-link">← All Drawings</a>
+      <h1 class="upload-title">Upload Corrected Drawing</h1>
+      <p class="upload-subtitle">
+        <strong>{{ drawing.name }}</strong> &nbsp;·&nbsp; {{ drawing.drawing_type }}
+        &nbsp;·&nbsp; Uploading as <strong>Version {{ current_version + 1 }}</strong>
+      </p>
+    </div>
+
+    {% if open_issues %}
+    <div class="open-issues-reminder">
+      <h3 class="reminder-title">{{ open_issues|length }} open issue{{ 's' if open_issues|length != 1 }} to address</h3>
+      <div class="reminder-list">
+        {% for issue in open_issues %}
+        <div class="reminder-item sev-{{ issue.severity }}">
+          <span class="sev-dot"></span>
+          <div>
+            <div class="reminder-issue-title">{{ issue.title }}</div>
+            <div class="reminder-suggestion">{{ issue.suggestion }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <form id="upload-form" action="/ed/reupload/{{ drawing.id }}" method="POST" enctype="multipart/form-data">
+      <div class="drop-zone" id="drop-zone">
+        <input type="file" id="file-input" name="file" accept=".pdf" hidden>
+        <div class="drop-zone-inner" id="drop-label">
+          <span class="drop-icon">📄</span>
+          <p class="drop-primary">Drag &amp; drop corrected PDF here</p>
+          <p class="drop-secondary">or <button type="button" class="link-btn" onclick="document.getElementById('file-input').click()">browse to upload</button></p>
+        </div>
+        <div class="drop-zone-selected" id="drop-selected" style="display:none">
+          <span class="drop-icon">✅</span>
+          <p class="drop-primary" id="selected-filename"></p>
+          <button type="button" class="link-btn" onclick="clearFile()">Remove</button>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-upload" id="submit-btn" disabled>
+        Submit for Re-review
+      </button>
+    </form>
+  </div>
+</div>
+
+<script src="/static/js/upload.js"></script>
+{% endblock %}

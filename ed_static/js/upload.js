@@ -94,4 +94,5 @@ designDropZone.addEventListener('drop', (e) => {
 document.getElementById('upload-form').addEventListener('submit', () => {
   submitBtn.disabled = true;
   submitBtn.textContent = 'Reviewing drawing...';
+  submitBtn.classList.add('reviewing');
 });

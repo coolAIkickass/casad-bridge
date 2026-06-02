@@ -8,8 +8,10 @@ import os
 import re
 import json
 import base64
+import logging
 import pdfplumber
 
+log = logging.getLogger(__name__)
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 
 EXTRACTION_PROMPT = """You are analyzing a CASAD AutoCAD engineering drawing for a bridge structure (Pile-Pilecap-Pier foundation).
@@ -207,16 +209,25 @@ def _pdf_to_image_b64(pdf_bytes: bytes) -> list:
     """Render each PDF page to a PNG and return list of base64 strings."""
     try:
         import fitz  # PyMuPDF
+        log.info('PyMuPDF imported OK, rendering PDF (%d bytes)', len(pdf_bytes))
         doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+        log.info('PDF opened: %d pages', doc.page_count)
         images = []
-        for page in doc:
-            # ~96 dpi — keeps memory low on shared Render instance; still readable by Claude
+        for i, page in enumerate(doc):
             mat = fitz.Matrix(1.0, 1.0)
             pix = page.get_pixmap(matrix=mat)
-            images.append(base64.standard_b64encode(pix.tobytes('png')).decode())
+            b64 = base64.standard_b64encode(pix.tobytes('png')).decode()
+            log.info('Page %d rendered: %dx%d px, b64 len=%d', i+1, pix.width, pix.height, len(b64))
+            images.append(b64)
         doc.close()
         return images
-    except Exception:
+    except ImportError as e:
+        log.error('PyMuPDF (fitz) not installed: %s', e)
+        print(f'[ED Checker] PyMuPDF import failed: {e}', flush=True)
+        return []
+    except Exception as e:
+        log.error('PDF rendering error: %s', e, exc_info=True)
+        print(f'[ED Checker] PDF rendering error: {e}', flush=True)
         return []
 
 
@@ -225,14 +236,16 @@ def _extract_via_vision(pdf_bytes: bytes) -> dict | None:
         return None
     images_b64 = _pdf_to_image_b64(pdf_bytes)
     if not images_b64:
+        log.error('No images rendered from PDF — vision extraction aborted')
         return None
 
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        log.info('Sending %d page image(s) to Claude vision API', len(images_b64[:3]))
 
         content = []
-        for b64 in images_b64[:3]:  # max 3 pages
+        for b64 in images_b64[:3]:
             content.append({
                 'type': 'image',
                 'source': {'type': 'base64', 'media_type': 'image/png', 'data': b64},
@@ -240,18 +253,28 @@ def _extract_via_vision(pdf_bytes: bytes) -> dict | None:
         content.append({'type': 'text', 'text': EXTRACTION_PROMPT})
 
         response = client.messages.create(
-            model='claude-sonnet-4-5',
+            model='claude-sonnet-4-6',   # corrected from claude-sonnet-4-5
             max_tokens=4096,
             messages=[{'role': 'user', 'content': content}],
         )
         raw = response.content[0].text.strip()
+        log.info('Claude vision response received, length=%d chars', len(raw))
 
         # Strip markdown fences if present
         if raw.startswith('```'):
             raw = re.sub(r'^```(?:json)?\n?', '', raw)
             raw = re.sub(r'\n?```$', '', raw)
 
-        return json.loads(raw)
+        parsed = json.loads(raw)
+        schedule_rows = len(parsed.get('schedule') or [])
+        log.info('Vision extraction OK — schedule rows=%d', schedule_rows)
+        return parsed
 
-    except Exception:
+    except json.JSONDecodeError as e:
+        log.error('Claude returned non-JSON: %s … (first 200 chars: %s)', e, raw[:200])
+        print(f'[ED Checker] Vision JSON parse error: {e}', flush=True)
+        return None
+    except Exception as e:
+        log.error('Claude vision API error: %s', e, exc_info=True)
+        print(f'[ED Checker] Claude API error: {e}', flush=True)
         return None

@@ -1,12 +1,20 @@
 # ed_blueprint.py — ED Checker (Drawing Review) app mounted at /ed
 import os
 import uuid
+import logging
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, Response
 import json
 from checker import run_check, parse_design_inputs
+
+# Ensure Python logs reach Render's stdout
+logging.basicConfig(
+    level=logging.INFO,
+    format='[ED %(levelname)s] %(name)s — %(message)s',
+    force=True,
+)
 
 ed_bp = Blueprint(
     'ed',
@@ -225,6 +233,49 @@ def update_status(issue_id):
     cur.close()
     conn.close()
     return jsonify({'ok': True})
+
+
+@ed_bp.route('/api/diagnostics')
+def diagnostics():
+    """Quick environment check — visit /ed/api/diagnostics to verify setup."""
+    info = {}
+
+    # API key
+    key = os.environ.get('ANTHROPIC_API_KEY', '')
+    info['anthropic_api_key'] = 'set' if key else 'MISSING'
+
+    # PyMuPDF
+    try:
+        import fitz
+        info['pymupdf'] = fitz.__version__
+    except ImportError as e:
+        info['pymupdf'] = f'MISSING — {e}'
+
+    # pdfplumber
+    try:
+        import pdfplumber
+        info['pdfplumber'] = pdfplumber.__version__
+    except ImportError as e:
+        info['pdfplumber'] = f'MISSING — {e}'
+
+    # openpyxl
+    try:
+        import openpyxl
+        info['openpyxl'] = openpyxl.__version__
+    except ImportError as e:
+        info['openpyxl'] = f'MISSING — {e}'
+
+    # DB
+    try:
+        conn = _get_db()
+        conn.close()
+        info['database'] = 'connected'
+    except Exception as e:
+        info['database'] = f'ERROR — {e}'
+
+    all_ok = all('MISSING' not in str(v) and 'ERROR' not in str(v) for v in info.values())
+    info['status'] = 'ok' if all_ok else 'degraded'
+    return jsonify(info)
 
 
 @ed_bp.route('/reupload/<drawing_id>', methods=['GET', 'POST'])

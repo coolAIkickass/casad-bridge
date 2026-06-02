@@ -165,7 +165,42 @@ button { cursor: pointer; font: inherit; }
 .form-group input:focus,
 .form-group select:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
 
-.btn-upload { width: 100%; justify-content: center; padding: 11px; font-size: 14px; }
+.btn-upload { width: 100%; justify-content: center; padding: 11px; font-size: 14px; position: relative; overflow: hidden; }
+
+/* Progress fill animation while drawing is being reviewed */
+@keyframes btn-progress-fill {
+  0%   { width: 0%; }
+  10%  { width: 18%; }
+  25%  { width: 38%; }
+  45%  { width: 55%; }
+  65%  { width: 70%; }
+  80%  { width: 80%; }
+  92%  { width: 88%; }
+  100% { width: 90%; }   /* never reaches 100% — avoids false sense of completion */
+}
+@keyframes btn-shimmer {
+  0%   { left: -60%; }
+  100% { left: 110%; }
+}
+.btn-upload.reviewing::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  height: 100%;
+  background: rgba(255,255,255,0.18);
+  animation: btn-progress-fill 40s cubic-bezier(0.4,0,0.2,1) forwards;
+  pointer-events: none;
+}
+.btn-upload.reviewing::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.22), transparent);
+  animation: btn-shimmer 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
 
 /* Slot labels */
 .slot-label { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; margin-bottom: 10px; }

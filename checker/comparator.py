@@ -17,11 +17,23 @@ BBOX_FALLBACK = {
 }
 
 
+_SCHEDULE_ZONES = {'pilecap_schedule', 'pile_schedule', 'pier_schedule', 'default'}
+
 def _bbox(zone, drawing_bbox=None):
-    """Return (x, y, w, h). Uses Claude-extracted bbox when available, else fallback."""
+    """Return (x, y, w, h). Uses Claude-extracted bbox when plausible, else fallback."""
     if drawing_bbox and all(k in drawing_bbox for k in ('x', 'y', 'w', 'h')):
         b = drawing_bbox
-        return b['x'], b['y'], b['w'], b['h']
+        x, y, w, h = float(b['x']), float(b['y']), float(b['w']), float(b['h'])
+        # Basic validity
+        if 0 <= x <= 100 and 0 <= y <= 100 and 0 < w <= 60 and 0 < h <= 20:
+            if zone in _SCHEDULE_ZONES:
+                # Schedule rows must be on the right side of the drawing and
+                # above the title block (which starts ~73% down)
+                if x >= 40 and y <= 73 and h <= 10:
+                    return x, y, w, h
+            else:
+                # Title block, notes, table_1 — trust Claude's coords
+                return x, y, w, h
     b = BBOX_FALLBACK.get(zone, BBOX_FALLBACK['default'])
     return b['x'], b['y'], b['w'], b['h']
 

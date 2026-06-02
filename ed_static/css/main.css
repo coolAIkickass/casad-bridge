@@ -467,13 +467,16 @@ button { cursor: pointer; font: inherit; }
 .highlight::before {
   content: attr(data-num);
   position: absolute;
-  top: -13px; left: -1px;
+  top: 50%;
+  transform: translateY(-50%);
+  left: -30px;          /* sits in the margin to the LEFT of the schedule table */
   font-size: 10px; font-weight: 700;
   padding: 1px 5px;
   border-radius: 3px;
   color: white;
   line-height: 1.5;
   pointer-events: none;
+  white-space: nowrap;
 }
 .highlight.sev-error::before   { background: rgba(220,38,38,.9); }
 .highlight.sev-warning::before { background: rgba(217,119,6,.9); }

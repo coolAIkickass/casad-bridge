@@ -5,7 +5,8 @@ import psycopg2
 import psycopg2.extras
 from datetime import datetime
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, Response
-from checker import run_check
+import json
+from checker import run_check, parse_design_inputs
 
 ed_bp = Blueprint(
     'ed',
@@ -41,6 +42,7 @@ def init_ed_db():
             status       TEXT NOT NULL DEFAULT 'complete',
             created_at   TEXT NOT NULL
         );
+        ALTER TABLE reviews ADD COLUMN IF NOT EXISTS design_data TEXT;
         CREATE TABLE IF NOT EXISTS issues (
             id          TEXT PRIMARY KEY,
             review_id   TEXT NOT NULL REFERENCES reviews(id),
@@ -120,6 +122,10 @@ def upload():
         if u and u.filename
     ]
 
+    # Parse design inputs once; store JSON so re-uploads can reuse without re-uploading files
+    design_data, parse_errors = parse_design_inputs(design_files)
+    design_data_json = json.dumps(design_data) if design_data else None
+
     drawing_id = str(uuid.uuid4())
     review_id  = str(uuid.uuid4())
     now = datetime.now().isoformat()
@@ -128,13 +134,21 @@ def upload():
     cur.execute('INSERT INTO drawings (id, name, drawing_type, created_at) VALUES (%s,%s,%s,%s)',
                 (drawing_id, name, dtype, now))
     cur.execute(
-        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at) VALUES (%s,%s,1,%s,%s,%s)',
-        (review_id, drawing_id, psycopg2.Binary(pdf_bytes), 'processing', now)
+        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data) VALUES (%s,%s,1,%s,%s,%s,%s)',
+        (review_id, drawing_id, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json)
     )
     conn.commit()
 
     try:
-        issues = run_check(pdf_bytes, design_files)
+        issues = run_check(pdf_bytes, design_data)
+        for err in parse_errors:
+            issues.append({
+                'category': 'Input', 'title': 'Design input parse error',
+                'description': f'Could not parse design input: {err}',
+                'suggestion': 'Check that the Excel file matches the CASAD E2E BBS format.',
+                'severity': 'warning', 'page_num': 1,
+                'x': 5, 'y': 5, 'width': 30, 'height': 8,
+            })
         _save_issues(review_id, issues, cur)
         cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
     except Exception as e:
@@ -247,11 +261,25 @@ def reupload(drawing_id):
         return "Only PDF files are accepted.", 400
     pdf_bytes = f.read()
 
-    design_files = [
+    # Load design_data from the most recent previous version — no need to re-upload files
+    cur.execute(
+        'SELECT design_data FROM reviews WHERE drawing_id=%s ORDER BY version DESC LIMIT 1',
+        (drawing_id,)
+    )
+    prev = cur.fetchone()
+    design_data = json.loads(prev['design_data']) if prev and prev['design_data'] else {}
+
+    # Allow overriding design inputs if new files are uploaded on this re-upload
+    new_design_files = [
         (u.filename, u.read())
         for u in request.files.getlist('design_inputs')
         if u and u.filename
     ]
+    parse_errors = []
+    if new_design_files:
+        design_data, parse_errors = parse_design_inputs(new_design_files)
+
+    design_data_json = json.dumps(design_data) if design_data else None
 
     cur.execute('SELECT MAX(version) AS v FROM reviews WHERE drawing_id=%s', (drawing_id,))
     last = cur.fetchone()
@@ -259,13 +287,21 @@ def reupload(drawing_id):
     review_id = str(uuid.uuid4())
     now = datetime.now().isoformat()
     cur.execute(
-        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at) VALUES (%s,%s,%s,%s,%s,%s)',
-        (review_id, drawing_id, new_ver, psycopg2.Binary(pdf_bytes), 'processing', now)
+        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data) VALUES (%s,%s,%s,%s,%s,%s,%s)',
+        (review_id, drawing_id, new_ver, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json)
     )
     conn.commit()
 
     try:
-        issues = run_check(pdf_bytes, design_files)
+        issues = run_check(pdf_bytes, design_data)
+        for err in parse_errors:
+            issues.append({
+                'category': 'Input', 'title': 'Design input parse error',
+                'description': f'Could not parse design input: {err}',
+                'suggestion': 'Check that the Excel file matches the CASAD E2E BBS format.',
+                'severity': 'warning', 'page_num': 1,
+                'x': 5, 'y': 5, 'width': 30, 'height': 8,
+            })
         _save_issues(review_id, issues, cur)
         cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
     except Exception as e:

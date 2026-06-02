@@ -215,6 +215,17 @@ button { cursor: pointer; font: inherit; }
 /* Reviewing overrides disabled — keep blue so the animation is visible */
 .btn-upload.reviewing,
 .btn-upload.reviewing:disabled { background: var(--blue); border-color: var(--blue); color: #fff; cursor: wait; }
+.review-wait-note {
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #1e40af;
+  text-align: center;
+  line-height: 1.5;
+}
 .btn-upload { width: 100%; justify-content: center; padding: 11px; font-size: 14px; position: relative; overflow: hidden; }
 
 /* Progress fill animation while drawing is being reviewed */
@@ -255,8 +266,8 @@ button { cursor: pointer; font: inherit; }
 /* Slot labels */
 .slot-label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; margin-bottom: 10px; }
 .slot-label-opt { margin-top: 20px; }
-.slot-num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--blue); color: #fff; font-size: 12px; font-weight: 700; flex-shrink: 0; }
-.slot-num-opt { background: var(--border-dark); }
+.slot-num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: #374151; color: #fff; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+.slot-num-opt { background: #374151; }  /* same as slot-num — labels convey required/optional */
 .slot-required { font-size: 11px; font-weight: 600; color: var(--red); background: rgba(220,38,38,.08); padding: 2px 7px; border-radius: 4px; }
 .slot-optional  { font-size: 11px; font-weight: 400; color: var(--text-muted); }
 .slot-hint { font-size: 11px; color: var(--text-muted); margin-left: auto; font-weight: 400; font-style: italic; }
@@ -458,8 +469,8 @@ button { cursor: pointer; font: inherit; }
 
 /* Selected (clicked): solid fill so it clearly stands out from all others */
 .highlight.selected {
-  border: 3px solid #f59e0b !important;   /* amber — distinct from both red error and blue UI */
-  background: rgba(245,158,11,.18) !important;
+  border: 3px solid #7c3aed !important;   /* purple — distinct from red errors and blue UI */
+  background: rgba(124,58,237,.15) !important;
   z-index: 10;
 }
 
@@ -481,7 +492,7 @@ button { cursor: pointer; font: inherit; }
 .highlight.sev-error::before   { background: rgba(220,38,38,.9); }
 .highlight.sev-warning::before { background: rgba(217,119,6,.9); }
 .highlight.resolved::before    { background: var(--text-faint); }
-.highlight.selected::before    { background: #f59e0b; }
+.highlight.selected::before    { background: #7c3aed; }
 
 /* Issue Panel */
 .issue-panel {

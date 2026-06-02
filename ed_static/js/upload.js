@@ -116,4 +116,5 @@ document.getElementById('upload-form').addEventListener('submit', () => {
   submitBtn.disabled = true;
   submitBtn.textContent = 'Reviewing drawing...';
   submitBtn.classList.add('reviewing');
+  document.getElementById('review-wait-note').style.display = '';
 });

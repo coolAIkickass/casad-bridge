@@ -4,12 +4,14 @@ Returns a list of issue dicts matching the DB schema.
 """
 import re
 
-# Fallback bounding boxes used only when Claude didn't return a bbox for that item.
-# Right side of PPP drawing layout: left ~62% = views, right ~38% = schedule + title block
+# Fallback section bboxes for each schedule component and other zones.
+# Used when Claude doesn't return section bboxes.
+# Right side of PPP drawing layout: left ~62% = views, right ~38% = schedule + title block.
+# Schedule order top-to-bottom: pilecap → pile → pier (each occupies a section of the right strip).
 BBOX_FALLBACK = {
-    'pilecap_schedule': {'x': 63, 'y': 22, 'w': 34, 'h':  4},  # single-row height
-    'pile_schedule':    {'x': 63, 'y': 22, 'w': 34, 'h':  4},
-    'pier_schedule':    {'x': 63, 'y': 22, 'w': 34, 'h':  4},
+    'pilecap_schedule': {'x': 62, 'y': 10, 'w': 35, 'h': 22},
+    'pile_schedule':    {'x': 62, 'y': 32, 'w': 35, 'h': 15},
+    'pier_schedule':    {'x': 62, 'y': 47, 'w': 35, 'h': 22},
     'title_block':      {'x': 63, 'y': 77, 'w': 34, 'h': 20},
     'notes':            {'x': 63, 'y': 67, 'w': 34, 'h':  9},
     'table_1':          {'x': 82, 'y':  1, 'w': 16, 'h':  4},
@@ -17,25 +19,70 @@ BBOX_FALLBACK = {
 }
 
 
-_SCHEDULE_ZONES = {'pilecap_schedule', 'pile_schedule', 'pier_schedule', 'default'}
+def _valid_section_bbox(b):
+    """Return True if b is a plausible schedule section-level bbox.
+    x must be >= 55 — the schedule is always in the right portion of a PPP drawing."""
+    if not b or not all(k in b for k in ('x', 'y', 'w', 'h')):
+        return False
+    x, y, w, h = float(b['x']), float(b['y']), float(b['w']), float(b['h'])
+    return 55 <= x <= 85 and 0 <= y <= 85 and 10 <= w <= 45 and 4 <= h <= 70
+
+
+def _get_section_bbox(zone, section_bboxes):
+    """Return section bbox dict for zone, from Claude or fallback."""
+    comp_key = zone.replace('_schedule', '')   # 'pilecap_schedule' → 'pilecap'
+    claude_bbox = (section_bboxes or {}).get(comp_key)
+    if _valid_section_bbox(claude_bbox):
+        return claude_bbox
+    fb = BBOX_FALLBACK.get(zone, BBOX_FALLBACK['default'])
+    return {'x': fb['x'], 'y': fb['y'], 'w': fb['w'], 'h': fb['h']}
+
 
 def _bbox(zone, drawing_bbox=None):
-    """Return (x, y, w, h). Uses Claude-extracted bbox when plausible, else fallback."""
+    """Return (x, y, w, h) for non-schedule items (title block, notes, views)."""
     if drawing_bbox and all(k in drawing_bbox for k in ('x', 'y', 'w', 'h')):
         b = drawing_bbox
         x, y, w, h = float(b['x']), float(b['y']), float(b['w']), float(b['h'])
-        # Basic validity
-        if 0 <= x <= 100 and 0 <= y <= 100 and 0 < w <= 60 and 0 < h <= 20:
-            if zone in _SCHEDULE_ZONES:
-                # Schedule rows must be on the right side of the drawing and
-                # above the title block (which starts ~73% down)
-                if x >= 40 and y <= 73 and h <= 10:
-                    return x, y, w, h
-            else:
-                # Title block, notes, table_1 — trust Claude's coords
-                return x, y, w, h
-    b = BBOX_FALLBACK.get(zone, BBOX_FALLBACK['default'])
-    return b['x'], b['y'], b['w'], b['h']
+        # Generous limits — section views can be tall (h up to 50%) and wide (w up to 80%)
+        if 0 <= x <= 100 and 0 <= y <= 100 and 0 < w <= 80 and 0 < h <= 50:
+            return x, y, w, h
+    fb = BBOX_FALLBACK.get(zone, BBOX_FALLBACK['default'])
+    return fb['x'], fb['y'], fb['w'], fb['h']
+
+
+def _find_section_bbox(text: str, sections: list,
+                        section_view_positions: dict = None) -> dict | None:
+    """
+    Look for a view/section name in the issue text.
+    Priority: 1) pdfplumber section_view_positions (exact coords from PDF text)
+              2) Claude's sections list (estimated)
+    """
+    if not text:
+        return None
+    text_upper = text.upper()
+
+    # 1. pdfplumber exact positions — keys are upper-cased line text (up to 60 chars)
+    for name, bbox in (section_view_positions or {}).items():
+        parts = [p for p in name.split() if len(p) >= 5]
+        if name in text_upper or any(p in text_upper for p in parts):
+            if bbox and all(k in bbox for k in ('x', 'y', 'w', 'h')):
+                return bbox
+
+    # 2. Claude's sections list
+    for s in (sections or []):
+        name = (s.get('name') or '').upper().strip()
+        if not name:
+            continue
+        if name in text_upper:
+            bbox = s.get('bbox')
+            if bbox and all(k in bbox for k in ('x', 'y', 'w', 'h')):
+                return bbox
+        short = name.split('(')[0].strip()
+        if len(short) >= 6 and short in text_upper:
+            bbox = s.get('bbox')
+            if bbox and all(k in bbox for k in ('x', 'y', 'w', 'h')):
+                return bbox
+    return None
 
 
 def _issue(category, title, description, suggestion, severity, zone, drawing_bbox=None):
@@ -108,14 +155,26 @@ def compare(design_data: dict, drawing_data: dict) -> list:
         ))
         return issues
 
+    bar_positions              = drawing_data.get('bar_positions') or {}
+    schedule_section_positions = drawing_data.get('schedule_section_positions') or {}
+    section_view_positions     = drawing_data.get('section_view_positions') or {}
+    section_bboxes             = drawing_data.get('schedule_section_bboxes') or {}
+    sections                   = drawing_data.get('sections') or []
+
     issues += _check_title_block(drawing_data.get('title_block') or {}, design_data)
     issues += _check_notes(drawing_data.get('notes') or {}, design_data)
-    issues += _check_schedule(drawing_data.get('schedule') or {}, design_data)
+    issues += _check_schedule(
+        drawing_data.get('schedule') or {}, design_data,
+        section_bboxes, bar_positions, schedule_section_positions,
+    )
     issues += _check_table1(drawing_data.get('table_1') or [], design_data)
-    issues += _check_sections(drawing_data.get('sections') or [])
-    issues += _check_notes_completeness(drawing_data.get('notes_check') or [])
-    issues += _check_label_issues(drawing_data.get('label_issues') or [])
-    issues += _check_dimension_issues(drawing_data.get('dimension_issues') or [])
+    issues += _check_sections(sections)
+    issues += _check_notes_completeness(
+        drawing_data.get('notes_check') or [], sections, section_view_positions)
+    issues += _check_label_issues(
+        drawing_data.get('label_issues') or [], sections, section_view_positions)
+    issues += _check_dimension_issues(
+        drawing_data.get('dimension_issues') or [], sections, section_view_positions)
 
     return issues
 
@@ -234,7 +293,9 @@ COMPONENT_ZONE = {
 }
 
 
-def _check_schedule(schedule: dict, design: dict) -> list:
+def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
+                    bar_positions: dict = None,
+                    schedule_section_positions: dict = None) -> list:
     issues = []
 
     component_map = {
@@ -257,8 +318,19 @@ def _check_schedule(schedule: dict, design: dict) -> list:
                 ))
             continue
 
+        # Fallback positioning: section bbox + row ordering (used when pdfplumber didn't
+        # find bar marks, e.g. if PDF text is rasterized)
+        plumber_sect = (schedule_section_positions or {}).get(comp)
+        claude_sect  = _get_section_bbox(zone, section_bboxes)
+        sect = plumber_sect if plumber_sect else claude_sect
+
+        sorted_bms = sorted(
+            drawing_comp.keys(),
+            key=lambda bm: (drawing_comp[bm].get('bbox') or {}).get('y', 0)
+        )
+        total = max(len(sorted_bms), 1)
+
         for bm, design_bar in design_bbs.items():
-            # Handle list (duplicate marks like two 'y' rows)
             if isinstance(design_bar, list):
                 design_bars = design_bar
             else:
@@ -266,17 +338,37 @@ def _check_schedule(schedule: dict, design: dict) -> list:
 
             drawing_bar = drawing_comp.get(bm)
             if not drawing_bar:
+                # "Not found" issue — highlight the component's section area
+                not_found_bbox = (bar_positions or {}).get(comp, {}).get(bm) or sect
                 issues.append(_issue(
                     'Reinforcement', f"Bar mark '{bm}' ({comp}) not found in drawing schedule",
                     f"Bar mark '{bm}' is specified in the design input but was not found in the drawing's {comp} schedule.",
                     f"Add bar mark '{bm}' to the {comp} schedule.",
-                    'error', zone
+                    'error', zone, not_found_bbox
                 ))
                 continue
 
             d_bar = design_bars[0]
-            # Pass Claude's extracted bbox for this bar so highlights land on the right row
-            bar_bbox = drawing_bar.get('bbox')
+
+            # Priority 1: pdfplumber exact bar position (pixel-perfect from PDF text)
+            plumber_bar = (bar_positions or {}).get(comp, {}).get(bm)
+            if plumber_bar:
+                # Text height is tiny (~0.3%); expand to at least 2.5% so highlight is visible
+                bar_bbox = {**plumber_bar, 'h': max(plumber_bar['h'] * 4, 2.5)}
+            else:
+                # Priority 2: distribute bars evenly within the section bbox
+                try:
+                    row_idx = sorted_bms.index(bm)
+                except ValueError:
+                    row_idx = total - 1
+                row_h = max(sect['h'] / total, 2.0)
+                bar_bbox = {
+                    'x': sect['x'],
+                    'y': sect['y'] + row_idx * row_h,
+                    'w': sect['w'],
+                    'h': row_h,
+                }
+
             issues += _compare_bar(bm, comp, d_bar, drawing_bar, zone, design_bars, bar_bbox)
 
     return issues
@@ -460,7 +552,8 @@ REQUIRED_NOTES = {
     'steel_grade':       'Steel grade (Fe415/Fe500/Fe550) not specified in notes',
 }
 
-def _check_notes_completeness(notes_check: list) -> list:
+def _check_notes_completeness(notes_check: list, sections: list = None,
+                               section_view_positions: dict = None) -> list:
     issues = []
     if not notes_check:
         return issues
@@ -470,12 +563,14 @@ def _check_notes_completeness(notes_check: list) -> list:
     for item_key, missing_msg in REQUIRED_NOTES.items():
         entry = found.get(item_key)
         if not entry or not entry.get('present'):
+            bbox = (entry.get('bbox') if entry else None) or _find_section_bbox(
+                missing_msg, sections, section_view_positions)
             issues.append(_issue(
                 'Notes', missing_msg,
                 f'The note for "{item_key.replace("_", " ")}" is missing or not legible in the drawing.',
                 f'Add the required note for {item_key.replace("_", " ")}.',
                 'error' if 'concrete' in item_key or 'steel' in item_key else 'warning',
-                'notes', entry.get('bbox') if entry else None
+                'notes', bbox
             ))
 
     return issues
@@ -483,35 +578,39 @@ def _check_notes_completeness(notes_check: list) -> list:
 
 # ── Label & annotation quality ────────────────────────────────────────────────
 
-def _check_label_issues(label_issues: list) -> list:
+def _check_label_issues(label_issues: list, sections: list = None,
+                         section_view_positions: dict = None) -> list:
     issues = []
     for li in (label_issues or []):
         desc = li.get('description', '')
         if not desc:
             continue
+        bbox = li.get('bbox') or _find_section_bbox(
+            desc + ' ' + li.get('suggestion', ''), sections, section_view_positions
+        )
         issues.append(_issue(
-            'Labels & Annotations',
-            desc,
-            desc,
+            'Labels & Annotations', desc, desc,
             li.get('suggestion', 'Review and correct this label.'),
-            'warning', 'default', li.get('bbox')
+            'warning', 'default', bbox
         ))
     return issues
 
 
 # ── Dimension completeness ────────────────────────────────────────────────────
 
-def _check_dimension_issues(dimension_issues: list) -> list:
+def _check_dimension_issues(dimension_issues: list, sections: list = None,
+                              section_view_positions: dict = None) -> list:
     issues = []
     for di in (dimension_issues or []):
         desc = di.get('description', '')
         if not desc:
             continue
+        bbox = di.get('bbox') or _find_section_bbox(
+            desc + ' ' + di.get('suggestion', ''), sections, section_view_positions
+        )
         issues.append(_issue(
-            'Dimensions',
-            desc,
-            desc,
+            'Dimensions', desc, desc,
             di.get('suggestion', 'Add the missing dimension.'),
-            'warning', 'default', di.get('bbox')
+            'warning', 'default', bbox
         ))
     return issues

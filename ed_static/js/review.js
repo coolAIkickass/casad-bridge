@@ -4,12 +4,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 let pdfDoc         = null;
 let currentPage    = 1;
 let totalPages     = 0;
-let scale          = 1.5;
+let scale          = 1.0;
 let currentViewport = null;
 let allIssues      = [];
 let selectedId     = null;
 let renderTask     = null;
-let activeFilter   = null;   // null | 'error' | 'warning' | 'resolved'
+let activeFilter   = 'error';   // null | 'error' | 'warning' | 'resolved'
 
 const canvas      = document.getElementById('pdf-canvas');
 const ctx         = canvas.getContext('2d');
@@ -337,6 +337,10 @@ document.getElementById('btn-zoom-out').addEventListener('click', () => {
 // ── Init ──────────────────────────────────────────────
 
 async function init() {
+  // Reflect initial defaults in UI
+  document.getElementById('zoom-label').textContent = Math.round(scale * 100) + '%';
+  document.querySelector('.stat-error')?.classList.add('active');
+
   // Load issues first so highlights appear as soon as PDF renders
   const resp = await fetch(`/ed/api/review/${window.REVIEW_ID}/issues`);
   allIssues = await resp.json();
@@ -348,6 +352,16 @@ async function init() {
   totalPages = pdfDoc.numPages;
   document.getElementById('total-pages').textContent = totalPages;
   await renderPage(1);
+
+  // Center the drawing horizontally so the user knows it scrolls both ways
+  const wrapper = document.getElementById('pdf-wrapper');
+  if (wrapper && scrollArea) {
+    const overflowX = wrapper.offsetWidth - scrollArea.clientWidth;
+    if (overflowX > 0) {
+      scrollArea.scrollLeft = overflowX / 2;
+      hscrollTop.scrollLeft = scrollArea.scrollLeft;
+    }
+  }
 }
 
 init().catch(err => {

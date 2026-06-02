@@ -16,14 +16,16 @@ ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 
 EXTRACTION_PROMPT = """You are analyzing a CASAD AutoCAD engineering drawing for a bridge structure (Pile-Pilecap-Pier foundation).
 
-IMPORTANT: For every item you extract, also estimate its bounding box as a percentage of the full image dimensions:
-  "bbox": {"x": <left edge %>, "y": <top edge %>, "w": <width %>, "h": <height %>}
-This is used to highlight the exact location in the drawing when an error is flagged.
-
 Extract ALL of the following as precisely as possible:
 
-1. SCHEDULE OF REINFORCEMENT — multiple sections may exist (Pilecap, Pile per pile, Pier).
-   For EACH row in any schedule table, extract:
+1. SCHEDULE OF REINFORCEMENT — multiple sections exist (Pilecap, Pile per pile, Pier).
+
+   First, identify the bounding box of EACH COMPONENT'S ENTIRE SCHEDULE SECTION (the full table block
+   for that component, including its header row). Return these in "schedule_section_bboxes".
+   Bboxes are percentages of the full image: {"x": <left%>, "y": <top%>, "w": <width%>, "h": <height%>}.
+   Example: {"pilecap": {"x": 63, "y": 22, "w": 34, "h": 14}, "pile": {...}, "pier": {...}}
+
+   Then for EACH row in any schedule table, extract:
    {
      "bar_mark": "a",
      "component": "pilecap" | "pile" | "pier",
@@ -35,12 +37,11 @@ Extract ALL of the following as precisely as possible:
      "length_m": 13.425,
      "total_length_m": 563.85,
      "unit_wt_kg_m": 3.857,
-     "total_wt_kg": 2174.77,
-     "bbox": {"x": 65.0, "y": 32.5, "w": 30.0, "h": 2.5}
+     "total_wt_kg": 2174.77
    }
    Note: spacing_mm is null for longitudinal bars (marked "-"). For stirrups/rings extract the c/c spacing.
    For count like "4×13 = 52", set count=52 and count_text="4×13 = 52".
-   The bbox should cover just that single row in the schedule table.
+   No per-row bbox is needed — section bboxes handle highlighting.
 
 2. TITLE BLOCK — extract:
    {
@@ -88,6 +89,11 @@ Extract ALL of the following as precisely as possible:
 Return ONLY valid JSON with this structure (no markdown, no extra text):
 {
   "schedule": [...],
+  "schedule_section_bboxes": {
+    "pilecap": {"x": 63, "y": 22, "w": 34, "h": 14},
+    "pile":    {"x": 63, "y": 36, "w": 34, "h": 12},
+    "pier":    {"x": 63, "y": 48, "w": 34, "h": 22}
+  },
   "title_block": {...},
   "notes": {...},
   "table_1": [...]
@@ -173,21 +179,27 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                  'ok' if review_data else 'failed')
 
     result = {
-        'title_block':    {},
-        'schedule':       {},
-        'notes':          {},
-        'table_1':        [],
-        'sections':       [],
-        'notes_check':    [],
-        'label_issues':   [],
-        'dimension_issues': [],
-        'raw_text':       text_data.get('raw_lines', []),
+        'title_block':               {},
+        'schedule':                  {},
+        'schedule_section_bboxes':   {},
+        'notes':                     {},
+        'table_1':                   [],
+        'sections':                  [],
+        'notes_check':               [],
+        'label_issues':              [],
+        'dimension_issues':          [],
+        'raw_text':                  text_data.get('raw_lines', []),
+        # pdfplumber-derived exact positions (pixel-perfect, no Claude estimation)
+        'bar_positions':             text_data.get('bar_positions', {}),
+        'schedule_section_positions': text_data.get('schedule_section_positions', {}),
+        'section_view_positions':    text_data.get('section_view_positions', {}),
     }
 
     if vision_data:
-        result['title_block'] = vision_data.get('title_block') or {}
-        result['notes']       = vision_data.get('notes') or {}
-        result['table_1']     = vision_data.get('table_1') or []
+        result['title_block']           = vision_data.get('title_block') or {}
+        result['notes']                 = vision_data.get('notes') or {}
+        result['table_1']               = vision_data.get('table_1') or []
+        result['schedule_section_bboxes'] = vision_data.get('schedule_section_bboxes') or {}
         raw_sched = vision_data.get('schedule') or []
         for row in raw_sched:
             comp = (row.get('component') or 'unknown').lower()
@@ -284,7 +296,128 @@ def _extract_text(pdf_bytes: bytes) -> dict:
     except Exception as e:
         raw_lines.append(f'[pdfplumber error: {e}]')
 
-    return {'title_block': title_block, 'notes': notes, 'raw_lines': raw_lines}
+    bar_positions, schedule_section_positions, section_view_positions = {}, {}, {}
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            if pdf.pages:
+                bar_positions, schedule_section_positions, section_view_positions = \
+                    _extract_positions(pdf.pages[0])
+    except Exception as e:
+        log.warning('_extract_positions failed: %s', e)
+
+
+    return {
+        'title_block':              title_block,
+        'notes':                    notes,
+        'raw_lines':                raw_lines,
+        'bar_positions':            bar_positions,
+        'schedule_section_positions': schedule_section_positions,
+        'section_view_positions':   section_view_positions,
+    }
+
+
+# ── pdfplumber position extraction ───────────────────────────────────────────
+
+KNOWN_BAR_MARKS = {
+    'a','b','c','d','e','f','g','h','i','j','k','l','m',
+    'n','o','p','q','r','s','t','u','v','w','x','y','z',
+    'a1','b1','c1','d1','e1','f1','g1','h1','i1','j1','k1',
+    'x1','x2','y1','y2','z1',
+}
+
+
+def _extract_positions(page) -> tuple:
+    """
+    Extract exact positions of schedule bar marks and section view labels
+    from pdfplumber word bounding boxes (PDF point coordinates → percentages).
+    Returns (bar_positions, schedule_section_positions, section_view_positions).
+    """
+    pw, ph = page.width, page.height
+    words = page.extract_words() or []
+    schedule_x_min = pw * 0.55   # schedule is always in the right ~38% of the drawing
+
+    def to_pct(x0, top, x1, bottom):
+        return {
+            'x': round(x0 / pw * 100, 2),
+            'y': round(top / ph * 100, 2),
+            'w': round((x1 - x0) / pw * 100, 2),
+            'h': round((bottom - top) / ph * 100, 2),
+        }
+
+    # ── 1. Find schedule component section headers ───────────────────────────
+    # Look for PILECAP, PILE, PIER as the first word of a header row in the right portion.
+    COMP_KEYWORDS = {'pilecap': 'PILECAP', 'pile': 'PILE', 'pier': 'PIER'}
+    comp_header_y = {}   # comp → top y in PDF points
+    for w in words:
+        if w['x0'] < schedule_x_min:
+            continue
+        text = w['text'].strip().upper()
+        for comp, keyword in COMP_KEYWORDS.items():
+            if text == keyword and comp not in comp_header_y:
+                comp_header_y[comp] = w['top']
+                break
+
+    sorted_comps = sorted(comp_header_y.items(), key=lambda kv: kv[1])
+
+    # ── 2. Find bar mark labels in the schedule area ─────────────────────────
+    schedule_words = [
+        w for w in words
+        if w['x0'] >= schedule_x_min
+        and w['text'].strip().lower() in KNOWN_BAR_MARKS
+    ]
+
+    bar_positions = {}
+    schedule_section_positions = {}
+
+    for idx, (comp, header_y) in enumerate(sorted_comps):
+        y_end = sorted_comps[idx + 1][1] if idx + 1 < len(sorted_comps) else ph * 0.82
+        comp_bars = [w for w in schedule_words if header_y <= w['top'] < y_end]
+
+        if comp_bars:
+            # Find the bar-mark column's left edge (minimum x0 among bar candidates)
+            bm_x0 = min(w['x0'] for w in comp_bars)
+            # Keep only words in the bar-mark column (within 15pt of bm_x0)
+            col_bars = [w for w in comp_bars if abs(w['x0'] - bm_x0) <= 15]
+            bar_positions[comp] = {
+                w['text'].strip().lower(): to_pct(w['x0'], w['top'], w['x1'], w['bottom'])
+                for w in col_bars
+            }
+
+        # Section bbox: full width from schedule left edge to right page edge
+        all_sched_x = [w['x0'] for w in schedule_words] or [schedule_x_min]
+        sect_x0 = min(all_sched_x)
+        schedule_section_positions[comp] = to_pct(sect_x0, header_y, pw, y_end)
+
+    # ── 3. Find section view labels on the left side ─────────────────────────
+    # Group left-side words into lines by approximate y
+    line_words: dict = {}
+    for w in words:
+        if w['x0'] >= schedule_x_min:
+            continue
+        line_y = round(w['top'] / 3) * 3
+        line_words.setdefault(line_y, []).append(w)
+
+    section_view_positions = {}
+    TRIGGER_WORDS = {'SECTION', 'TABLE-1', 'LAP', 'NOTES', 'DETAIL'}
+    for line_y, lw in sorted(line_words.items()):
+        lw_sorted = sorted(lw, key=lambda x: x['x0'])
+        line_text = ' '.join(w['text'] for w in lw_sorted).upper().strip()
+        if any(t in line_text for t in TRIGGER_WORDS):
+            x0  = min(w['x0']     for w in lw_sorted)
+            x1  = max(w['x1']     for w in lw_sorted)
+            top = min(w['top']    for w in lw_sorted)
+            # Expand downward: view area below the label (~18% of page height)
+            view_h_pts = ph * 0.18
+            name = line_text[:60]   # truncate for dict key
+            section_view_positions[name] = to_pct(x0, top, x1, top + view_h_pts)
+
+    log.info(
+        '_extract_positions: bar_positions=%s schedule_sections=%s section_views=%d',
+        {c: list(bars.keys()) for c, bars in bar_positions.items()},
+        list(schedule_section_positions.keys()),
+        len(section_view_positions),
+    )
+    return bar_positions, schedule_section_positions, section_view_positions
 
 
 # ── Claude vision pass ────────────────────────────────────────────────────────

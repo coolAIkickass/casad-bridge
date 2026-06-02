@@ -4,16 +4,17 @@ Returns a list of issue dicts matching the DB schema.
 """
 import re
 
-# Approximate bounding boxes (% of page) per component section
-# These are rough positions for annotation overlay — can be tuned later
+# Bounding boxes (% of page) calibrated to the PPP drawing layout:
+#   Left ~62%  : section views, plan views, detail views
+#   Right ~38% : schedule of reinforcement table + title block + TABLE-1
 BBOX = {
-    'pilecap_schedule': {'x': 55, 'y': 30, 'w': 43, 'h': 20},
-    'pile_schedule':    {'x': 55, 'y': 52, 'w': 43, 'h': 20},
-    'pier_schedule':    {'x': 55, 'y': 20, 'w': 43, 'h': 10},
-    'title_block':      {'x': 62, 'y': 76, 'w': 36, 'h': 24},
-    'notes':            {'x': 40, 'y': 68, 'w': 22, 'h': 10},
-    'table_1':          {'x': 80, 'y': 2,  'w': 18, 'h': 20},
-    'default':          {'x': 5,  'y': 5,  'w': 30, 'h': 10},
+    'pilecap_schedule': {'x': 62, 'y': 20, 'w': 36, 'h': 60},  # full schedule table
+    'pile_schedule':    {'x': 62, 'y': 20, 'w': 36, 'h': 60},  # same table, different rows
+    'pier_schedule':    {'x': 62, 'y': 20, 'w': 36, 'h': 60},
+    'title_block':      {'x': 62, 'y': 76, 'w': 36, 'h': 22},
+    'notes':            {'x': 62, 'y': 66, 'w': 36, 'h': 10},
+    'table_1':          {'x': 82, 'y': 1,  'w': 16, 'h': 18},
+    'default':          {'x': 62, 'y': 20, 'w': 36, 'h': 10},
 }
 
 

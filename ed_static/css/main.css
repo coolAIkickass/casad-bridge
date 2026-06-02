@@ -357,15 +357,19 @@ button { cursor: pointer; font: inherit; }
   overflow: auto;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;   /* not center — centering clips left overflow */
   padding: 20px;
   gap: 16px;
   position: relative;
+  overscroll-behavior-x: contain;
 }
+
 .pdf-wrapper {
   position: relative;
   display: inline-block;
   box-shadow: 0 4px 20px rgba(0,0,0,.25);
+  margin: 0 auto;   /* centers when drawing fits viewport; left-aligns when it overflows */
+  flex-shrink: 0;
 }
 #pdf-canvas { display: block; }
 #highlights-layer {

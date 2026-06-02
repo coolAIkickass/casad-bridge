@@ -32,6 +32,18 @@ scrollArea.addEventListener('scroll', () => {
   hscrollTop.scrollLeft = scrollArea.scrollLeft;
 });
 
+// Prevent horizontal trackpad/wheel scroll from triggering browser back/forward.
+// overscroll-behavior-x handles most cases in CSS; this catches the rest.
+[scrollArea, hscrollTop].forEach(el => {
+  el.addEventListener('wheel', (e) => {
+    if (e.deltaX !== 0) {
+      e.preventDefault();
+      scrollArea.scrollLeft += e.deltaX;
+      hscrollTop.scrollLeft = scrollArea.scrollLeft;
+    }
+  }, { passive: false });
+});
+
 // ── PDF rendering ────────────────────────────────────
 
 async function renderPage(num) {
@@ -223,7 +235,20 @@ function highlightSelected(id) {
 
 function scrollToHighlight(id) {
   const hl = document.querySelector(`.highlight[data-id="${id}"]`);
-  if (hl) hl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (!hl || !scrollArea) return;
+
+  // Center the highlight in the scroll area both horizontally and vertically
+  const hlRect   = hl.getBoundingClientRect();
+  const areaRect = scrollArea.getBoundingClientRect();
+
+  const targetLeft = scrollArea.scrollLeft + hlRect.left - areaRect.left
+                     - (areaRect.width  - hlRect.width)  / 2;
+  const targetTop  = scrollArea.scrollTop  + hlRect.top  - areaRect.top
+                     - (areaRect.height - hlRect.height) / 2;
+
+  scrollArea.scrollTo({ left: targetLeft, top: targetTop, behavior: 'smooth' });
+  // Keep top scrollbar in sync after the scroll settles
+  setTimeout(() => { hscrollTop.scrollLeft = scrollArea.scrollLeft; }, 350);
 }
 
 async function toggleResolve(id) {

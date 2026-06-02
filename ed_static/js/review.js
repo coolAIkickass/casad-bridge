@@ -200,7 +200,7 @@ async function toggleResolve(id) {
   const issue = allIssues.find(i => i.id === id);
   if (!issue) return;
   const newStatus = issue.status === 'open' ? 'resolved' : 'open';
-  await fetch(`/api/issues/${id}/status`, {
+  await fetch(`/ed/api/issues/${id}/status`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status: newStatus }),
@@ -234,7 +234,7 @@ document.getElementById('btn-zoom-out').addEventListener('click', () => {
 
 async function init() {
   // Load issues first so highlights appear as soon as PDF renders
-  const resp = await fetch(`/api/review/${window.REVIEW_ID}/issues`);
+  const resp = await fetch(`/ed/api/review/${window.REVIEW_ID}/issues`);
   allIssues = await resp.json();
   renderIssuePanel();
   updateSummary();

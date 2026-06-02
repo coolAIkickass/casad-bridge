@@ -155,11 +155,22 @@ Return ONLY valid JSON (no markdown):
 
 def extract_from_drawing(pdf_bytes: bytes) -> dict:
     """Main entry point. Returns structured drawing data dict."""
+    from concurrent.futures import ThreadPoolExecutor
+
     text_data  = _extract_text(pdf_bytes)
     images_b64 = _pdf_to_image_b64(pdf_bytes)   # render once, reuse for both calls
 
-    vision_data = _call_vision(images_b64, EXTRACTION_PROMPT) if images_b64 else None
-    review_data = _call_vision(images_b64, REVIEW_PROMPT)     if images_b64 else None
+    # Run both API calls in parallel — halves total time from ~60s to ~30s
+    vision_data, review_data = None, None
+    if images_b64:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_extract = pool.submit(_call_vision, images_b64, EXTRACTION_PROMPT)
+            f_review  = pool.submit(_call_vision, images_b64, REVIEW_PROMPT)
+            vision_data = f_extract.result()
+            review_data = f_review.result()
+        log.info('Both vision calls complete — extraction=%s review=%s',
+                 'ok' if vision_data else 'failed',
+                 'ok' if review_data else 'failed')
 
     result = {
         'title_block':    {},

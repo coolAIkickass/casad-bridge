@@ -216,15 +216,14 @@ button { cursor: pointer; font: inherit; }
 .btn-upload.reviewing,
 .btn-upload.reviewing:disabled { background: var(--blue); border-color: var(--blue); color: #fff; cursor: wait; }
 .review-wait-note {
-  margin-top: 10px;
-  padding: 10px 14px;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  margin-top: 12px;
+  padding: 11px 14px 11px 16px;
+  background: #fffbeb;
   border-radius: 6px;
+  border-left: 4px solid #d97706;
   font-size: 13px;
-  color: #1e40af;
-  text-align: center;
-  line-height: 1.5;
+  color: #78350f;
+  line-height: 1.6;
 }
 .btn-upload { width: 100%; justify-content: center; padding: 11px; font-size: 14px; position: relative; overflow: hidden; }
 

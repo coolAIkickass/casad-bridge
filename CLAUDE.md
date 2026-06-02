@@ -2,17 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## CRITICAL: Git & Deployment
-
-This directory (`casad-bridge/`) is its **own git repo** → `github.com/coolAIkickass/casad-bridge.git`.
-The parent directory (`CASAD/`) is a separate repo (`casad-drawingchecker`) — **Render does NOT watch it**.
-
-**Always `cd` into `casad-bridge/` before running any `git add / commit / push`.** Pushing from the parent directory commits to the wrong repo and nothing deploys.
-
-Render service: `casad-bridge` — auto-deploys on push to `casad-bridge.git`. One service only (bridge bot + ED checker blueprint combined via `main.py`).
-
-Start command on Render: `gunicorn main:app --bind 0.0.0.0:$PORT --timeout 120 --workers 1`
-
 ## What This Project Does
 
 CASAD Bridge is a WhatsApp-based inspection automation system for CASAD Consultants. Field inspectors send text, voice notes, and photos via WhatsApp; the system transcribes audio (Groq Whisper), parses structured data (Claude Haiku), and generates professional bridge inspection reports in three formats: Word (.docx), Excel R&B, and Excel AMC.

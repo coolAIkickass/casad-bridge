@@ -134,7 +134,7 @@ button { cursor: pointer; font: inherit; }
   border: 2px dashed var(--border-dark);
   border-radius: 8px;
   background: var(--slate-bg);
-  padding: 40px 20px;
+  padding: 28px 20px;
   text-align: center;
   cursor: pointer;
   transition: border-color .2s, background .2s;
@@ -144,9 +144,54 @@ button { cursor: pointer; font: inherit; }
   border-color: var(--blue);
   background: var(--blue-light);
 }
+/* When a file is selected Zone 1 collapses to a compact file row */
+.drop-zone-selected { padding: 0; }
 .drop-icon   { font-size: 32px; display: block; margin-bottom: 10px; }
 .drop-primary  { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
 .drop-secondary { color: var(--text-muted); font-size: 13px; }
+
+/* Shared file row — used by both Zone 1 selected state and Zone 2 file list items */
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+.file-row-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+  color: var(--blue);
+  font-weight: 700;
+}
+.file-row-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text);
+}
+.file-row-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.file-row-remove {
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.file-row-remove:hover { background: rgba(220,38,38,.08); color: var(--red); }
 
 /* Form rows */
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
@@ -167,6 +212,9 @@ button { cursor: pointer; font: inherit; }
 
 /* Disabled state clearly distinct from active */
 .btn-upload:disabled { background: var(--border-dark); border-color: var(--border-dark); color: var(--text-muted); cursor: not-allowed; }
+/* Reviewing overrides disabled — keep blue so the animation is visible */
+.btn-upload.reviewing,
+.btn-upload.reviewing:disabled { background: var(--blue); border-color: var(--blue); color: #fff; cursor: wait; }
 .btn-upload { width: 100%; justify-content: center; padding: 11px; font-size: 14px; position: relative; overflow: hidden; }
 
 /* Progress fill animation while drawing is being reviewed */
@@ -230,10 +278,7 @@ button { cursor: pointer; font: inherit; }
 }
 .design-input-zone.dragover { border-color: var(--blue); }
 .design-inner { text-align: center; padding: 2px 0; }
-.design-file-list { list-style: none; margin: 8px 0 0; padding: 0; }
-.di-file-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: var(--surface); border-radius: 5px; margin-bottom: 4px; font-size: 12px; border: 1px solid var(--border); }
-.di-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.di-remove { font-size: 11px; color: var(--red); flex-shrink: 0; }
+.design-file-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
 .design-hint { font-size: 11px; color: var(--text-muted); margin: 6px 0 0; text-align: center; }
 
 /* Recent table */
@@ -398,43 +443,42 @@ button { cursor: pointer; font: inherit; }
   cursor: pointer;
   border-radius: 2px;
   box-sizing: border-box;
-  transition: opacity .15s;
+  transition: background .15s, border-color .15s;
+  background: transparent;   /* no fill by default — drawing stays fully readable */
 }
-.highlight.sev-error {
-  border: 2px solid rgba(220,38,38,.85);
-  background: rgba(220,38,38,.08);
-}
-.highlight.sev-warning {
-  border: 2px solid rgba(217,119,6,.85);
-  background: rgba(217,119,6,.08);
-}
-.highlight.resolved {
-  opacity: .25;
-  border-style: dashed;
-}
-.highlight.selected {
-  border-color: var(--blue) !important;
-  border-width: 3px !important;
-  background: rgba(37,99,235,.12) !important;
-  z-index: 2;
-}
-.highlight:hover { opacity: .85; z-index: 1; }
+.highlight.sev-error   { border: 2px solid rgba(220,38,38,.9); }
+.highlight.sev-warning { border: 2px solid rgba(217,119,6,.9); }
 
-/* Highlight number badge */
+/* Hover: hint of fill so user sees the area boundary */
+.highlight.sev-error:hover   { background: rgba(220,38,38,.08); }
+.highlight.sev-warning:hover { background: rgba(217,119,6,.08); }
+
+/* Resolved: faded dashed outline, no fill */
+.highlight.resolved { opacity: .3; border-style: dashed; background: transparent; }
+
+/* Selected (clicked): solid fill so it clearly stands out from all others */
+.highlight.selected {
+  border: 3px solid #f59e0b !important;   /* amber — distinct from both red error and blue UI */
+  background: rgba(245,158,11,.18) !important;
+  z-index: 10;
+}
+
+/* Number badge */
 .highlight::before {
   content: attr(data-num);
   position: absolute;
-  top: -11px; left: -1px;
+  top: -13px; left: -1px;
   font-size: 10px; font-weight: 700;
-  padding: 1px 4px;
+  padding: 1px 5px;
   border-radius: 3px;
   color: white;
-  line-height: 1.4;
+  line-height: 1.5;
   pointer-events: none;
 }
-.highlight.sev-error::before   { background: var(--error); }
-.highlight.sev-warning::before { background: var(--warning); }
+.highlight.sev-error::before   { background: rgba(220,38,38,.9); }
+.highlight.sev-warning::before { background: rgba(217,119,6,.9); }
 .highlight.resolved::before    { background: var(--text-faint); }
+.highlight.selected::before    { background: #f59e0b; }
 
 /* Issue Panel */
 .issue-panel {

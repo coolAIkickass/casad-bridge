@@ -38,9 +38,15 @@
           <p class="drop-secondary">or <button type="button" class="link-btn" onclick="document.getElementById('file-input').click()">browse</button></p>
         </div>
         <div class="drop-zone-selected" id="drop-selected" style="display:none">
-          <span class="drop-icon-text drop-ok">✓</span>
-          <p class="drop-primary" id="selected-filename"></p>
-          <button type="button" class="link-btn" onclick="clearFile()">Remove</button>
+          <div class="file-row">
+            <span class="file-row-icon">PDF</span>
+            <span class="file-row-name" id="selected-filename"></span>
+            <span class="file-row-meta" id="selected-size"></span>
+            <button type="button" class="file-row-remove" onclick="clearFile()" title="Remove">✕</button>
+          </div>
+          <p class="drop-secondary" style="margin-top:8px;text-align:center">
+            <button type="button" class="link-btn" onclick="document.getElementById('file-input').click()">Change file</button>
+          </p>
         </div>
       </div>
 

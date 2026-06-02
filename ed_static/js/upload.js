@@ -6,6 +6,12 @@ const dropSelected = document.getElementById('drop-selected');
 const filenameTxt  = document.getElementById('selected-filename');
 const submitBtn    = document.getElementById('submit-btn');
 
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
 function setFile(file) {
   if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
     alert('Please select a PDF file for the drawing.');
@@ -14,7 +20,8 @@ function setFile(file) {
   const dt = new DataTransfer();
   dt.items.add(file);
   fileInput.files = dt.files;
-  filenameTxt.textContent    = file.name;
+  filenameTxt.textContent = file.name;
+  document.getElementById('selected-size').textContent = formatSize(file.size);
   dropLabel.style.display    = 'none';
   dropSelected.style.display = '';
   submitBtn.disabled = false;
@@ -56,10 +63,15 @@ let designFiles = [];
 function renderDesignList() {
   designList.innerHTML = '';
   designFiles.forEach((f, i) => {
+    const ext = f.name.split('.').pop().toUpperCase();
     const li = document.createElement('li');
-    li.className = 'di-file-item';
-    li.innerHTML = `<span class="di-file-name">${f.name}</span>
-      <button type="button" class="link-btn di-remove" data-idx="${i}">Remove</button>`;
+    li.innerHTML = `
+      <div class="file-row">
+        <span class="file-row-icon">${ext}</span>
+        <span class="file-row-name">${f.name}</span>
+        <span class="file-row-meta">${formatSize(f.size)}</span>
+        <button type="button" class="file-row-remove" data-idx="${i}" title="Remove">✕</button>
+      </div>`;
     designList.appendChild(li);
   });
   syncDesignInput();
@@ -81,7 +93,7 @@ function addDesignFiles(files) {
 }
 
 designList.addEventListener('click', (e) => {
-  const btn = e.target.closest('.di-remove');
+  const btn = e.target.closest('.file-row-remove');
   if (btn) {
     designFiles.splice(parseInt(btn.dataset.idx), 1);
     renderDesignList();

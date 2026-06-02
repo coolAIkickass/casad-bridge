@@ -35,7 +35,11 @@
       <span id="zoom-label" class="zoom-label">150%</span>
       <button id="btn-zoom-in" class="ctrl-btn" title="Zoom in">+</button>
     </div>
-    <div class="pdf-scroll-area">
+    <!-- Top horizontal scrollbar — always visible, synced with pdf-scroll-area -->
+    <div class="pdf-hscroll-top" id="pdf-hscroll-top">
+      <div id="pdf-hscroll-phantom"></div>
+    </div>
+    <div class="pdf-scroll-area" id="pdf-scroll-area">
       <div class="pdf-wrapper" id="pdf-wrapper">
         <canvas id="pdf-canvas"></canvas>
         <div id="highlights-layer"></div>

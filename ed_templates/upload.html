@@ -31,7 +31,7 @@
       <!-- Slot 2: Design inputs (optional, multiple) -->
       <div class="slot-label" style="margin-top:24px">
         <span class="slot-num slot-num-opt">2</span>
-        <span>Design Inputs <span class="slot-optional">optional — upload one or more</span></span>
+        <span>Design Inputs <span class="slot-optional">upload one or more</span></span>
       </div>
       <div class="design-input-zone" id="design-drop-zone">
         <input type="file" id="design-input" name="design_inputs"
@@ -53,18 +53,15 @@
         <div class="form-group">
           <label for="drawing_type">Drawing Type</label>
           <select id="drawing_type" name="drawing_type">
-            <option value="Foundation">Foundation (Pile-Pilecap-Pier)</option>
-            <option value="GAD">GAD (General Arrangement)</option>
-            <option value="Abutment">Abutment</option>
-            <option value="Superstructure">Superstructure</option>
-            <option value="Bearing">Bearing Detail</option>
+            <option value="Pile Pilecap Pier">Pile Pilecap Pier</option>
+            <option value="Foundation">Foundation</option>
             <option value="General" selected>General</option>
           </select>
         </div>
       </div>
 
       <button type="submit" class="btn btn-primary btn-upload" id="submit-btn" disabled>
-        Run AI Check
+        Review drawing
       </button>
     </form>
   </div>

@@ -303,6 +303,20 @@ button { cursor: pointer; font: inherit; }
 .page-info  { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 .zoom-label { font-size: 12px; color: var(--text-muted); min-width: 36px; text-align: center; }
 
+/* Top horizontal scrollbar strip */
+.pdf-hscroll-top {
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  /* height is set by the browser scrollbar itself */
+}
+#pdf-hscroll-phantom {
+  height: 1px; /* minimal height; the scrollbar appears above it */
+  min-width: 100%;
+}
+
 .pdf-scroll-area {
   flex: 1;
   overflow: auto;
@@ -421,6 +435,26 @@ button { cursor: pointer; font: inherit; }
   color: var(--text-muted);
   font-size: 13px;
 }
+.no-issues-msg {
+  padding: 36px 24px;
+  text-align: center;
+}
+.no-issues-msg .no-issues-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: rgba(22,163,74,.12);
+  color: #16a34a;
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.no-issues-msg strong { display: block; font-size: 15px; margin-bottom: 6px; color: #16a34a; }
+.no-issues-msg p { font-size: 13px; color: var(--text-muted); margin: 0; }
+.no-issues-msg.all-resolved .no-issues-icon { background: rgba(37,99,235,.1); color: var(--blue); }
+.no-issues-msg.all-resolved strong { color: var(--blue); }
 
 /* Category sections */
 .issue-category { border-bottom: 1px solid var(--border); }

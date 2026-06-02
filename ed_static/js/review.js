@@ -10,10 +10,27 @@ let allIssues      = [];
 let selectedId     = null;
 let renderTask     = null;
 
-const canvas    = document.getElementById('pdf-canvas');
-const ctx       = canvas.getContext('2d');
-const hlLayer   = document.getElementById('highlights-layer');
-const pdfLoader = document.getElementById('pdf-loading');
+const canvas      = document.getElementById('pdf-canvas');
+const ctx         = canvas.getContext('2d');
+const hlLayer     = document.getElementById('highlights-layer');
+const pdfLoader   = document.getElementById('pdf-loading');
+const scrollArea  = document.getElementById('pdf-scroll-area');
+const hscrollTop  = document.getElementById('pdf-hscroll-top');
+const hscrollPhantom = document.getElementById('pdf-hscroll-phantom');
+
+// ── Top horizontal scrollbar sync ────────────────────
+function syncPhantomWidth() {
+  const wrapper = document.getElementById('pdf-wrapper');
+  if (wrapper) {
+    hscrollPhantom.style.width = wrapper.offsetWidth + 'px';
+  }
+}
+hscrollTop.addEventListener('scroll', () => {
+  scrollArea.scrollLeft = hscrollTop.scrollLeft;
+});
+scrollArea.addEventListener('scroll', () => {
+  hscrollTop.scrollLeft = scrollArea.scrollLeft;
+});
 
 // ── PDF rendering ────────────────────────────────────
 
@@ -41,6 +58,7 @@ async function renderPage(num) {
   }
 
   pdfLoader.style.display = 'none';
+  syncPhantomWidth();
   renderHighlights(num);
 }
 
@@ -86,6 +104,18 @@ function renderIssuePanel() {
   });
 
   panel.innerHTML = '';
+
+  if (allIssues.length === 0) {
+    panel.innerHTML = '<div class="no-issues-msg"><span class="no-issues-icon">✓</span><strong>No issues found</strong><p>The drawing passed all checks. No errors or warnings were raised.</p></div>';
+    return;
+  }
+
+  const openCount = allIssues.filter(i => i.status === 'open').length;
+  if (openCount === 0 && allIssues.length > 0) {
+    panel.innerHTML = '<div class="no-issues-msg all-resolved"><span class="no-issues-icon">✓</span><strong>All issues resolved</strong><p>Every flagged item has been marked as resolved. Ready to upload the corrected version.</p></div>';
+    return;
+  }
+
   let globalNum = 0;
   Object.entries(categories).forEach(([cat, issues]) => {
     const openCount = issues.filter(i => i.status === 'open').length;

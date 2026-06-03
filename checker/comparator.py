@@ -347,11 +347,21 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
 
             drawing_bar = drawing_comp.get(bm)
             if not drawing_bar:
+                # Place marker at the canonical row position for this bar (not the whole section)
+                canonical_total = max(len(CANONICAL_BAR_ORDER.get(comp, [])), total)
+                nf_idx  = _order.get(bm, canonical_total - 1)
+                nf_row_h = max(sect['h'] / canonical_total, 2.0)
+                nf_bbox = {
+                    'x': sect['x'],
+                    'y': sect['y'] + nf_idx * nf_row_h,
+                    'w': sect['w'],
+                    'h': nf_row_h,
+                }
                 issues.append(_issue(
                     'Reinforcement', f"Bar mark '{bm}' ({comp}) not found in drawing schedule",
                     f"Bar mark '{bm}' is specified in the design input but was not found in the drawing's {comp} schedule.",
                     f"Add bar mark '{bm}' to the {comp} schedule.",
-                    'error', zone, sect
+                    'error', zone, nf_bbox
                 ))
                 continue
 

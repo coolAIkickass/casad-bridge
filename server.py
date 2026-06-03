@@ -378,7 +378,7 @@ def _generate_report(phone: str, session: dict, fmt: str) -> None:
 
         # ── Quality check and correction (before delivery) ────────────────────
         try:
-            from checker import check_report, correct_report, log_issues
+            from bridge_checker import check_report, correct_report, log_issues
             print(f"[CHECKER] Running checks on {out_path}", flush=True)
             raw_bd = '\n'.join(
                 m.get('content', '')

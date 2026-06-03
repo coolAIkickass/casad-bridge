@@ -7,7 +7,7 @@ import psycopg2.extras
 from datetime import datetime
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, Response
 import json
-from checker import run_check, parse_design_inputs
+from ed_checker import run_check, parse_design_inputs
 
 # Ensure Python logs reach Render's stdout
 logging.basicConfig(
@@ -236,7 +236,7 @@ def api_extract_debug(review_id):
     conn.close()
     if not row:
         return jsonify({'error': 'Review not found'}), 404
-    from checker.pdf_extractor import extract_from_drawing
+    from ed_checker.pdf_extractor import extract_from_drawing
     data = extract_from_drawing(bytes(row['pdf_content']))
     data.pop('raw_text', None)  # omit verbose line list
     return jsonify(data)

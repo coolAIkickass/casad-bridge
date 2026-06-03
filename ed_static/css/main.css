@@ -212,6 +212,9 @@ button { cursor: pointer; font: inherit; }
 
 /* Disabled state clearly distinct from active */
 .btn-upload:disabled { background: var(--border-dark); border-color: var(--border-dark); color: var(--text-muted); cursor: not-allowed; }
+/* Warn state — PDF selected but no design input added */
+.btn-upload.warn { background: #d97706; border-color: #d97706; }
+.btn-upload.warn:hover { background: #b45309; border-color: #b45309; }
 /* Reviewing overrides disabled — keep blue so the animation is visible */
 .btn-upload.reviewing,
 .btn-upload.reviewing:disabled { background: var(--blue); border-color: var(--blue); color: #fff; cursor: wait; }
@@ -287,6 +290,13 @@ button { cursor: pointer; font: inherit; }
   margin-bottom: 20px;
 }
 .design-input-zone.dragover { border-color: var(--blue); }
+@keyframes attention-pulse {
+  0%   { border-color: var(--border-dark); box-shadow: none; }
+  30%  { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.25); }
+  65%  { border-color: #f59e0b; box-shadow: 0 0 0 6px rgba(245,158,11,0.08); }
+  100% { border-color: var(--border-dark); box-shadow: none; }
+}
+.design-input-zone.attention { animation: attention-pulse 1.4s ease-out forwards; }
 .design-inner { text-align: center; padding: 2px 0; }
 .design-file-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
 .design-hint { font-size: 11px; color: var(--text-muted); margin: 6px 0 0; text-align: center; }

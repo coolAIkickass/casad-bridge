@@ -25,12 +25,22 @@ function setFile(file) {
   dropLabel.style.display    = 'none';
   dropSelected.style.display = '';
   submitBtn.disabled = false;
-  submitBtn.textContent = 'Review drawing';
 
   // Auto-set hidden drawing name from filename — strip extension, clean separators, cap 60 chars
   const nameInput = document.getElementById('drawing_name');
   const raw = file.name.replace(/\.pdf$/i, '').replace(/[_\-]+/g, ' ').trim();
   nameInput.value = raw.length > 60 ? raw.slice(0, 57) + '…' : raw;
+
+  updateSubmitBtn();
+
+  // Draw attention to the design input zone
+  designDropZone.classList.remove('attention');
+  void designDropZone.offsetWidth;  // force reflow to restart animation
+  designDropZone.classList.add('attention');
+  designDropZone.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  designDropZone.addEventListener('animationend', () => {
+    designDropZone.classList.remove('attention');
+  }, { once: true });
 }
 
 function clearFile() {
@@ -59,6 +69,14 @@ const designList     = document.getElementById('design-file-list');
 const designDropZone = document.getElementById('design-drop-zone');
 let designFiles = [];
 
+function updateSubmitBtn() {
+  const hasDesign = designFiles.length > 0;
+  submitBtn.classList.toggle('warn', !hasDesign && !submitBtn.disabled);
+  if (!submitBtn.disabled) {
+    submitBtn.textContent = hasDesign ? 'Review drawing' : 'Review drawing — no design input';
+  }
+}
+
 function renderDesignList() {
   designList.innerHTML = '';
   designFiles.forEach((f, i) => {
@@ -74,6 +92,7 @@ function renderDesignList() {
     designList.appendChild(li);
   });
   syncDesignInput();
+  updateSubmitBtn();
 }
 
 function syncDesignInput() {
@@ -111,9 +130,26 @@ designDropZone.addEventListener('drop', (e) => {
 });
 
 // ── Submit feedback ────────────────────────────────────────────────────────
-document.getElementById('upload-form').addEventListener('submit', () => {
+document.getElementById('upload-form').addEventListener('submit', (e) => {
+  if (designFiles.length === 0) {
+    const ok = window.confirm(
+      'No design input file added.\n\n' +
+      'Without it, only title-block format and schedule arithmetic can be checked — ' +
+      'reinforcement schedule comparisons will be skipped.\n\n' +
+      'Continue without design input?'
+    );
+    if (!ok) {
+      e.preventDefault();
+      designDropZone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      designDropZone.classList.remove('attention');
+      void designDropZone.offsetWidth;
+      designDropZone.classList.add('attention');
+      return;
+    }
+  }
   submitBtn.disabled = true;
   submitBtn.textContent = 'Reviewing drawing...';
+  submitBtn.classList.remove('warn');
   submitBtn.classList.add('reviewing');
   document.getElementById('review-wait-note').style.display = '';
 });

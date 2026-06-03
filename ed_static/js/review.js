@@ -4,16 +4,46 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 let pdfDoc         = null;
 let currentPage    = 1;
 let totalPages     = 0;
-let scale          = 1.5;
+let scale          = 1.0;
 let currentViewport = null;
 let allIssues      = [];
 let selectedId     = null;
 let renderTask     = null;
+let activeFilter   = 'error';   // null | 'error' | 'warning' | 'resolved'
 
-const canvas    = document.getElementById('pdf-canvas');
-const ctx       = canvas.getContext('2d');
-const hlLayer   = document.getElementById('highlights-layer');
-const pdfLoader = document.getElementById('pdf-loading');
+const canvas      = document.getElementById('pdf-canvas');
+const ctx         = canvas.getContext('2d');
+const hlLayer     = document.getElementById('highlights-layer');
+const pdfLoader   = document.getElementById('pdf-loading');
+const scrollArea  = document.getElementById('pdf-scroll-area');
+const hscrollTop  = document.getElementById('pdf-hscroll-top');
+const hscrollPhantom = document.getElementById('pdf-hscroll-phantom');
+
+// ── Top horizontal scrollbar sync ────────────────────
+function syncPhantomWidth() {
+  const wrapper = document.getElementById('pdf-wrapper');
+  if (wrapper) {
+    hscrollPhantom.style.width = wrapper.offsetWidth + 'px';
+  }
+}
+hscrollTop.addEventListener('scroll', () => {
+  scrollArea.scrollLeft = hscrollTop.scrollLeft;
+});
+scrollArea.addEventListener('scroll', () => {
+  hscrollTop.scrollLeft = scrollArea.scrollLeft;
+});
+
+// Prevent horizontal trackpad/wheel scroll from triggering browser back/forward.
+// overscroll-behavior-x handles most cases in CSS; this catches the rest.
+[scrollArea, hscrollTop].forEach(el => {
+  el.addEventListener('wheel', (e) => {
+    if (e.deltaX !== 0) {
+      e.preventDefault();
+      scrollArea.scrollLeft += e.deltaX;
+      hscrollTop.scrollLeft = scrollArea.scrollLeft;
+    }
+  }, { passive: false });
+});
 
 // ── PDF rendering ────────────────────────────────────
 
@@ -41,6 +71,7 @@ async function renderPage(num) {
   }
 
   pdfLoader.style.display = 'none';
+  syncPhantomWidth();
   renderHighlights(num);
 }
 
@@ -53,7 +84,7 @@ function renderHighlights(pageNum) {
   hlLayer.style.height = currentViewport.height + 'px';
 
   let num = 0;
-  allIssues
+  visibleIssues()
     .filter(i => i.page_num === pageNum && i.x != null)
     .forEach(issue => {
       num++;
@@ -75,17 +106,53 @@ function pct(val, dim) { return val / 100 * dim; }
 
 // ── Issue panel ──────────────────────────────────────
 
+function visibleIssues() {
+  if (!activeFilter) return allIssues;
+  if (activeFilter === 'resolved') return allIssues.filter(i => i.status === 'resolved');
+  return allIssues.filter(i => i.severity === activeFilter && i.status !== 'resolved');
+}
+
 function renderIssuePanel() {
   const panel = document.getElementById('issue-list');
+  const filtered = visibleIssues();
+
+  panel.innerHTML = '';
+
+  // Filter banner when a filter is active
+  if (activeFilter) {
+    const label = activeFilter === 'resolved' ? 'Resolved' : activeFilter === 'error' ? 'Errors' : 'Warnings';
+    const banner = document.createElement('div');
+    banner.className = 'filter-banner';
+    banner.innerHTML = `Showing ${filtered.length} ${label.toLowerCase()} <button onclick="clearFilter()">Show all</button>`;
+    panel.appendChild(banner);
+  }
+
+  if (allIssues.length === 0) {
+    panel.innerHTML = '<div class="no-issues-msg"><span class="no-issues-icon">✓</span><strong>No issues found</strong><p>The drawing passed all checks. No errors or warnings were raised.</p></div>';
+    return;
+  }
+
+  if (filtered.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'no-issues-msg';
+    empty.innerHTML = `<span class="no-issues-icon">✓</span><strong>None in this category</strong><p>No ${activeFilter} items found.</p>`;
+    panel.appendChild(empty);
+    return;
+  }
 
   // Group by category preserving insertion order
   const categories = {};
-  allIssues.forEach(i => {
+  filtered.forEach(i => {
     if (!categories[i.category]) categories[i.category] = [];
     categories[i.category].push(i);
   });
 
-  panel.innerHTML = '';
+  const openCount = allIssues.filter(i => i.status === 'open').length;
+  if (openCount === 0 && allIssues.length > 0) {
+    panel.innerHTML = '<div class="no-issues-msg all-resolved"><span class="no-issues-icon">✓</span><strong>All issues resolved</strong><p>Every flagged item has been marked as resolved. Ready to upload the corrected version.</p></div>';
+    return;
+  }
+
   let globalNum = 0;
   Object.entries(categories).forEach(([cat, issues]) => {
     const openCount = issues.filter(i => i.status === 'open').length;
@@ -193,14 +260,27 @@ function highlightSelected(id) {
 
 function scrollToHighlight(id) {
   const hl = document.querySelector(`.highlight[data-id="${id}"]`);
-  if (hl) hl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (!hl || !scrollArea) return;
+
+  // Center the highlight in the scroll area both horizontally and vertically
+  const hlRect   = hl.getBoundingClientRect();
+  const areaRect = scrollArea.getBoundingClientRect();
+
+  const targetLeft = scrollArea.scrollLeft + hlRect.left - areaRect.left
+                     - (areaRect.width  - hlRect.width)  / 2;
+  const targetTop  = scrollArea.scrollTop  + hlRect.top  - areaRect.top
+                     - (areaRect.height - hlRect.height) / 2;
+
+  scrollArea.scrollTo({ left: targetLeft, top: targetTop, behavior: 'smooth' });
+  // Keep top scrollbar in sync after the scroll settles
+  setTimeout(() => { hscrollTop.scrollLeft = scrollArea.scrollLeft; }, 350);
 }
 
 async function toggleResolve(id) {
   const issue = allIssues.find(i => i.id === id);
   if (!issue) return;
   const newStatus = issue.status === 'open' ? 'resolved' : 'open';
-  await fetch(`/api/issues/${id}/status`, {
+  await fetch(`/ed/api/issues/${id}/status`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status: newStatus }),
@@ -210,6 +290,30 @@ async function toggleResolve(id) {
   updateSummary();
   renderHighlights(currentPage);
 }
+
+// ── Filter ────────────────────────────────────────────
+
+function setFilter(severity) {
+  activeFilter = (activeFilter === severity) ? null : severity;   // toggle off if same
+  document.querySelectorAll('.summary-stat').forEach(el => el.classList.remove('active'));
+  if (activeFilter) {
+    const map = { error: 'stat-error', warning: 'stat-warning', resolved: 'stat-resolved' };
+    document.querySelector('.' + map[activeFilter])?.classList.add('active');
+  }
+  renderIssuePanel();
+  renderHighlights(currentPage);
+}
+
+function clearFilter() {
+  activeFilter = null;
+  document.querySelectorAll('.summary-stat').forEach(el => el.classList.remove('active'));
+  renderIssuePanel();
+  renderHighlights(currentPage);
+}
+
+document.querySelector('.stat-error')   ?.addEventListener('click', () => setFilter('error'));
+document.querySelector('.stat-warning') ?.addEventListener('click', () => setFilter('warning'));
+document.querySelector('.stat-resolved')?.addEventListener('click', () => setFilter('resolved'));
 
 // ── Controls ──────────────────────────────────────────
 
@@ -233,8 +337,12 @@ document.getElementById('btn-zoom-out').addEventListener('click', () => {
 // ── Init ──────────────────────────────────────────────
 
 async function init() {
+  // Reflect initial defaults in UI
+  document.getElementById('zoom-label').textContent = Math.round(scale * 100) + '%';
+  document.querySelector('.stat-error')?.classList.add('active');
+
   // Load issues first so highlights appear as soon as PDF renders
-  const resp = await fetch(`/api/review/${window.REVIEW_ID}/issues`);
+  const resp = await fetch(`/ed/api/review/${window.REVIEW_ID}/issues`);
   allIssues = await resp.json();
   renderIssuePanel();
   updateSummary();
@@ -244,6 +352,16 @@ async function init() {
   totalPages = pdfDoc.numPages;
   document.getElementById('total-pages').textContent = totalPages;
   await renderPage(1);
+
+  // Center the drawing horizontally so the user knows it scrolls both ways
+  const wrapper = document.getElementById('pdf-wrapper');
+  if (wrapper && scrollArea) {
+    const overflowX = wrapper.offsetWidth - scrollArea.clientWidth;
+    if (overflowX > 0) {
+      scrollArea.scrollLeft = overflowX / 2;
+      hscrollTop.scrollLeft = scrollArea.scrollLeft;
+    }
+  }
 }
 
 init().catch(err => {

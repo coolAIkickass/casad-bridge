@@ -31,8 +31,6 @@ function setFile(file) {
   const raw = file.name.replace(/\.pdf$/i, '').replace(/[_\-]+/g, ' ').trim();
   nameInput.value = raw.length > 60 ? raw.slice(0, 57) + '…' : raw;
 
-  updateSubmitBtn();
-
   // Draw attention to the design input zone
   designDropZone.classList.remove('attention');
   void designDropZone.offsetWidth;  // force reflow to restart animation
@@ -69,14 +67,6 @@ const designList     = document.getElementById('design-file-list');
 const designDropZone = document.getElementById('design-drop-zone');
 let designFiles = [];
 
-function updateSubmitBtn() {
-  const hasDesign = designFiles.length > 0;
-  submitBtn.classList.toggle('warn', !hasDesign && !submitBtn.disabled);
-  if (!submitBtn.disabled) {
-    submitBtn.textContent = hasDesign ? 'Review drawing' : 'Review drawing — no design input';
-  }
-}
-
 function renderDesignList() {
   designList.innerHTML = '';
   designFiles.forEach((f, i) => {
@@ -92,7 +82,6 @@ function renderDesignList() {
     designList.appendChild(li);
   });
   syncDesignInput();
-  updateSubmitBtn();
 }
 
 function syncDesignInput() {
@@ -149,7 +138,6 @@ document.getElementById('upload-form').addEventListener('submit', (e) => {
   }
   submitBtn.disabled = true;
   submitBtn.textContent = 'Reviewing drawing...';
-  submitBtn.classList.remove('warn');
   submitBtn.classList.add('reviewing');
   document.getElementById('review-wait-note').style.display = '';
 });

@@ -212,9 +212,6 @@ button { cursor: pointer; font: inherit; }
 
 /* Disabled state clearly distinct from active */
 .btn-upload:disabled { background: var(--border-dark); border-color: var(--border-dark); color: var(--text-muted); cursor: not-allowed; }
-/* Warn state — PDF selected but no design input added */
-.btn-upload.warn { background: #d97706; border-color: #d97706; }
-.btn-upload.warn:hover { background: #b45309; border-color: #b45309; }
 /* Reviewing overrides disabled — keep blue so the animation is visible */
 .btn-upload.reviewing,
 .btn-upload.reviewing:disabled { background: var(--blue); border-color: var(--blue); color: #fff; cursor: wait; }

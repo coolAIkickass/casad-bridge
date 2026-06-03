@@ -224,6 +224,24 @@ def api_issues(review_id):
     return jsonify([dict(i) for i in issues])
 
 
+@ed_bp.route('/api/review/<review_id>/extract')
+def api_extract_debug(review_id):
+    """Re-run Claude extraction on the stored PDF and return raw drawing_data JSON.
+    Costs one Claude API call and takes ~30s. For debugging only."""
+    conn = _get_db()
+    cur  = conn.cursor()
+    cur.execute('SELECT pdf_content FROM reviews WHERE id=%s', (review_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'Review not found'}), 404
+    from checker.pdf_extractor import extract_from_drawing
+    data = extract_from_drawing(bytes(row['pdf_content']))
+    data.pop('raw_text', None)  # omit verbose line list
+    return jsonify(data)
+
+
 @ed_bp.route('/api/issues/<issue_id>/status', methods=['POST'])
 def update_status(issue_id):
     data = request.get_json()

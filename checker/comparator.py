@@ -155,7 +155,6 @@ def compare(design_data: dict, drawing_data: dict) -> list:
         ))
         return issues
 
-    bar_positions              = drawing_data.get('bar_positions') or {}
     schedule_section_positions = drawing_data.get('schedule_section_positions') or {}
     section_view_positions     = drawing_data.get('section_view_positions') or {}
     section_bboxes             = drawing_data.get('schedule_section_bboxes') or {}
@@ -165,7 +164,7 @@ def compare(design_data: dict, drawing_data: dict) -> list:
     issues += _check_notes(drawing_data.get('notes') or {}, design_data)
     issues += _check_schedule(
         drawing_data.get('schedule') or {}, design_data,
-        section_bboxes, bar_positions, schedule_section_positions,
+        section_bboxes, schedule_section_positions,
     )
     issues += _check_table1(drawing_data.get('table_1') or [], design_data)
     issues += _check_sections(sections)
@@ -184,6 +183,7 @@ def compare(design_data: dict, drawing_data: dict) -> list:
 def _check_title_block(tb: dict, design: dict) -> list:
     issues = []
     zone = 'title_block'
+    tb_bbox = tb.get('bbox')  # Claude's estimated bbox for the title block area
 
     required = ['drawing_number', 'revision', 'title', 'spans', 'drawn_by', 'approved_by', 'date', 'scale']
     for field in required:
@@ -192,7 +192,7 @@ def _check_title_block(tb: dict, design: dict) -> list:
                 'Title Block', f'Missing field: {field}',
                 f'The field "{field}" is empty or could not be read from the title block.',
                 f'Fill in the "{field}" field in the title block.',
-                'error', zone
+                'error', zone, tb_bbox
             ))
 
     # Revision format check
@@ -202,7 +202,7 @@ def _check_title_block(tb: dict, design: dict) -> list:
             'Title Block', f'Revision format invalid: "{rev}"',
             f'Revision should be in format R0, R1, R2 etc. Found: "{rev}".',
             'Update revision to follow R<number> format.',
-            'error', zone
+            'error', zone, tb_bbox
         ))
 
     # Drawing number format
@@ -212,7 +212,7 @@ def _check_title_block(tb: dict, design: dict) -> list:
             'Title Block', f'Drawing number format check: "{drg}"',
             f'Drawing number "{drg}" — verify it follows the project numbering convention.',
             'Confirm drawing number matches the project register.',
-            'warning', zone
+            'warning', zone, tb_bbox
         ))
 
     # Scale check
@@ -222,7 +222,7 @@ def _check_title_block(tb: dict, design: dict) -> list:
             'Title Block', f'Scale value unusual: "{scale}"',
             f'Scale field shows "{scale}". Expected "AS SHOWN" or a ratio like "1:50".',
             'Verify scale field.',
-            'warning', zone
+            'warning', zone, tb_bbox
         ))
 
     return issues
@@ -234,6 +234,7 @@ def _check_notes(notes: dict, design: dict) -> list:
     issues = []
     zone = 'notes'
     geo = design.get('geometry', {})
+    notes_bbox = notes.get('bbox')  # Claude's estimated bbox for the notes area
 
     # Lap length concrete grade vs pile concrete grade
     lap_grade = notes.get('lap_length_concrete_grade')
@@ -245,14 +246,14 @@ def _check_notes(notes: dict, design: dict) -> list:
                 f'The lap length table in the drawing references {lap_grade} concrete, '
                 f'but the pile concrete grade is {pile_grade}. These must match.',
                 f'Update lap length table to reference {pile_grade} concrete.',
-                'error', zone
+                'error', zone, notes_bbox
             ))
     elif not lap_grade:
         issues.append(_issue(
             'Notes', 'Lap length concrete grade not found',
             'Could not read which concrete grade the lap length table references.',
             'Ensure the lap length table header is legible and states the concrete grade.',
-            'warning', zone
+            'warning', zone, notes_bbox
         ))
 
     # Pile geometry notes vs design input
@@ -266,7 +267,7 @@ def _check_notes(notes: dict, design: dict) -> list:
                     'Notes', f'Pile length mismatch: note says {pile_len_note}m, design says {pile_len_design}m',
                     f'Drawing note states pile length = {pile_len_note}m. Design input specifies {pile_len_design}m.',
                     f'Update pile length note to {pile_len_design}m.',
-                    'error', zone
+                    'error', zone, notes_bbox
                 ))
 
         pile_fix_note = _norm_float(notes.get('pile_fixity_m'))
@@ -278,7 +279,7 @@ def _check_notes(notes: dict, design: dict) -> list:
                     'Notes', f'Pile fixity mismatch: note says {pile_fix_note}m, design says {pile_fix_design}m',
                     f'Drawing note states pile fixity = {pile_fix_note}m. Design input specifies {pile_fix_design}m.',
                     f'Update pile fixity note to {pile_fix_design}m.',
-                    'error', zone
+                    'error', zone, notes_bbox
                 ))
 
     return issues
@@ -292,9 +293,16 @@ COMPONENT_ZONE = {
     'pier':    'pier_schedule',
 }
 
+# Expected top-to-bottom order of bar marks in each component's schedule.
+# Used to distribute row highlight boxes correctly when Claude provides no per-row bboxes.
+CANONICAL_BAR_ORDER = {
+    'pilecap': ['a', 'b', 'c', 'd', 'e', 'f', 'f1'],
+    'pile':    ['x', 'y', 'y1', 'z'],
+    'pier':    ['g', 'i', 'i1', 'j', 'j1', 'k', 'k1'],
+}
+
 
 def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
-                    bar_positions: dict = None,
                     schedule_section_positions: dict = None) -> list:
     issues = []
 
@@ -318,15 +326,16 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
                 ))
             continue
 
-        # Fallback positioning: section bbox + row ordering (used when pdfplumber didn't
-        # find bar marks, e.g. if PDF text is rasterized)
+        # Section bbox: prefer pdfplumber (reliable header detection) then Claude, then fallback
         plumber_sect = (schedule_section_positions or {}).get(comp)
         claude_sect  = _get_section_bbox(zone, section_bboxes)
         sect = plumber_sect if plumber_sect else claude_sect
 
+        # Stable canonical ordering so row-index distribution matches the actual schedule
+        _order = {bm: i for i, bm in enumerate(CANONICAL_BAR_ORDER.get(comp, []))}
         sorted_bms = sorted(
             drawing_comp.keys(),
-            key=lambda bm: (drawing_comp[bm].get('bbox') or {}).get('y', 0)
+            key=lambda bm: (_order.get(bm, 999), bm)
         )
         total = max(len(sorted_bms), 1)
 
@@ -338,36 +347,28 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
 
             drawing_bar = drawing_comp.get(bm)
             if not drawing_bar:
-                # "Not found" issue — highlight the component's section area
-                not_found_bbox = (bar_positions or {}).get(comp, {}).get(bm) or sect
                 issues.append(_issue(
                     'Reinforcement', f"Bar mark '{bm}' ({comp}) not found in drawing schedule",
                     f"Bar mark '{bm}' is specified in the design input but was not found in the drawing's {comp} schedule.",
                     f"Add bar mark '{bm}' to the {comp} schedule.",
-                    'error', zone, not_found_bbox
+                    'error', zone, sect
                 ))
                 continue
 
             d_bar = design_bars[0]
 
-            # Priority 1: pdfplumber exact bar position (pixel-perfect from PDF text)
-            plumber_bar = (bar_positions or {}).get(comp, {}).get(bm)
-            if plumber_bar:
-                # Text height is tiny (~0.3%); expand to at least 2.5% so highlight is visible
-                bar_bbox = {**plumber_bar, 'h': max(plumber_bar['h'] * 4, 2.5)}
-            else:
-                # Priority 2: distribute bars evenly within the section bbox
-                try:
-                    row_idx = sorted_bms.index(bm)
-                except ValueError:
-                    row_idx = total - 1
-                row_h = max(sect['h'] / total, 2.0)
-                bar_bbox = {
-                    'x': sect['x'],
-                    'y': sect['y'] + row_idx * row_h,
-                    'w': sect['w'],
-                    'h': row_h,
-                }
+            # Distribute bars evenly within the section bbox using canonical row ordering
+            try:
+                row_idx = sorted_bms.index(bm)
+            except ValueError:
+                row_idx = total - 1
+            row_h = max(sect['h'] / total, 2.0)
+            bar_bbox = {
+                'x': sect['x'],
+                'y': sect['y'] + row_idx * row_h,
+                'w': sect['w'],
+                'h': row_h,
+            }
 
             issues += _compare_bar(bm, comp, d_bar, drawing_bar, zone, design_bars, bar_bbox)
 
@@ -473,6 +474,7 @@ def _check_table1(table1: list, design: dict) -> list:
         pier = row.get('pier_id', '?')
         top_pc = _norm_float(row.get('top_pilecap_m'))
         bot_pc = _norm_float(row.get('bottom_pilecap_m'))
+        row_bbox = row.get('bbox')  # Claude's estimated bbox for this TABLE-1 row
 
         if top_pc and bot_pc and pilecap_depth:
             drawn_depth = round(top_pc - bot_pc, 3)
@@ -483,7 +485,7 @@ def _check_table1(table1: list, design: dict) -> list:
                     f'For pier {pier}: top of pilecap ({top_pc}) − bottom of pilecap ({bot_pc}) = {drawn_depth}m. '
                     f'Design input specifies pilecap depth = {expected}m.',
                     f'Correct the pilecap level values in TABLE-1 for pier {pier}.',
-                    'error', 'table_1'
+                    'error', 'table_1', row_bbox
                 ))
 
     return issues

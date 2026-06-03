@@ -189,8 +189,6 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
         'label_issues':              [],
         'dimension_issues':          [],
         'raw_text':                  text_data.get('raw_lines', []),
-        # pdfplumber-derived exact positions (pixel-perfect, no Claude estimation)
-        'bar_positions':             text_data.get('bar_positions', {}),
         'schedule_section_positions': text_data.get('schedule_section_positions', {}),
         'section_view_positions':    text_data.get('section_view_positions', {}),
     }
@@ -296,11 +294,11 @@ def _extract_text(pdf_bytes: bytes) -> dict:
     except Exception as e:
         raw_lines.append(f'[pdfplumber error: {e}]')
 
-    bar_positions, schedule_section_positions, section_view_positions = {}, {}, {}
+    schedule_section_positions, section_view_positions = {}, {}
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if pdf.pages:
-                bar_positions, schedule_section_positions, section_view_positions = \
+                schedule_section_positions, section_view_positions = \
                     _extract_positions(pdf.pages[0])
     except Exception as e:
         log.warning('_extract_positions failed: %s', e)
@@ -310,7 +308,6 @@ def _extract_text(pdf_bytes: bytes) -> dict:
         'title_block':              title_block,
         'notes':                    notes,
         'raw_lines':                raw_lines,
-        'bar_positions':            bar_positions,
         'schedule_section_positions': schedule_section_positions,
         'section_view_positions':   section_view_positions,
     }
@@ -318,19 +315,12 @@ def _extract_text(pdf_bytes: bytes) -> dict:
 
 # ── pdfplumber position extraction ───────────────────────────────────────────
 
-KNOWN_BAR_MARKS = {
-    'a','b','c','d','e','f','g','h','i','j','k','l','m',
-    'n','o','p','q','r','s','t','u','v','w','x','y','z',
-    'a1','b1','c1','d1','e1','f1','g1','h1','i1','j1','k1',
-    'x1','x2','y1','y2','z1',
-}
-
 
 def _extract_positions(page) -> tuple:
     """
-    Extract exact positions of schedule bar marks and section view labels
+    Extract schedule section header positions and section view label positions
     from pdfplumber word bounding boxes (PDF point coordinates → percentages).
-    Returns (bar_positions, schedule_section_positions, section_view_positions).
+    Returns (schedule_section_positions, section_view_positions).
     """
     pw, ph = page.width, page.height
     words = page.extract_words() or []
@@ -345,12 +335,13 @@ def _extract_positions(page) -> tuple:
         }
 
     # ── 1. Find schedule component section headers ───────────────────────────
-    # Look for PILECAP, PILE, PIER as the first word of a header row in the right portion.
     COMP_KEYWORDS = {'pilecap': 'PILECAP', 'pile': 'PILE', 'pier': 'PIER'}
     comp_header_y = {}   # comp → top y in PDF points
+    schedule_words_x = []
     for w in words:
         if w['x0'] < schedule_x_min:
             continue
+        schedule_words_x.append(w['x0'])
         text = w['text'].strip().upper()
         for comp, keyword in COMP_KEYWORDS.items():
             if text == keyword and comp not in comp_header_y:
@@ -358,38 +349,14 @@ def _extract_positions(page) -> tuple:
                 break
 
     sorted_comps = sorted(comp_header_y.items(), key=lambda kv: kv[1])
+    sect_x0 = min(schedule_words_x) if schedule_words_x else schedule_x_min
 
-    # ── 2. Find bar mark labels in the schedule area ─────────────────────────
-    schedule_words = [
-        w for w in words
-        if w['x0'] >= schedule_x_min
-        and w['text'].strip().lower() in KNOWN_BAR_MARKS
-    ]
-
-    bar_positions = {}
     schedule_section_positions = {}
-
     for idx, (comp, header_y) in enumerate(sorted_comps):
         y_end = sorted_comps[idx + 1][1] if idx + 1 < len(sorted_comps) else ph * 0.82
-        comp_bars = [w for w in schedule_words if header_y <= w['top'] < y_end]
-
-        if comp_bars:
-            # Find the bar-mark column's left edge (minimum x0 among bar candidates)
-            bm_x0 = min(w['x0'] for w in comp_bars)
-            # Keep only words in the bar-mark column (within 15pt of bm_x0)
-            col_bars = [w for w in comp_bars if abs(w['x0'] - bm_x0) <= 15]
-            bar_positions[comp] = {
-                w['text'].strip().lower(): to_pct(w['x0'], w['top'], w['x1'], w['bottom'])
-                for w in col_bars
-            }
-
-        # Section bbox: full width from schedule left edge to right page edge
-        all_sched_x = [w['x0'] for w in schedule_words] or [schedule_x_min]
-        sect_x0 = min(all_sched_x)
         schedule_section_positions[comp] = to_pct(sect_x0, header_y, pw, y_end)
 
-    # ── 3. Find section view labels on the left side ─────────────────────────
-    # Group left-side words into lines by approximate y
+    # ── 2. Find section view labels on the left side ─────────────────────────
     line_words: dict = {}
     for w in words:
         if w['x0'] >= schedule_x_min:
@@ -406,18 +373,16 @@ def _extract_positions(page) -> tuple:
             x0  = min(w['x0']     for w in lw_sorted)
             x1  = max(w['x1']     for w in lw_sorted)
             top = min(w['top']    for w in lw_sorted)
-            # Expand downward: view area below the label (~18% of page height)
             view_h_pts = ph * 0.18
-            name = line_text[:60]   # truncate for dict key
+            name = line_text[:60]
             section_view_positions[name] = to_pct(x0, top, x1, top + view_h_pts)
 
     log.info(
-        '_extract_positions: bar_positions=%s schedule_sections=%s section_views=%d',
-        {c: list(bars.keys()) for c, bars in bar_positions.items()},
+        '_extract_positions: schedule_sections=%s section_views=%d',
         list(schedule_section_positions.keys()),
         len(section_view_positions),
     )
-    return bar_positions, schedule_section_positions, section_view_positions
+    return schedule_section_positions, section_view_positions
 
 
 # ── Claude vision pass ────────────────────────────────────────────────────────

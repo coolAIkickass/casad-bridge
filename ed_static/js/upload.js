@@ -25,6 +25,7 @@ function setFile(file) {
   dropLabel.style.display    = 'none';
   dropSelected.style.display = '';
   submitBtn.disabled = false;
+  submitBtn.textContent = 'Review drawing';
 
   // Auto-set hidden drawing name from filename — strip extension, clean separators, cap 60 chars
   const nameInput = document.getElementById('drawing_name');
@@ -46,7 +47,7 @@ function clearFile() {
   dropLabel.style.display    = '';
   dropSelected.style.display = 'none';
   submitBtn.disabled = true;
-  submitBtn.textContent = 'Select a drawing to continue';
+  submitBtn.textContent = 'Review drawing';
   document.getElementById('drawing_name').value = '';
 }
 

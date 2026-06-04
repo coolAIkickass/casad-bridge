@@ -101,8 +101,8 @@ def index():
     conn = _get_db()
     cur = conn.cursor()
 
-    cur.execute('SELECT COUNT(*) FROM reviews r JOIN drawings d ON d.id = r.drawing_id')
-    total      = cur.fetchone()[0]
+    cur.execute('SELECT COUNT(*) AS total FROM reviews r JOIN drawings d ON d.id = r.drawing_id')
+    total      = cur.fetchone()['total']
     total_pages = max(1, -(-total // per_page))   # ceiling division
 
     cur.execute('''

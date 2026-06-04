@@ -13,6 +13,10 @@ import pdfplumber
 
 log = logging.getLogger(__name__)
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+# Use ED_MODEL env var to override: 'haiku' (cheap, for testing) or 'sonnet' (production)
+_model_alias = os.environ.get('ED_MODEL', 'haiku').lower()
+EXTRACT_MODEL = 'claude-haiku-4-5-20251001' if _model_alias == 'haiku' else 'claude-sonnet-4-6'
+REVIEW_MODEL  = 'claude-haiku-4-5-20251001'  # always Haiku — review call doesn't need Sonnet
 
 EXTRACTION_PROMPT = """You are analyzing a CASAD AutoCAD engineering drawing for a bridge structure (Pile-Pilecap-Pier foundation).
 
@@ -170,8 +174,10 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
     vision_data, review_data = None, None
     if images_b64:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            f_extract = pool.submit(_call_vision, images_b64, EXTRACTION_PROMPT)
-            f_review  = pool.submit(_call_vision, images_b64, REVIEW_PROMPT)
+            f_extract = pool.submit(_call_vision, images_b64, EXTRACTION_PROMPT,
+                                    EXTRACT_MODEL, 8192)
+            f_review  = pool.submit(_call_vision, images_b64, REVIEW_PROMPT,
+                                    REVIEW_MODEL, 4096)
             vision_data = f_extract.result()
             review_data = f_review.result()
         log.info('Both vision calls complete — extraction=%s review=%s',
@@ -467,7 +473,8 @@ def _parse_json_with_repair(raw: str) -> dict | None:
         return None
 
 
-def _call_vision(images_b64: list, prompt: str) -> dict | None:
+def _call_vision(images_b64: list, prompt: str, model: str = 'claude-sonnet-4-6',
+                  max_tokens: int = 8192) -> dict | None:
     """Send pre-rendered page images + prompt to Claude. Returns parsed JSON or None."""
     if not ANTHROPIC_API_KEY or not images_b64:
         return None
@@ -475,18 +482,18 @@ def _call_vision(images_b64: list, prompt: str) -> dict | None:
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        log.info('Vision call: sending %d image(s), prompt length=%d chars',
-                 len(images_b64[:3]), len(prompt))
+        log.info('Vision call: model=%s sending %d image(s), prompt length=%d chars',
+                 model, len(images_b64[:1]), len(prompt))
 
         content = [
             {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': b64}}
-            for b64 in images_b64[:3]
+            for b64 in images_b64[:1]
         ]
         content.append({'type': 'text', 'text': prompt})
 
         response = client.messages.create(
-            model='claude-sonnet-4-6',
-            max_tokens=8192,
+            model=model,
+            max_tokens=max_tokens,
             messages=[{'role': 'user', 'content': content}],
         )
         raw = response.content[0].text.strip()

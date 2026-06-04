@@ -319,6 +319,8 @@ button { cursor: pointer; font: inherit; }
 .td-name         { font-weight: 600; max-width: 200px; }
 .td-date         { color: var(--text-muted); white-space: nowrap; }
 .td-actions      { display: flex; gap: 6px; white-space: nowrap; }
+.pagination      { display: flex; align-items: center; gap: 10px; justify-content: center; padding: 12px 0 4px; }
+.page-info       { font-size: 13px; color: var(--text-muted); }
 
 /* Re-upload header */
 .reupload-header  { margin-bottom: 24px; }

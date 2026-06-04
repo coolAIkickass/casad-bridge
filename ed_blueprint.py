@@ -94,8 +94,17 @@ def _save_issues(review_id, issues, cur):
 
 @ed_bp.route('/')
 def index():
+    per_page = 10
+    page     = max(1, request.args.get('page', 1, type=int))
+    offset   = (page - 1) * per_page
+
     conn = _get_db()
     cur = conn.cursor()
+
+    cur.execute('SELECT COUNT(*) FROM reviews r JOIN drawings d ON d.id = r.drawing_id')
+    total      = cur.fetchone()[0]
+    total_pages = max(1, -(-total // per_page))   # ceiling division
+
     cur.execute('''
         SELECT r.id AS review_id, d.id AS drawing_id, d.name, d.drawing_type,
                r.version, r.status, r.created_at,
@@ -107,12 +116,13 @@ def index():
         LEFT JOIN issues i ON i.review_id = r.id
         GROUP BY r.id, d.id, d.name, d.drawing_type, r.version, r.status, r.created_at
         ORDER BY r.created_at DESC
-        LIMIT 20
-    ''')
+        LIMIT %s OFFSET %s
+    ''', (per_page, offset))
     recent = cur.fetchall()
     cur.close()
     conn.close()
-    return render_template('upload.html', recent=recent)
+    return render_template('upload.html', recent=recent,
+                           page=page, total_pages=total_pages)
 
 
 @ed_bp.route('/upload', methods=['POST'])

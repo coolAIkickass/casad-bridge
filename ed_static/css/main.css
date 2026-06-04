@@ -473,12 +473,12 @@ button { cursor: pointer; font: inherit; }
   transition: background .15s, border-color .15s;
   background: transparent;   /* no fill by default — drawing stays fully readable */
 }
-.highlight.sev-error   { border: 2px solid rgba(220,38,38,.9); }
-.highlight.sev-warning { border: 2px solid rgba(217,119,6,.9); }
+.highlight.sev-error   { border: 1px dashed rgba(220,38,38,.45); }
+.highlight.sev-warning { border: 1px dashed rgba(217,119,6,.45); }
 
-/* Hover: hint of fill so user sees the area boundary */
-.highlight.sev-error:hover   { background: rgba(220,38,38,.08); }
-.highlight.sev-warning:hover { background: rgba(217,119,6,.08); }
+/* Hover: solid border + light fill so the region is clearly visible */
+.highlight.sev-error:hover   { border: 2px solid rgba(220,38,38,.85); background: rgba(220,38,38,.06); }
+.highlight.sev-warning:hover { border: 2px solid rgba(217,119,6,.85);  background: rgba(217,119,6,.06); }
 
 /* Resolved: faded dashed outline, no fill */
 .highlight.resolved { opacity: .3; border-style: dashed; background: transparent; }

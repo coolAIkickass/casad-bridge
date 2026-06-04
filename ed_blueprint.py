@@ -307,38 +307,6 @@ def diagnostics():
     return jsonify(info)
 
 
-@ed_bp.route('/admin/cleanup-old-reviews')
-def cleanup_old_reviews():
-    """One-time cleanup: keep only the 10 most recent reviews, delete the rest."""
-    conn = _get_db()
-    cur = conn.cursor()
-    cur.execute('''
-        DELETE FROM issues WHERE review_id NOT IN (
-            SELECT id FROM reviews ORDER BY created_at DESC LIMIT 10
-        )
-    ''')
-    deleted_issues = cur.rowcount
-    cur.execute('''
-        DELETE FROM reviews WHERE id NOT IN (
-            SELECT id FROM reviews ORDER BY created_at DESC LIMIT 10
-        )
-    ''')
-    deleted_reviews = cur.rowcount
-    cur.execute('''
-        DELETE FROM drawings WHERE id NOT IN (SELECT drawing_id FROM reviews)
-    ''')
-    deleted_drawings = cur.rowcount
-    conn.commit()
-    cur.close()
-    conn.close()
-    return jsonify({
-        'deleted_issues': deleted_issues,
-        'deleted_reviews': deleted_reviews,
-        'deleted_drawings': deleted_drawings,
-        'status': 'done'
-    })
-
-
 @ed_bp.route('/reupload/<drawing_id>', methods=['GET', 'POST'])
 def reupload(drawing_id):
     conn = _get_db()

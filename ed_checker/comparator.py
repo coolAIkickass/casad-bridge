@@ -633,14 +633,16 @@ def _check_notes_completeness(notes_check: list, sections: list = None,
         if not entry or not entry.get('present'):
             bbox = (entry.get('bbox') if entry else None) or _find_section_bbox(
                 missing_msg, sections, section_view_positions)
-            # Concrete grades are always warnings — a single grade note covers all components.
-            # Steel grade is an error (must be explicit). Other missing notes are warnings.
+            # Concrete grades: warning (single-grade convention covers all components).
+            # Mandatory geometric notes and steel grade: error.
+            # Everything else: warning.
+            MANDATORY_NOTE_KEYS = {'pile_length', 'pile_fixity', 'pile_diameter', 'steel_grade'}
             if item_key in concrete_keys:
                 if any_concrete_found:
                     # Another component's grade was found — single-grade convention covers this.
                     continue
                 severity = 'warning'
-            elif item_key == 'steel_grade':
+            elif item_key in MANDATORY_NOTE_KEYS:
                 severity = 'error'
             else:
                 severity = 'warning'

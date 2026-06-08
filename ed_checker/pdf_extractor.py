@@ -41,13 +41,8 @@ Extract ALL of the following as precisely as possible:
      "length_m": 13.425,
      "total_length_m": 563.85,
      "unit_wt_kg_m": 3.857,
-     "total_wt_kg": 2174.77,
-     "shape_dimensions": [4350, 250]
+     "total_wt_kg": 2174.77
    }
-
-   shape_dimensions: If the schedule has a "SHAPE OF BAR" sketch column, read ALL numeric dimension
-   values written on the bar shape sketch for this row (in the unit shown, typically mm), in
-   left-to-right order as they appear on the sketch. Return null if the shape column is not visible.
 
    COLUMN MAPPING RULES — read these carefully:
    - bar_dia_mm: the φ / DIA column — always a small integer (8, 10, 12, 16, 20, 25, 32). Do NOT confuse with length or spacing.
@@ -145,11 +140,18 @@ projection of pile into pilecap, reference to IS/IRC codes
 
 CHECK 3 — Label & annotation quality
 Scan all visible text labels and annotations for GENUINE ERRORS ONLY:
-- Clear spelling errors in technical terms (e.g., a word is visibly misspelled)
+- Spelling errors: only flag if you can clearly read the incorrect letters AND the correct
+  spelling is unambiguous. Do NOT flag a word that looks correct at normal reading speed.
+  Do NOT flag CONTRACTOR, REINFORCEMENT, FOUNDATION, or other common engineering words
+  unless you can see the misspelling character-by-character with certainty.
 - Bar mark labels in section views that don't match the schedule
 - Scale labels that are clearly inconsistent with each other
 - Any label that clearly points to the wrong component
 - Text that is obviously truncated or cut off
+- Concrete grade mismatch: if a section view or plan view has a concrete grade annotation
+  (e.g. "M35", "M50") directly labelled on the structural drawing, cross-check it against
+  the grade stated in the NOTES section of the same drawing. If they differ, flag it.
+  Example: notes say M50 for pilecap/pier but SECTION A-A FOR PILECAP & PIER shows "M35".
 
 STRICT EXCLUSIONS — do NOT flag any of the following:
 - "SECTION A-A FOR PILE" vs "SECTION A-A FOR PILECAP & PIER" — these are two different sections with
@@ -188,17 +190,31 @@ a) COUNT the filled dot/circle symbols that represent longitudinal reinforcement
 b) SPACING: Judge whether bars are evenly distributed around the perimeter or show visible gaps/clustering.
    Set "spacing_uniform": false only if there is a clear visual irregularity.
 
-c) ERRONEOUS BOXES: Look for rectangular outlines that completely enclose a section-view drawing.
-   These are accidental drafting artefacts — NOT table borders, title block lines, or structural boxes.
-   Report each one with a description and bbox.
+c) ERRONEOUS BOXES: Look for a thin, single-line CAD rectangle that completely encloses a
+   section-view or detail drawing AND clearly does not belong structurally.
+   STRICT RULES — only flag if ALL of the following are true:
+   - You can clearly see a rectangle outline drawn around the view
+   - It is a thin drafting line (not a thick structural element border)
+   - It is NOT a table border, title block line, or part of the structural drawing
+   - You are highly confident it is an accidental CAD artefact
+   When you flag one, identify it by the label INSIDE or directly beside the enclosed area
+   (e.g. "DETAIL A" not "SECTION B-B"). If you are uncertain, DO NOT flag it.
 
 CHECK 6 — Cross-reference completeness and unlabeled views
 
-a) CUT MARK CROSS-REFERENCE: Look at every plan and section view for section cut lines with letter
-   labels (arrows labeled A, B, C, D, etc. showing where a section is cut). For each cut letter found,
-   check whether the corresponding section view (e.g., cut letter "D" → SECTION D-D) exists anywhere
-   in the drawing. If a cut mark references a section that is NOT drawn, flag it.
-   Example: cut marks labeled "D" shown on SECTION B-B but no SECTION D-D view exists → flag it.
+a) CUT MARK CROSS-REFERENCE: Look for physical cut-mark symbols — these are DRAWN graphical
+   arrows (crossing lines with arrowheads) physically drawn ON a structural plan or elevation
+   view to indicate where a cross-section is taken. For each such arrow symbol with a letter
+   label (A, B, C, D, etc.), check whether the corresponding section view exists in the drawing.
+   Flag if the section view is missing.
+   Example: drawn arrow symbols labeled "D" on SECTION B-B but no SECTION D-D view drawn → flag.
+
+   CRITICAL EXCLUSIONS for cut-mark detection:
+   - Do NOT flag section names that appear as text within another section's title or label.
+     Example: "SECTION Z-Z (PILE) details reference Z1-Z1" — the text "Z1-Z1" here is a
+     text reference inside a label, NOT a drawn cut-mark arrow. Do NOT flag Z1-Z1 as missing.
+   - Do NOT flag section names referenced in notes or annotations as text.
+   - ONLY flag when you see the actual drawn graphical arrow symbol (not text).
 
 b) UNLABELED VIEWS: Identify any cross-section, plan, or elevation view that has been drawn but has
    NO title label. Every drawn view must have a label like "SECTION X-X", "PLAN OF...", "DETAIL A", etc.
@@ -235,6 +251,29 @@ Return ONLY valid JSON (no markdown):
 """
 
 
+SHAPE_DIMS_PROMPT = """From this engineering drawing schedule, extract bar shape dimensions.
+
+Look at the "SHAPE OF BAR" (or similar) sketch column in the reinforcement schedule table.
+For each bar mark, read ALL numeric dimension values written on its shape sketch.
+
+Return ONLY valid JSON (no markdown):
+{
+  "shape_dims": {
+    "pilecap": {"a": [825, 4350, 825], "b": [825, 4350, 825], "e": [450, 3600]},
+    "pile":    {"x": [300, 13125]},
+    "pier":    {"g": [500, 8956]}
+  }
+}
+
+Rules:
+- Values are the numbers written on the shape sketch (in mm as shown in the drawing).
+- List them left-to-right as they appear on the sketch.
+- If you cannot clearly read a bar's dimensions, omit that bar (do not guess).
+- Only include bars where you can read at least one dimension with confidence.
+- Return empty dicts {} for any component with no readable shape dimensions.
+"""
+
+
 def extract_from_drawing(pdf_bytes: bytes) -> dict:
     """Main entry point. Returns structured drawing data dict."""
     from concurrent.futures import ThreadPoolExecutor
@@ -246,20 +285,27 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
     # dense schedule table reading (bar diameters, counts, lengths).
     sched_images_b64 = _pdf_to_image_b64(pdf_bytes, scale=1.5, crop_right_pct=0.40)
 
-    # Run both API calls in parallel — halves total time from ~60s to ~30s
-    vision_data, review_data = None, None
+    # Run three API calls in parallel — all finish in ~30s total
+    # (1) extraction: schedule/title/notes/TABLE-1 — Haiku/Sonnet, schedule strip, 8192 tok
+    # (2) review: CHECK 1-6 — Haiku, full page, 8192 tok
+    # (3) shape dims: bar shape sketch dimensions only — Haiku, schedule strip, 2048 tok
+    vision_data, review_data, shape_dims_data = None, None, None
     extract_images = sched_images_b64 if sched_images_b64 else full_images_b64
     if extract_images or full_images_b64:
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            f_extract = pool.submit(_call_vision, extract_images, EXTRACTION_PROMPT,
-                                    EXTRACT_MODEL, 8192)
-            f_review  = pool.submit(_call_vision, full_images_b64, REVIEW_PROMPT,
-                                    REVIEW_MODEL, 4096)
-            vision_data = f_extract.result()
-            review_data = f_review.result()
-        log.info('Both vision calls complete — extraction=%s review=%s',
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_extract    = pool.submit(_call_vision, extract_images, EXTRACTION_PROMPT,
+                                       EXTRACT_MODEL, 8192)
+            f_review     = pool.submit(_call_vision, full_images_b64, REVIEW_PROMPT,
+                                       REVIEW_MODEL, 8192)
+            f_shape_dims = pool.submit(_call_vision, extract_images, SHAPE_DIMS_PROMPT,
+                                       REVIEW_MODEL, 2048)
+            vision_data    = f_extract.result()
+            review_data    = f_review.result()
+            shape_dims_data = f_shape_dims.result()
+        log.info('All vision calls complete — extraction=%s review=%s shape_dims=%s',
                  'ok' if vision_data else 'failed',
-                 'ok' if review_data else 'failed')
+                 'ok' if review_data else 'failed',
+                 'ok' if shape_dims_data else 'failed')
 
     result = {
         'title_block':                  {},
@@ -306,6 +352,16 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                 _add_field('total_wt_kg')
             else:
                 comp_dict[bm] = row
+
+    # Merge shape dimensions from the dedicated lightweight call into each bar's schedule row.
+    if shape_dims_data:
+        for comp, bars in (shape_dims_data.get('shape_dims') or {}).items():
+            comp = comp.lower()
+            for bm, dims in (bars or {}).items():
+                bm = bm.strip().lower()
+                bar_row = result['schedule'].get(comp, {}).get(bm)
+                if bar_row and isinstance(bar_row, dict) and isinstance(dims, list) and dims:
+                    bar_row['shape_dimensions'] = dims
 
     if review_data:
         result['sections']                    = review_data.get('sections')                    or []

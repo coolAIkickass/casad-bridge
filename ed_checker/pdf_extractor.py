@@ -41,8 +41,13 @@ Extract ALL of the following as precisely as possible:
      "length_m": 13.425,
      "total_length_m": 563.85,
      "unit_wt_kg_m": 3.857,
-     "total_wt_kg": 2174.77
+     "total_wt_kg": 2174.77,
+     "shape_dimensions": [4350, 250]
    }
+
+   shape_dimensions: If the schedule has a "SHAPE OF BAR" sketch column, read ALL numeric dimension
+   values written on the bar shape sketch for this row (in the unit shown, typically mm), in
+   left-to-right order as they appear on the sketch. Return null if the shape column is not visible.
 
    COLUMN MAPPING RULES — read these carefully:
    - bar_dia_mm: the φ / DIA column — always a small integer (8, 10, 12, 16, 20, 25, 32). Do NOT confuse with length or spacing.
@@ -119,7 +124,7 @@ Use null for any value not found or not legible.
 
 REVIEW_PROMPT = """You are doing a quality review of a CASAD bridge engineering drawing (Pile-Pilecap-Pier foundation type).
 
-Scan the ENTIRE drawing image carefully and return findings for each of the four checks below.
+Scan the ENTIRE drawing image carefully and return findings for each check below.
 For every finding include a bbox: {"x": <left%>, "y": <top%>, "w": <width%>, "h": <height%>} as % of image dimensions.
 
 CHECK 1 — Required views/sections
@@ -139,22 +144,35 @@ concrete grade for pier, steel grade (Fe415/Fe500/Fe550/Fe550D),
 projection of pile into pilecap, reference to IS/IRC codes
 
 CHECK 3 — Label & annotation quality
-Scan all visible text labels and annotations for:
-- Grammar/spelling errors (e.g. "BUNDLE BAR" vs "BUNDLE BARS")
-- Wrong or missing units on dimensions
+Scan all visible text labels and annotations for GENUINE ERRORS ONLY:
+- Clear spelling errors in technical terms (e.g., a word is visibly misspelled)
 - Bar mark labels in section views that don't match the schedule
-- Scale labels that are missing or inconsistent
-- Any label pointing to the wrong component
-- Truncated or incomplete text
-- Detail callout text inconsistencies (e.g. ring provided as circular vs helical)
+- Scale labels that are clearly inconsistent with each other
+- Any label that clearly points to the wrong component
+- Text that is obviously truncated or cut off
 
-CHECK 4 — Dimension completeness
-Check that key dimensions are shown in the views:
-- Pile cap overall dimensions (length × width × depth)
+STRICT EXCLUSIONS — do NOT flag any of the following:
+- "SECTION A-A FOR PILE" vs "SECTION A-A FOR PILECAP & PIER" — these are two different sections with
+  correct distinct names; the "FOR PILE" vs "FOR PILECAP & PIER" suffix is intentional, not inconsistent.
+- "BUNDLE BARS" — this is the correct engineering term; do not flag it as a grammar issue.
+- Dimension values, units, or notation styles that follow standard structural drawing conventions.
+Only report items you are CERTAIN are incorrect. When in doubt, omit.
+
+CHECK 4 — Dimension completeness (MISSING DIMENSIONS ONLY)
+Only flag a dimension type if it is COMPLETELY ABSENT from the entire drawing.
+Flag ONLY if you cannot find the dimension anywhere:
+- Pile cap overall length (along traffic)
+- Pile cap overall width (across traffic)
+- Pile cap depth/thickness
 - Pile spacing (centre-to-centre)
-- Pile projection into pile cap
 - Pier cross-section dimensions
-- Cover dimensions where required
+
+CRITICAL RULES for CHECK 4:
+- If the dimension IS shown anywhere in the drawing (even if you cannot read the exact value clearly),
+  do NOT flag it — only flag complete absence.
+- Do NOT report the dimension value you estimated or read. Only report absence.
+- Do NOT flag cover dimensions, unit notation styles, or approximate readings under this check.
+- If you are uncertain whether a dimension is shown, assume it is and do NOT flag it.
 
 CHECK 5 — Cross-section bar count & quality
 For every circular or rectangular cross-section view visible in the drawing (e.g. SECTION Z-Z for pile,
@@ -174,6 +192,18 @@ c) ERRONEOUS BOXES: Look for rectangular outlines that completely enclose a sect
    These are accidental drafting artefacts — NOT table borders, title block lines, or structural boxes.
    Report each one with a description and bbox.
 
+CHECK 6 — Cross-reference completeness and unlabeled views
+
+a) CUT MARK CROSS-REFERENCE: Look at every plan and section view for section cut lines with letter
+   labels (arrows labeled A, B, C, D, etc. showing where a section is cut). For each cut letter found,
+   check whether the corresponding section view (e.g., cut letter "D" → SECTION D-D) exists anywhere
+   in the drawing. If a cut mark references a section that is NOT drawn, flag it.
+   Example: cut marks labeled "D" shown on SECTION B-B but no SECTION D-D view exists → flag it.
+
+b) UNLABELED VIEWS: Identify any cross-section, plan, or elevation view that has been drawn but has
+   NO title label. Every drawn view must have a label like "SECTION X-X", "PLAN OF...", "DETAIL A", etc.
+   Flag each unlabeled drawn view with its approximate location.
+
 Return ONLY valid JSON (no markdown):
 {
   "sections": [
@@ -184,16 +214,22 @@ Return ONLY valid JSON (no markdown):
     {"item": "bore_log_ref", "present": false, "value": null, "bbox": null}
   ],
   "label_issues": [
-    {"category": "Grammar", "description": "BUNDLE BAR should be BUNDLE BARS", "suggestion": "Change to BUNDLE BARS", "bbox": {"x":10,"y":55,"w":15,"h":3}}
+    {"category": "Spelling", "description": "CONTARCTOR should be CONTRACTOR", "suggestion": "Fix spelling", "bbox": {"x":10,"y":55,"w":15,"h":3}}
   ],
   "dimension_issues": [
-    {"description": "Pile cap depth not dimensioned in SECTION C-C", "suggestion": "Add depth dimension", "bbox": {"x":25,"y":20,"w":20,"h":25}}
+    {"description": "Pile spacing c/c dimension is not shown anywhere in the plan view", "suggestion": "Add pile c/c spacing dimension to PLAN OF PILECAP", "bbox": {"x":25,"y":20,"w":20,"h":25}}
   ],
   "cross_section_checks": [
     {"section_name": "Z-Z", "component": "pile", "bar_mark": "x", "visual_count": 21, "is_bundle": true, "spacing_uniform": true, "bbox": {"x":5,"y":60,"w":18,"h":15}}
   ],
   "erroneous_boxes": [
     {"description": "Rectangular border enclosing SECTION A-A FOR PILE", "bbox": {"x":3,"y":5,"w":22,"h":20}}
+  ],
+  "missing_referenced_sections": [
+    {"cut_letter": "D", "found_on_view": "SECTION B-B FOR PILECAP & PIER", "missing_section": "SECTION D-D", "bbox": {"x":0,"y":0,"w":60,"h":50}}
+  ],
+  "unlabeled_views": [
+    {"description": "Circular cross-section view adjacent to SECTION C-C has no title label", "bbox": {"x":30,"y":10,"w":12,"h":15}}
   ]
 }
 """
@@ -226,20 +262,22 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                  'ok' if review_data else 'failed')
 
     result = {
-        'title_block':               {},
-        'schedule':                  {},
-        'schedule_section_bboxes':   {},
-        'notes':                     {},
-        'table_1':                   [],
-        'sections':                  [],
-        'notes_check':               [],
-        'label_issues':              [],
-        'dimension_issues':          [],
-        'cross_section_checks':      [],
-        'erroneous_boxes':           [],
-        'raw_text':                  text_data.get('raw_lines', []),
-        'schedule_section_positions': text_data.get('schedule_section_positions', {}),
-        'section_view_positions':    text_data.get('section_view_positions', {}),
+        'title_block':                  {},
+        'schedule':                     {},
+        'schedule_section_bboxes':      {},
+        'notes':                        {},
+        'table_1':                      [],
+        'sections':                     [],
+        'notes_check':                  [],
+        'label_issues':                 [],
+        'dimension_issues':             [],
+        'cross_section_checks':         [],
+        'erroneous_boxes':              [],
+        'missing_referenced_sections':  [],
+        'unlabeled_views':              [],
+        'raw_text':                     text_data.get('raw_lines', []),
+        'schedule_section_positions':   text_data.get('schedule_section_positions', {}),
+        'section_view_positions':       text_data.get('section_view_positions', {}),
     }
 
     if vision_data:
@@ -270,12 +308,14 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                 comp_dict[bm] = row
 
     if review_data:
-        result['sections']             = review_data.get('sections')             or []
-        result['notes_check']          = review_data.get('notes_check')          or []
-        result['label_issues']         = review_data.get('label_issues')         or []
-        result['dimension_issues']     = review_data.get('dimension_issues')     or []
-        result['cross_section_checks'] = review_data.get('cross_section_checks') or []
-        result['erroneous_boxes']      = review_data.get('erroneous_boxes')      or []
+        result['sections']                    = review_data.get('sections')                    or []
+        result['notes_check']                 = review_data.get('notes_check')                 or []
+        result['label_issues']                = review_data.get('label_issues')                or []
+        result['dimension_issues']            = review_data.get('dimension_issues')            or []
+        result['cross_section_checks']        = review_data.get('cross_section_checks')        or []
+        result['erroneous_boxes']             = review_data.get('erroneous_boxes')             or []
+        result['missing_referenced_sections'] = review_data.get('missing_referenced_sections') or []
+        result['unlabeled_views']             = review_data.get('unlabeled_views')             or []
 
     # Fill title block / notes gaps from pdfplumber text
     for key, val in text_data.get('title_block', {}).items():

@@ -58,8 +58,19 @@ def _parse_spacing(v):
         return None
 
 
-def _parse_bar_row(row_vals):
+def _parse_bar_row(row_vals, shape_cols=None):
     mark = str(row_vals[BAR_MARK_COL]).strip()
+    shape_dims = None
+    if shape_cols:
+        dims = []
+        for ci in shape_cols:
+            if ci < len(row_vals):
+                v = _safe_float(row_vals[ci])
+                # Only keep plausible bar dimension values (1mm–50000mm)
+                if v is not None and v > 0:
+                    dims.append(v)
+        if dims:
+            shape_dims = dims
     return {
         'bar_mark':    mark,
         'length_m':    _safe_float(row_vals[LENGTH_COL]),
@@ -71,6 +82,7 @@ def _parse_bar_row(row_vals):
         'total_wt_kg': _safe_float(row_vals[TOTAL_WT_COL]),
         'remarks':     str(row_vals[REMARKS_COL]).strip() if row_vals[REMARKS_COL] else '',
         'raw_spacing': str(row_vals[SPACING_COL]) if row_vals[SPACING_COL] is not None else None,
+        'shape_dims':  shape_dims,
     }
 
 
@@ -155,6 +167,22 @@ def _formula_references_cell(formula_value, cell_ref: str) -> bool:
     return cell_ref.upper() in formula_value.upper()
 
 
+def _find_shape_cols(rows) -> list:
+    """Scan rows for the 'Shape of bar' column header and return the column indices
+    spanning that header up to (but not including) REMARKS_COL.
+    Searches for 'SHAPE OF' to avoid matching geometry cells like 'Pier Shape=Rectangle'."""
+    for row in rows:
+        for ci, cell in enumerate(row):
+            if isinstance(cell, str) and 'SHAPE OF' in cell.upper():
+                # Header found (e.g. "Shape of bar") at column ci.
+                # Shape dim cells occupy ci through REMARKS_COL-1.
+                cols = [c for c in range(ci, REMARKS_COL) if c != BAR_MARK_COL]
+                log.info('Shape column header found at col %d; scanning cols %s', ci, cols)
+                return cols
+    log.info('No "Shape of bar" header found — shape dimension check will be skipped')
+    return []
+
+
 def _parse_bbs_sections(rows, formula_rows=None, geometry=None):
     pilecap_bbs = {}
     pile_bbs    = {}
@@ -170,6 +198,9 @@ def _parse_bbs_sections(rows, formula_rows=None, geometry=None):
     num_piles = (geometry or {}).get('pile_count') or 1
     # Find the cell address of num_piles so we can detect formula references to it
     pile_count_ref = _num_piles_cell_ref(rows) if rows else None
+
+    # Locate shape-of-bar dimension columns dynamically by header label
+    shape_cols = _find_shape_cols(rows)
 
     # First pass: detect pier shape from geometry section
     for row in rows:
@@ -206,7 +237,7 @@ def _parse_bbs_sections(rows, formula_rows=None, geometry=None):
                 stirrup_spacing = _safe_float(row[7])
 
         if current and _is_bar_row(row):
-            bar = _parse_bar_row(row)
+            bar = _parse_bar_row(row, shape_cols=shape_cols)
             # Skip inactive bars (dia = 0 or count = 0)
             if (not bar['dia_mm']) or bar['dia_mm'] == 0:
                 continue

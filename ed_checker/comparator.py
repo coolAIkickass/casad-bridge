@@ -183,6 +183,8 @@ def compare(design_data: dict, drawing_data: dict) -> list:
     issues += _check_dimension_issues(
         drawing_data.get('dimension_issues') or [], sections, section_view_positions)
     issues += _check_cross_sections(drawing_data, design_data or {})
+    issues += _check_cut_mark_references(drawing_data)
+    issues += _check_unlabeled_views(drawing_data)
 
     return issues
 
@@ -488,6 +490,27 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 'error', zone, bar_bbox
             ))
 
+    # Bar shape dimension check.
+    # Excel stores shape dims in metres; drawing schedule shows them in mm → convert × 1000.
+    d_shape_dims = design_bar.get('shape_dims')
+    w_shape_dims = drawing_bar.get('shape_dimensions')
+    if d_shape_dims and w_shape_dims and isinstance(w_shape_dims, list):
+        for i, (d_dim, w_dim) in enumerate(zip(d_shape_dims, w_shape_dims)):
+            d_val_m  = _norm_float(d_dim)
+            w_val_mm = _norm_float(w_dim)
+            if d_val_m and w_val_mm:
+                d_val_mm = d_val_m * 1000  # convert design metres → mm
+                diff = _pct_diff(d_val_mm, w_val_mm)
+                if diff and diff > 2:
+                    issues.append(_issue(
+                        'Reinforcement',
+                        f"{prefix}: Bar shape dimension mismatch — design {d_val_mm:.0f}mm, drawing {w_val_mm:.0f}mm",
+                        f"Bar '{bm}' ({comp}): shape dimension {i+1} in design input is {d_val_mm:.0f}mm "
+                        f"({d_val_m}m) but drawing shows {w_val_mm:.0f}mm.",
+                        f"Correct the bar shape dimension for '{bm}' to {d_val_mm:.0f}mm.",
+                        'error', zone, bar_bbox
+                    ))
+
     return issues
 
 
@@ -633,6 +656,14 @@ def _check_notes_completeness(notes_check: list, sections: list = None,
 
 # ── Label & annotation quality ────────────────────────────────────────────────
 
+# Phrases that indicate Claude is confirming something is correct — not an actual issue.
+_LABEL_POSITIVE = (
+    'correctly used', 'correctly placed', 'appears correctly', 'appears correct',
+    'is correct', 'is fine', 'correctly formatted', 'correctly labeled',
+    'properly', 'no issue', 'is proper', 'is appropriate',
+)
+
+
 def _check_label_issues(label_issues: list, sections: list = None,
                          section_view_positions: dict = None) -> list:
     issues = []
@@ -640,6 +671,8 @@ def _check_label_issues(label_issues: list, sections: list = None,
         desc = li.get('description', '')
         if not desc:
             continue
+        if any(p in desc.lower() for p in _LABEL_POSITIVE):
+            continue  # Claude is confirming correct usage — not an issue
         bbox = li.get('bbox') or _find_section_bbox(
             desc + ' ' + li.get('suggestion', ''), sections, section_view_positions
         )
@@ -750,6 +783,56 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
             'x': x, 'y': y, 'width': w, 'height': h,
         })
 
+    return issues
+
+
+# ── Cut-mark cross-reference ──────────────────────────────────────────────────
+
+def _check_cut_mark_references(drawing_data: dict) -> list:
+    issues = []
+    for item in (drawing_data.get('missing_referenced_sections') or []):
+        missing  = item.get('missing_section', '?')
+        found_on = item.get('found_on_view', '?')
+        bbox     = item.get('bbox')
+        x, y, w, h = _bbox('default', bbox)
+        issues.append({
+            'category':    'Drawing Completeness',
+            'title':       f'Missing section view: {missing}',
+            'description': (
+                f'Cut marks for "{missing}" are shown on "{found_on}" '
+                f'but the section view "{missing}" is not drawn anywhere in the drawing.'
+            ),
+            'suggestion':  (
+                f'Add the "{missing}" view to the drawing, or remove the cut marks '
+                f'if this section is not required.'
+            ),
+            'severity':    'error',
+            'page_num':    1,
+            'x': x, 'y': y, 'width': w, 'height': h,
+        })
+    return issues
+
+
+# ── Unlabeled views ───────────────────────────────────────────────────────────
+
+def _check_unlabeled_views(drawing_data: dict) -> list:
+    issues = []
+    for item in (drawing_data.get('unlabeled_views') or []):
+        desc    = item.get('description') or 'Section/plan view without a title label'
+        bbox    = item.get('bbox')
+        x, y, w, h = _bbox('default', bbox)
+        issues.append({
+            'category':    'Drawing Completeness',
+            'title':       f'Unlabeled view: {desc}',
+            'description': (
+                f'{desc}. Every drawn view (section, plan, elevation) '
+                'must carry a title label such as "SECTION X-X" or "PLAN OF...".'
+            ),
+            'suggestion':  'Add a title label to this view.',
+            'severity':    'error',
+            'page_num':    1,
+            'x': x, 'y': y, 'width': w, 'height': h,
+        })
     return issues
 
 

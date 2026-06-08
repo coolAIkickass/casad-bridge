@@ -98,6 +98,14 @@ def _issue(category, title, description, suggestion, severity, zone, drawing_bbo
     }
 
 
+def _parse_bundle_factor(reinforcement_text: str) -> int:
+    """Return 2 if reinforcement_text indicates bundle/legged bars, else 1."""
+    if not reinforcement_text:
+        return 1
+    t = str(reinforcement_text).upper()
+    return 2 if ('BUNDLE' in t or 'LEGGED' in t) else 1
+
+
 def _norm_dia(v):
     """Extract integer diameter from strings like '25Φ', '25ϕ', '25 DIA', '25mm'."""
     if isinstance(v, (int, float)):
@@ -174,6 +182,7 @@ def compare(design_data: dict, drawing_data: dict) -> list:
         drawing_data.get('label_issues') or [], sections, section_view_positions)
     issues += _check_dimension_issues(
         drawing_data.get('dimension_issues') or [], sections, section_view_positions)
+    issues += _check_cross_sections(drawing_data, design_data or {})
 
     return issues
 
@@ -639,6 +648,108 @@ def _check_label_issues(label_issues: list, sections: list = None,
             li.get('suggestion', 'Review and correct this label.'),
             'warning', 'default', bbox
         ))
+    return issues
+
+
+# ── Cross-section bar count & quality ────────────────────────────────────────
+
+def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
+    issues = []
+    cross_checks  = drawing_data.get('cross_section_checks') or []
+    erroneous_boxes = drawing_data.get('erroneous_boxes') or []
+    schedule      = drawing_data.get('schedule') or {}
+    num_piles     = int((design_data or {}).get('geometry', {}).get('pile_count') or 1)
+
+    for cc in cross_checks:
+        section_name    = cc.get('section_name') or '?'
+        component       = (cc.get('component') or '').lower()
+        bar_mark        = (cc.get('bar_mark') or '').lower().strip()
+        visual_count    = cc.get('visual_count')
+        is_bundle       = cc.get('is_bundle', False)
+        spacing_uniform = cc.get('spacing_uniform', True)
+        bbox            = cc.get('bbox')
+
+        if visual_count is None:
+            continue
+
+        # Spacing uniformity — no schedule reference needed
+        if not spacing_uniform:
+            x, y, w, h = _bbox('default', bbox)
+            issues.append({
+                'category':    'Reinforcement',
+                'title':       f"Section {section_name}: bar '{bar_mark}' spacing appears uneven",
+                'description': (
+                    f"In Section {section_name}, the '{bar_mark}' bars are not evenly distributed. "
+                    "Uneven spacing can indicate a drafting error."
+                ),
+                'suggestion':  f"Check bar '{bar_mark}' spacing in Section {section_name} — bars should be uniformly distributed.",
+                'severity':    'warning',
+                'page_num':    1,
+                'x': x, 'y': y, 'width': w, 'height': h,
+            })
+
+        # Bar count — needs matching schedule row
+        if not component or not bar_mark:
+            continue
+        drawing_bar = schedule.get(component, {}).get(bar_mark)
+        if not drawing_bar:
+            continue
+
+        schedule_count = _norm_count(
+            drawing_bar.get('count') or drawing_bar.get('count_text', ''))
+        if not schedule_count:
+            continue
+
+        bundle_factor = 2 if is_bundle else _parse_bundle_factor(
+            drawing_bar.get('reinforcement_text', ''))
+
+        # Pile sections: divide total by pile count and bundle factor.
+        # Pilecap/pier sections: divide only by bundle factor.
+        divisor = (num_piles * bundle_factor) if component == 'pile' else bundle_factor
+        if divisor < 1:
+            divisor = 1
+        expected = round(schedule_count / divisor)
+
+        if visual_count != expected:
+            breakdown = f"{schedule_count} total"
+            if component == 'pile':
+                breakdown += f" ÷ {num_piles} piles"
+            if bundle_factor > 1:
+                breakdown += f" ÷ {bundle_factor} (bundle)"
+            x, y, w, h = _bbox('default', bbox)
+            issues.append({
+                'category':    'Reinforcement',
+                'title':       (
+                    f"Section {section_name}: bar '{bar_mark}' count — "
+                    f"drawn {visual_count}, expected {expected}"
+                ),
+                'description': (
+                    f"In Section {section_name}, {visual_count} bar(s) are drawn for '{bar_mark}' ({component}). "
+                    f"Expected {expected} ({breakdown})."
+                ),
+                'suggestion':  f"Verify bar count for '{bar_mark}' in Section {section_name} against the schedule.",
+                'severity':    'error',
+                'page_num':    1,
+                'x': x, 'y': y, 'width': w, 'height': h,
+            })
+
+    for eb in erroneous_boxes:
+        desc = eb.get('description') or 'Erroneous rectangular border around a section view'
+        bbox = eb.get('bbox')
+        x, y, w, h = _bbox('default', bbox)
+        issues.append({
+            'category':    'Drawing Quality',
+            'title':       f'Erroneous box: {desc}',
+            'description': (
+                f"{desc}. A rectangular outline is drawn around a section view — "
+                "this is a drafting artefact and should be removed."
+            ),
+            'suggestion':  'Remove the erroneous rectangle from this section view.',
+            'severity':    'warning',
+            'page_num':    1,
+            'x': x, 'y': y, 'width': w, 'height': h,
+        })
+
     return issues
 
 

@@ -156,6 +156,24 @@ Check that key dimensions are shown in the views:
 - Pier cross-section dimensions
 - Cover dimensions where required
 
+CHECK 5 — Cross-section bar count & quality
+For every circular or rectangular cross-section view visible in the drawing (e.g. SECTION Z-Z for pile,
+SECTION A-A, B-B, C-C, D-D for pilecap/pier), do the following:
+
+a) COUNT the filled dot/circle symbols that represent longitudinal reinforcement bars inside that view.
+   - Circular pile section: count dots arranged around the ring perimeter.
+   - Rectangular pilecap/pier section: count dots along the four sides.
+   - If bars appear as closely-spaced PAIRS (bundle bars), count the number of PAIRS — each pair = 1 bundle bar.
+   - State which bar mark these dots correspond to (e.g. "x" for pile longitudinal, "g" for pier longitudinal).
+   - Set "is_bundle": true if bars are drawn as pairs, or if the word BUNDLE or LEGGED appears near the view.
+
+b) SPACING: Judge whether bars are evenly distributed around the perimeter or show visible gaps/clustering.
+   Set "spacing_uniform": false only if there is a clear visual irregularity.
+
+c) ERRONEOUS BOXES: Look for rectangular outlines that completely enclose a section-view drawing.
+   These are accidental drafting artefacts — NOT table borders, title block lines, or structural boxes.
+   Report each one with a description and bbox.
+
 Return ONLY valid JSON (no markdown):
 {
   "sections": [
@@ -170,6 +188,12 @@ Return ONLY valid JSON (no markdown):
   ],
   "dimension_issues": [
     {"description": "Pile cap depth not dimensioned in SECTION C-C", "suggestion": "Add depth dimension", "bbox": {"x":25,"y":20,"w":20,"h":25}}
+  ],
+  "cross_section_checks": [
+    {"section_name": "Z-Z", "component": "pile", "bar_mark": "x", "visual_count": 21, "is_bundle": true, "spacing_uniform": true, "bbox": {"x":5,"y":60,"w":18,"h":15}}
+  ],
+  "erroneous_boxes": [
+    {"description": "Rectangular border enclosing SECTION A-A FOR PILE", "bbox": {"x":3,"y":5,"w":22,"h":20}}
   ]
 }
 """
@@ -211,6 +235,8 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
         'notes_check':               [],
         'label_issues':              [],
         'dimension_issues':          [],
+        'cross_section_checks':      [],
+        'erroneous_boxes':           [],
         'raw_text':                  text_data.get('raw_lines', []),
         'schedule_section_positions': text_data.get('schedule_section_positions', {}),
         'section_view_positions':    text_data.get('section_view_positions', {}),
@@ -244,10 +270,12 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                 comp_dict[bm] = row
 
     if review_data:
-        result['sections']        = review_data.get('sections')        or []
-        result['notes_check']     = review_data.get('notes_check')     or []
-        result['label_issues']    = review_data.get('label_issues')    or []
-        result['dimension_issues']= review_data.get('dimension_issues')or []
+        result['sections']             = review_data.get('sections')             or []
+        result['notes_check']          = review_data.get('notes_check')          or []
+        result['label_issues']         = review_data.get('label_issues')         or []
+        result['dimension_issues']     = review_data.get('dimension_issues')     or []
+        result['cross_section_checks'] = review_data.get('cross_section_checks') or []
+        result['erroneous_boxes']      = review_data.get('erroneous_boxes')      or []
 
     # Fill title block / notes gaps from pdfplumber text
     for key, val in text_data.get('title_block', {}).items():

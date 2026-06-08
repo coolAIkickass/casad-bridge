@@ -231,6 +231,7 @@ function selectIssue(id) {
   document.querySelectorAll('.highlight').forEach(el => {
     el.classList.toggle('selected', el.dataset.id === id);
   });
+  if (!id) return;
   const card = document.querySelector(`.issue-card[data-id="${id}"]`);
   if (card) {
     card.classList.add('active');
@@ -238,6 +239,13 @@ function selectIssue(id) {
     setTimeout(() => card.classList.remove('active'), 1800);
   }
 }
+
+// Click on drawing background (not on a highlight) deselects the active marker.
+hlLayer.addEventListener('click', (e) => {
+  if (!e.target.classList.contains('highlight')) {
+    selectIssue(null);
+  }
+});
 
 function goToIssue(id, pageNum) {
   selectedId = id;

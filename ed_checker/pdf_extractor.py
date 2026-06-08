@@ -43,8 +43,17 @@ Extract ALL of the following as precisely as possible:
      "unit_wt_kg_m": 3.857,
      "total_wt_kg": 2174.77
    }
-   Note: spacing_mm is null for longitudinal bars (marked "-"). For stirrups/rings extract the c/c spacing.
-   For count like "4×13 = 52", set count=52 and count_text="4×13 = 52".
+
+   COLUMN MAPPING RULES — read these carefully:
+   - bar_dia_mm: the φ / DIA column — always a small integer (8, 10, 12, 16, 20, 25, 32). Do NOT confuse with length or spacing.
+   - spacing_mm: the c/c spacing column — null for longitudinal bars (shown as "-"). For rings/stirrups this is the pitch in mm.
+   - length_m: the individual bar LENGTH in metres — a decimal number like 9.160, 4.049, 13.425. Do NOT use spacing or weight here.
+   - count: the total number of bars. For expressions like "4×13 = 52" set count=52 (the result after =) and count_text="4×13 = 52".
+   - If the same bar mark appears in two rows (e.g. two 'y' rows for different ring zones), return BOTH rows separately with the same bar_mark and component.
+
+   BAR MARK COMPLETENESS — extract ALL rows, including bars with suffixed marks:
+   k1, j1, i1, f1, y1, x1, z — these small labels appear at the end of each component section.
+   Do not stop after the first few rows. Scan the full table to the bottom of each section.
    No per-row bbox is needed — section bboxes handle highlighting.
 
 2. TITLE BLOCK — extract:
@@ -78,6 +87,9 @@ Extract ALL of the following as precisely as possible:
      "lap_length_concrete_grade": "M35",
      "bbox": {"x": 40.0, "y": 68.0, "w": 22.0, "h": 10.0}
    }
+   IMPORTANT: If a single concrete grade is stated without a component qualifier
+   (e.g. "Concrete Mix M35", "All M35", or just "M35" in the notes), set
+   concrete_pile, concrete_pilecap AND concrete_pier all to that grade.
 
 4. TABLE-1 (levels table, if visible) — for each pier row:
    {
@@ -167,16 +179,21 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
     """Main entry point. Returns structured drawing data dict."""
     from concurrent.futures import ThreadPoolExecutor
 
-    text_data  = _extract_text(pdf_bytes)
-    images_b64 = _pdf_to_image_b64(pdf_bytes)   # render once, reuse for both calls
+    text_data        = _extract_text(pdf_bytes)
+    # Full-page image at 1.0× for the review pass (sections, notes, labels)
+    full_images_b64  = _pdf_to_image_b64(pdf_bytes, scale=1.0)
+    # Schedule-strip image at 1.5×, cropped to right 40% — higher resolution for
+    # dense schedule table reading (bar diameters, counts, lengths).
+    sched_images_b64 = _pdf_to_image_b64(pdf_bytes, scale=1.5, crop_right_pct=0.40)
 
     # Run both API calls in parallel — halves total time from ~60s to ~30s
     vision_data, review_data = None, None
-    if images_b64:
+    extract_images = sched_images_b64 if sched_images_b64 else full_images_b64
+    if extract_images or full_images_b64:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            f_extract = pool.submit(_call_vision, images_b64, EXTRACTION_PROMPT,
+            f_extract = pool.submit(_call_vision, extract_images, EXTRACTION_PROMPT,
                                     EXTRACT_MODEL, 8192)
-            f_review  = pool.submit(_call_vision, images_b64, REVIEW_PROMPT,
+            f_review  = pool.submit(_call_vision, full_images_b64, REVIEW_PROMPT,
                                     REVIEW_MODEL, 4096)
             vision_data = f_extract.result()
             review_data = f_review.result()
@@ -208,8 +225,23 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
         for row in raw_sched:
             comp = (row.get('component') or 'unknown').lower()
             bm   = (row.get('bar_mark') or '').strip().lower()
-            if bm:
-                result['schedule'].setdefault(comp, {})[bm] = row
+            if not bm:
+                continue
+            comp_dict = result['schedule'].setdefault(comp, {})
+            if bm in comp_dict:
+                # Same bar mark appears twice (e.g. two 'y' rows for ring zones).
+                # Accumulate counts and total lengths; keep other fields from first row.
+                existing = comp_dict[bm]
+                def _add_field(key):
+                    a = _norm_float(existing.get(key))
+                    b = _norm_float(row.get(key))
+                    if a is not None and b is not None:
+                        existing[key] = a + b
+                _add_field('count')
+                _add_field('total_length_m')
+                _add_field('total_wt_kg')
+            else:
+                comp_dict[bm] = row
 
     if review_data:
         result['sections']        = review_data.get('sections')        or []
@@ -293,9 +325,16 @@ def _extract_text(pdf_bytes: bytes) -> dict:
                     if m:
                         notes['lap_length_concrete_grade'] = m.group(1).upper()
 
-                    for comp, pattern in [('pile', r'\(M40\)'), ('pilecap', r'\(M35\)'), ('pier', r'\(M35\)')]:
-                        if re.search(pattern, line):
-                            notes.setdefault(f'concrete_{comp}', pattern[1:-1])
+                    # Detect a generic concrete grade note (e.g. "Concrete Mix M35" → applies to all)
+                    m = re.search(r'(?:concrete\s+(?:mix|grade)|all\s+concrete)\s+(M\d+)', line, re.IGNORECASE)
+                    if not m:
+                        m = re.search(r'\bM(\d+)\b', line)
+                        if m and len(line.split()) <= 4:  # short line — likely a grade-only note
+                            m = re.search(r'\b(M\d+)\b', line)
+                    if m:
+                        grade = m.group(1).upper() if m.lastindex == 1 else ('M' + m.group(1)).upper()
+                        for comp in ('pile', 'pilecap', 'pier'):
+                            notes.setdefault(f'concrete_{comp}', grade)
 
     except Exception as e:
         raw_lines.append(f'[pdfplumber error: {e}]')
@@ -393,19 +432,40 @@ def _extract_positions(page) -> tuple:
 
 # ── Claude vision pass ────────────────────────────────────────────────────────
 
-def _pdf_to_image_b64(pdf_bytes: bytes) -> list:
-    """Render each PDF page to a PNG and return list of base64 strings."""
+def _pdf_to_image_b64(pdf_bytes: bytes, scale: float = 1.0,
+                       crop_right_pct: float = None) -> list:
+    """Render each PDF page to a PNG and return list of base64 strings.
+
+    crop_right_pct: if set (e.g. 0.40), crop the image to the rightmost fraction
+    of the page width before encoding. Used to isolate the schedule strip at higher
+    resolution without sending the full large image.
+    """
     try:
         import fitz  # PyMuPDF
-        log.info('PyMuPDF imported OK, rendering PDF (%d bytes)', len(pdf_bytes))
+        log.info('PyMuPDF rendering PDF (%d bytes) scale=%.1f crop_right=%.0f%%',
+                 len(pdf_bytes), scale, (crop_right_pct or 0) * 100)
         doc = fitz.open(stream=pdf_bytes, filetype='pdf')
-        log.info('PDF opened: %d pages', doc.page_count)
         images = []
         for i, page in enumerate(doc):
-            mat = fitz.Matrix(1.0, 1.0)
+            mat = fitz.Matrix(scale, scale)
             pix = page.get_pixmap(matrix=mat)
+
+            if crop_right_pct and 0 < crop_right_pct < 1.0:
+                # Render only the right strip of the page in page-space coordinates,
+                # then re-render at the target scale so PyMuPDF does the crop natively.
+                page_w = page.rect.width
+                clip_page = fitz.Rect(
+                    page_w * (1.0 - crop_right_pct), 0,
+                    page_w, page.rect.height
+                )
+                pix = page.get_pixmap(matrix=mat, clip=clip_page)
+                log.info('Page %d cropped to right %.0f%%: %dx%d px',
+                         i+1, crop_right_pct * 100, pix.width, pix.height)
+            else:
+                log.info('Page %d rendered: %dx%d px', i+1, pix.width, pix.height)
+
             b64 = base64.standard_b64encode(pix.tobytes('png')).decode()
-            log.info('Page %d rendered: %dx%d px, b64 len=%d', i+1, pix.width, pix.height, len(b64))
+            log.info('Page %d b64 len=%d', i+1, len(b64))
             images.append(b64)
         doc.close()
         return images

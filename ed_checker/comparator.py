@@ -293,6 +293,14 @@ COMPONENT_ZONE = {
     'pier':    'pier_schedule',
 }
 
+# Ring/confinement bars where a ±2-per-pile count variation is acceptable
+# (bar count is derived from geometric spacing and can vary by 1–2 due to rounding).
+RING_BAR_MARKS = {
+    'pile':    {'y', 'y1', 'z'},
+    'pier':    {'i', 'i1'},
+    'pilecap': {'e'},
+}
+
 # Expected top-to-bottom order of bar marks in each component's schedule.
 # Used to distribute row highlight boxes correctly when Claude provides no per-row bboxes.
 CANONICAL_BAR_ORDER = {
@@ -305,6 +313,7 @@ CANONICAL_BAR_ORDER = {
 def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
                     schedule_section_positions: dict = None) -> list:
     issues = []
+    num_piles = int((design.get('geometry') or {}).get('pile_count') or 1)
 
     component_map = {
         'pilecap': design.get('pilecap_bbs', {}),
@@ -347,7 +356,6 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
 
             drawing_bar = drawing_comp.get(bm)
             if not drawing_bar:
-                # No location — can't mark something absent from the drawing
                 issues.append({
                     'category':    'Reinforcement',
                     'title':       f"Bar mark '{bm}' ({comp}) not found in drawing schedule",
@@ -374,12 +382,15 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
                 'h': row_h,
             }
 
-            issues += _compare_bar(bm, comp, d_bar, drawing_bar, zone, design_bars, bar_bbox)
+            is_ring = bm in RING_BAR_MARKS.get(comp, set())
+            issues += _compare_bar(bm, comp, d_bar, drawing_bar, zone, design_bars, bar_bbox,
+                                   is_ring=is_ring, num_piles=num_piles)
 
     return issues
 
 
-def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, bar_bbox=None):
+def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, bar_bbox=None,
+                 is_ring=False, num_piles=1):
     issues = []
     prefix = f"Bar '{bm}' ({comp})"
 
@@ -401,16 +412,16 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
         diff = _pct_diff(d_spacing, w_spacing)
         if diff and diff > 5:
             issues.append(_issue(
-                'Reinforcement', f"{prefix}: Spacing mismatch — design {d_spacing}mm c/c, drawing {w_spacing}mm c/c",
-                f"Design input specifies {d_spacing}mm c/c for bar '{bm}' ({comp}). Drawing shows {w_spacing}mm c/c.",
-                f"Update spacing to {d_spacing}mm c/c.",
+                'Reinforcement', f"{prefix}: Spacing mismatch — design {round(d_spacing, 2)}mm c/c, drawing {round(w_spacing, 2)}mm c/c",
+                f"Design input specifies {round(d_spacing, 2)}mm c/c for bar '{bm}' ({comp}). Drawing shows {round(w_spacing, 2)}mm c/c.",
+                f"Update spacing to {round(d_spacing, 2)}mm c/c.",
                 'error', zone, bar_bbox
             ))
     elif d_spacing and not w_spacing:
         issues.append(_issue(
-            'Reinforcement', f"{prefix}: Spacing not found in drawing ({d_spacing}mm expected)",
-            f"Design input specifies spacing of {d_spacing}mm c/c for bar '{bm}' but drawing schedule does not show spacing.",
-            f"Add {d_spacing}mm c/c spacing for bar '{bm}'.",
+            'Reinforcement', f"{prefix}: Spacing not found in drawing ({round(d_spacing, 2)}mm expected)",
+            f"Design input specifies spacing of {round(d_spacing, 2)}mm c/c for bar '{bm}' but drawing schedule does not show spacing.",
+            f"Add {round(d_spacing, 2)}mm c/c spacing for bar '{bm}'.",
             'warning', zone, bar_bbox
         ))
 
@@ -419,13 +430,26 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
     if all_design_bars and len(all_design_bars) > 1:
         d_count = sum(b.get('count') or 0 for b in all_design_bars if b.get('count'))
     w_count = _norm_count(drawing_bar.get('count') or drawing_bar.get('count_text', ''))
-    if d_count and w_count and d_count != w_count:
-        issues.append(_issue(
-            'Reinforcement', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
-            f"Design input specifies {d_count} bars for '{bm}' ({comp}). Drawing schedule shows {w_count} bars.",
-            f"Update count to {d_count} nos.",
-            'error', zone, bar_bbox
-        ))
+    if d_count and w_count:
+        if is_ring:
+            # Ring bars: allow ±2 per pile absolute tolerance (count derives from geometric
+            # spacing and varies by 1–2 due to length rounding). Flag as warning only.
+            tolerance = 2 * max(num_piles, 1)
+            if abs(d_count - w_count) > tolerance:
+                issues.append(_issue(
+                    'Reinforcement', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
+                    f"Design input specifies {d_count} bars for '{bm}' ({comp}). Drawing schedule shows {w_count} bars. "
+                    f"Ring bar counts can vary by ±{tolerance} due to spacing rounding — verify manually.",
+                    f"Check ring count for bar '{bm}' against Detail A/A' selection.",
+                    'warning', zone, bar_bbox
+                ))
+        elif d_count != w_count:
+            issues.append(_issue(
+                'Reinforcement', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
+                f"Design input specifies {d_count} bars for '{bm}' ({comp}). Drawing schedule shows {w_count} bars.",
+                f"Update count to {d_count} nos.",
+                'error', zone, bar_bbox
+            ))
 
     # Length check
     d_len = design_bar.get('length_m')
@@ -434,9 +458,9 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
         diff = _pct_diff(d_len, w_len)
         if diff and diff > 2:
             issues.append(_issue(
-                'Reinforcement', f"{prefix}: Bar length mismatch — design {d_len}m, drawing {w_len}m",
-                f"Design input bar length = {d_len}m for '{bm}' ({comp}). Drawing shows {w_len}m.",
-                f"Update bar length to {d_len}m.",
+                'Reinforcement', f"{prefix}: Bar length mismatch — design {round(d_len, 2)}m, drawing {round(w_len, 2)}m",
+                f"Design input bar length = {round(d_len, 2)}m for '{bm}' ({comp}). Drawing shows {round(w_len, 2)}m.",
+                f"Update bar length to {round(d_len, 2)}m.",
                 'error', zone, bar_bbox
             ))
 
@@ -566,17 +590,33 @@ def _check_notes_completeness(notes_check: list, sections: list = None,
 
     found = {n.get('item'): n for n in notes_check}
 
+    # If ANY concrete grade is present, the others are implied by the single-grade convention.
+    concrete_keys = ('concrete_pile', 'concrete_pilecap', 'concrete_pier')
+    any_concrete_found = any(
+        found.get(k) and found[k].get('present') for k in concrete_keys
+    )
+
     for item_key, missing_msg in REQUIRED_NOTES.items():
         entry = found.get(item_key)
         if not entry or not entry.get('present'):
             bbox = (entry.get('bbox') if entry else None) or _find_section_bbox(
                 missing_msg, sections, section_view_positions)
+            # Concrete grades are always warnings — a single grade note covers all components.
+            # Steel grade is an error (must be explicit). Other missing notes are warnings.
+            if item_key in concrete_keys:
+                if any_concrete_found:
+                    # Another component's grade was found — single-grade convention covers this.
+                    continue
+                severity = 'warning'
+            elif item_key == 'steel_grade':
+                severity = 'error'
+            else:
+                severity = 'warning'
             issues.append(_issue(
                 'Notes', missing_msg,
                 f'The note for "{item_key.replace("_", " ")}" is missing or not legible in the drawing.',
                 f'Add the required note for {item_key.replace("_", " ")}.',
-                'error' if 'concrete' in item_key or 'steel' in item_key else 'warning',
-                'notes', bbox
+                severity, 'notes', bbox
             ))
 
     return issues

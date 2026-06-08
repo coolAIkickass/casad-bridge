@@ -3,7 +3,10 @@ Parse CASAD E2E design input Excel (BBS sheet).
 Returns a structured dict with geometry + BBS per component.
 """
 import io
+import logging
 import openpyxl
+
+log = logging.getLogger(__name__)
 
 
 UNIT_WEIGHTS = {8: 0.395, 10: 0.617, 12: 0.888, 16: 1.578, 20: 2.467, 25: 3.857, 32: 6.313}
@@ -76,8 +79,13 @@ def parse_e2e_excel(file_bytes: bytes) -> dict:
     ws = wb.worksheets[0]
     rows = [list(r) for r in ws.iter_rows(values_only=True)]
 
+    # Open a second time without data_only to read raw formulas for pile count detection.
+    wb_formula = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=False)
+    ws_formula = wb_formula.worksheets[0]
+    formula_rows = [list(r) for r in ws_formula.iter_rows(values_only=True)]
+
     geometry = _parse_geometry(rows)
-    pilecap_bbs, pile_bbs, pier_bbs = _parse_bbs_sections(rows)
+    pilecap_bbs, pile_bbs, pier_bbs = _parse_bbs_sections(rows, formula_rows, geometry)
 
     return {
         'source': 'e2e_excel',
@@ -129,7 +137,25 @@ def _parse_geometry(rows):
     return geo
 
 
-def _parse_bbs_sections(rows):
+def _num_piles_cell_ref(rows) -> str | None:
+    """Return the Excel cell address (e.g. 'D8') of the 'No. of Piles=' value cell."""
+    for ri, row in enumerate(rows):
+        for ci, cell in enumerate(row):
+            if isinstance(cell, str) and 'No. of Piles=' in cell:
+                # The value is in the next column; convert to Excel address (1-indexed col, 1-indexed row)
+                col_letter = chr(ord('A') + ci + 1)
+                return f'{col_letter}{ri + 1}'
+    return None
+
+
+def _formula_references_cell(formula_value, cell_ref: str) -> bool:
+    """Return True if formula_value (raw cell value from data_only=False) references cell_ref."""
+    if not isinstance(formula_value, str) or not formula_value.startswith('='):
+        return False
+    return cell_ref.upper() in formula_value.upper()
+
+
+def _parse_bbs_sections(rows, formula_rows=None, geometry=None):
     pilecap_bbs = {}
     pile_bbs    = {}
     # Collect both pier types separately, then pick the right one
@@ -141,6 +167,10 @@ def _parse_bbs_sections(rows):
     stirrup_spacing = None
     pier_shape_from_geo = None
 
+    num_piles = (geometry or {}).get('pile_count') or 1
+    # Find the cell address of num_piles so we can detect formula references to it
+    pile_count_ref = _num_piles_cell_ref(rows) if rows else None
+
     # First pass: detect pier shape from geometry section
     for row in rows:
         for ci, cell in enumerate(row):
@@ -150,7 +180,7 @@ def _parse_bbs_sections(rows):
                 elif 'Circular' in cell:
                     pier_shape_from_geo = 'Circular'
 
-    for row in rows:
+    for ri, row in enumerate(rows):
         mark_cell = row[BAR_MARK_COL]
         if isinstance(mark_cell, str):
             label = mark_cell.strip().upper()
@@ -185,6 +215,32 @@ def _parse_bbs_sections(rows):
             # Attach stirrup longitudinal spacing for 'e'
             if bar['spacing_mm'] is None and stirrup_spacing and bar['bar_mark'] == 'e':
                 bar['spacing_mm'] = stirrup_spacing
+
+            # For PILE bars: normalise count to total (across all piles).
+            # The Excel section is "per pile". Check whether the count cell formula
+            # already references the num_piles cell. If it does → already total.
+            # If it doesn't (or is a plain number) → per-pile → multiply by num_piles.
+            if current == 'pile' and bar.get('count') is not None:
+                count_formula = (
+                    (formula_rows[ri][COUNT_COL] if formula_rows else None)
+                    if ri < len(formula_rows or []) else None
+                )
+                already_total = (
+                    pile_count_ref
+                    and _formula_references_cell(count_formula, pile_count_ref)
+                )
+                if not already_total and num_piles > 1:
+                    bar['count'] = bar['count'] * num_piles
+                    if bar.get('total_len_m') is not None:
+                        bar['total_len_m'] = bar['total_len_m'] * num_piles
+                    if bar.get('total_wt_kg') is not None:
+                        bar['total_wt_kg'] = bar['total_wt_kg'] * num_piles
+            elif current == 'pile' and bar.get('count') is None:
+                log.warning(
+                    'Pile bar %s: count cell is None — formula cache may be stale. '
+                    'Re-save the Excel in Microsoft Excel to refresh formula results.',
+                    bar['bar_mark']
+                )
 
             bm = bar['bar_mark']
 

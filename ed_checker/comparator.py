@@ -801,11 +801,24 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
 
 # ── Cut-mark cross-reference ──────────────────────────────────────────────────
 
+# Words that identify a tabular element rather than a structural drawing view.
+# Cut-mark arrows never appear inside tables — any entry whose found_on_view
+# contains one of these is a text-reference false positive.
+_TABLE_WORDS = (
+    'lap length', 'schedule of reinforcement', 'table-1', 'table 1',
+    'referenced in', 'notes', 'annotation',
+)
+
+
 def _check_cut_mark_references(drawing_data: dict) -> list:
     issues = []
     for item in (drawing_data.get('missing_referenced_sections') or []):
         missing  = item.get('missing_section', '?')
         found_on = item.get('found_on_view', '?')
+        # Skip if Claude sourced the "cut mark" from a table or text annotation
+        # rather than a structural drawing view — those are text references, not arrows.
+        if any(w in found_on.lower() for w in _TABLE_WORDS):
+            continue
         bbox     = item.get('bbox')
         x, y, w, h = _bbox('default', bbox)
         issues.append({

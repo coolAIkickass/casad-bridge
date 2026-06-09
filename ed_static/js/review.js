@@ -75,31 +75,12 @@ async function renderPage(num) {
   renderHighlights(num);
 }
 
-// ── Highlights ───────────────────────────────────────
+// ── Highlights (disabled for MVP — marker positions too inaccurate) ──────────
 
 function renderHighlights(pageNum) {
-  if (!currentViewport) return;
-  hlLayer.innerHTML = '';
-  hlLayer.style.width  = currentViewport.width  + 'px';
-  hlLayer.style.height = currentViewport.height + 'px';
-
-  let num = 0;
-  visibleIssues()
-    .filter(i => i.page_num === pageNum && i.x != null)
-    .forEach(issue => {
-      num++;
-      const div = document.createElement('div');
-      div.className = `highlight sev-${issue.severity}${issue.status === 'resolved' ? ' resolved' : ''}${issue.id === selectedId ? ' selected' : ''}`;
-      div.style.left   = pct(issue.x,     currentViewport.width)  + 'px';
-      div.style.top    = pct(issue.y,     currentViewport.height) + 'px';
-      div.style.width  = pct(issue.width, currentViewport.width)  + 'px';
-      div.style.height = pct(issue.height,currentViewport.height) + 'px';
-      div.dataset.id  = issue.id;
-      div.dataset.num = num;
-      div.title = issue.title;
-      div.addEventListener('click', () => selectIssue(issue.id));
-      hlLayer.appendChild(div);
-    });
+  // Highlight overlay disabled: boxes on the drawing confuse users when
+  // coordinates are off. Re-enable by restoring the body of this function.
+  if (hlLayer) hlLayer.innerHTML = '';
 }
 
 function pct(val, dim) { return val / 100 * dim; }
@@ -184,22 +165,25 @@ function buildCard(issue, num) {
   card.className = `issue-card sev-${issue.severity}${resolved ? ' resolved' : ''}`;
   card.dataset.id = issue.id;
 
+  const badgeLabel = issue.severity === 'error' ? 'Error' : 'Warning';
   card.innerHTML = `
     <div class="issue-title-row">
       <span class="issue-num">#${num}</span>
+      <span class="sev-badge sev-badge-${issue.severity}">${badgeLabel}</span>
       <span class="issue-title">${issue.title}</span>
       <button class="resolve-btn" data-id="${issue.id}" title="${resolved ? 'Mark as open' : 'Mark as resolved'}">
         ${resolved ? '↺ Reopen' : '✓ Resolve'}
       </button>
     </div>
     <div class="issue-desc">${issue.description}</div>
-    ${issue.suggestion ? `<div class="issue-suggestion">💡 ${issue.suggestion}</div>` : ''}
+    ${issue.suggestion ? `<div class="issue-suggestion">What to do: ${issue.suggestion}</div>` : ''}
   `;
 
-  card.addEventListener('click', (e) => {
-    if (e.target.closest('.resolve-btn')) return;
-    goToIssue(issue.id, issue.page_num);
-  });
+  // Click-to-jump disabled (no highlights shown); only resolve button is active.
+  // card.addEventListener('click', (e) => {
+  //   if (e.target.closest('.resolve-btn')) return;
+  //   goToIssue(issue.id, issue.page_num);
+  // });
   card.querySelector('.resolve-btn').addEventListener('click', (e) => {
     e.stopPropagation();
     toggleResolve(issue.id);

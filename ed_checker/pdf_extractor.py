@@ -13,6 +13,13 @@ import pdfplumber
 
 log = logging.getLogger(__name__)
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+
+
+def _norm_float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
 # Use ED_MODEL env var to override: 'haiku' (cheap, for testing) or 'sonnet' (production)
 _model_alias = os.environ.get('ED_MODEL', 'haiku').lower()
 EXTRACT_MODEL = 'claude-haiku-4-5-20251001' if _model_alias == 'haiku' else 'claude-sonnet-4-6'

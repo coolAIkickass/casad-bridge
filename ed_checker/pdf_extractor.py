@@ -131,12 +131,10 @@ For every finding include a bbox: {"x": <left%>, "y": <top%>, "w": <width%>, "h"
 
 CHECK 1 — Required views/sections
 For each view listed, report whether it is present and what scale is shown on it:
-SECTION A-A FOR PILE, SECTION Z-Z (PILE), SECTION Z1-Z1 (PILE),
+SECTION A-A FOR PILE, SECTION Z-Z (PILE),
 SECTION A-A FOR PILECAP & PIER, SECTION B-B FOR PILECAP & PIER,
-SECTION C-C, SECTION D-D,
 PLAN OF PILECAP, REINFORCEMENT PLAN OF PILECAP,
-DETAIL A (ring details), DETAIL A' (ring details),
-TABLE-1, LAP LENGTH TABLE, SCHEDULE OF REINFORCEMENT
+DETAIL A (ring details), TABLE-1, LAP LENGTH TABLE, SCHEDULE OF REINFORCEMENT
 
 CHECK 2 — Notes completeness
 Check whether the NOTES section contains each of these items and extract its value.
@@ -230,7 +228,12 @@ a) CUT MARK CROSS-REFERENCE: Look for physical cut-mark symbols — these are DR
      Example: "SECTION Z-Z (PILE) details reference Z1-Z1" — the text "Z1-Z1" here is a
      text reference inside a label, NOT a drawn cut-mark arrow. Do NOT flag Z1-Z1 as missing.
    - Do NOT flag section names referenced in notes or annotations as text.
+   - Do NOT flag any section name found in a LAP LENGTH TABLE, SCHEDULE OF REINFORCEMENT,
+     TABLE-1, or any other tabular element — tables contain text references only, never
+     physical cut-mark arrows.
    - ONLY flag when you see the actual drawn graphical arrow symbol (not text).
+   - The "found_on_view" field must name a structural drawing view (e.g. "SECTION B-B FOR
+     PILECAP & PIER", "PLAN OF PILECAP") — never a table or schedule.
 
 b) UNLABELED VIEWS: Identify any cross-section, plan, or elevation view that has been drawn but has
    NO title label. Every drawn view must have a label like "SECTION X-X", "PLAN OF...", "DETAIL A", etc.

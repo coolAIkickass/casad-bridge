@@ -658,11 +658,18 @@ def _check_notes_completeness(notes_check: list, sections: list = None,
 
 # ── Label & annotation quality ────────────────────────────────────────────────
 
-# Phrases that indicate Claude is confirming something is correct — not an actual issue.
+# Phrases that indicate Claude is confirming something is correct OR making a style
+# observation — neither is an actionable issue.
 _LABEL_POSITIVE = (
     'correctly used', 'correctly placed', 'appears correctly', 'appears correct',
     'is correct', 'is fine', 'correctly formatted', 'correctly labeled',
     'properly', 'no issue', 'is proper', 'is appropriate',
+    # Positive confirmations ("no errors found" type)
+    'no genuine', 'no errors detected', 'no spelling', 'no confirmed',
+    # Style/legibility observations about schedule density — not annotation errors
+    'difficult to cross-reference', 'small and difficult', 'hard to read',
+    'appears cut off or partially', 'appear cut off or partially',
+    'text is small', 'font size',
 )
 
 
@@ -770,6 +777,10 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
 
     for eb in erroneous_boxes:
         desc = eb.get('description') or 'Erroneous rectangular border around a section view'
+        # Skip "no confirmed" / "no erroneous boxes" entries that Claude sometimes
+        # returns as a confirmation message instead of an empty array.
+        if any(p in desc.lower() for p in ('no confirmed', 'no erroneous', 'not detected', 'no box')):
+            continue
         bbox = eb.get('bbox')
         x, y, w, h = _bbox('default', bbox)
         issues.append({

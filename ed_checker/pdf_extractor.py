@@ -132,11 +132,11 @@ DETAIL A (ring details), DETAIL A' (ring details),
 TABLE-1, LAP LENGTH TABLE, SCHEDULE OF REINFORCEMENT
 
 CHECK 2 — Notes completeness
-Check whether the NOTES section contains each of these items and extract its value:
-pile length, pile fixity length, pile diameter, maximum load on pile (tonnes),
-bore log reference number, concrete grade for pile, concrete grade for pilecap,
-concrete grade for pier, steel grade (Fe415/Fe500/Fe550/Fe550D),
-projection of pile into pilecap, reference to IS/IRC codes
+Check whether the NOTES section contains each of these items and extract its value.
+Use EXACTLY these item values in the "item" field — no variations:
+  "pile_length", "pile_fixity", "pile_diameter", "max_pile_load",
+  "bore_log_ref", "concrete_pile", "concrete_pilecap", "concrete_pier",
+  "steel_grade", "pile_projection", "irc_code_ref"
 
 CHECK 3 — Label & annotation quality
 Scan all visible text labels and annotations for GENUINE ERRORS ONLY:
@@ -158,6 +158,9 @@ STRICT EXCLUSIONS — do NOT flag any of the following:
   correct distinct names; the "FOR PILE" vs "FOR PILECAP & PIER" suffix is intentional, not inconsistent.
 - "BUNDLE BARS" — this is the correct engineering term; do not flag it as a grammar issue.
 - Dimension values, units, or notation styles that follow standard structural drawing conventions.
+- Text density, font size, or legibility observations about schedule tables (e.g. "text appears cut off
+  in schedule", "bar marks are small and difficult to cross-reference"). These are style observations,
+  not annotation errors — do NOT include them in label_issues.
 Only report items you are CERTAIN are incorrect. When in doubt, omit.
 
 CHECK 4 — Dimension completeness (MISSING DIMENSIONS ONLY)
@@ -199,6 +202,12 @@ c) ERRONEOUS BOXES: Look for a thin, single-line CAD rectangle that completely e
    - You are highly confident it is an accidental CAD artefact
    When you flag one, identify it by the label INSIDE or directly beside the enclosed area
    (e.g. "DETAIL A" not "SECTION B-B"). If you are uncertain, DO NOT flag it.
+   ADDITIONAL EXCLUSIONS for erroneous box detection:
+   - Do NOT flag rectangular borders around PLAN OF PILECAP or REINFORCEMENT PLAN OF PILECAP —
+     plan views routinely carry a rectangular outline showing the pilecap footprint; this is a
+     structural element, not a CAD artefact.
+   - If you find NO erroneous boxes, return an empty array []. Do NOT return an entry saying
+     "No confirmed erroneous boxes detected" — simply omit the entry entirely.
 
 CHECK 6 — Cross-reference completeness and unlabeled views
 
@@ -281,9 +290,16 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
     text_data        = _extract_text(pdf_bytes)
     # Full-page image at 1.0× for the review pass (sections, notes, labels)
     full_images_b64  = _pdf_to_image_b64(pdf_bytes, scale=1.0)
-    # Schedule-strip image at 1.5×, cropped to right 40% — higher resolution for
-    # dense schedule table reading (bar diameters, counts, lengths).
-    sched_images_b64 = _pdf_to_image_b64(pdf_bytes, scale=1.5, crop_right_pct=0.40)
+    # Schedule-strip image at 1.5×, cropped to just right of the schedule's
+    # leftmost column. Crop is derived from pdfplumber's actual header positions
+    # so it works regardless of drawing layout — not a hardcoded fraction.
+    _sched_pos = text_data.get('schedule_section_positions', {})
+    if _sched_pos:
+        _leftmost = min(pos['x'] for pos in _sched_pos.values() if pos)
+        _sched_crop = 1.0 - max(0.0, _leftmost - 5.0) / 100.0  # 5 % margin
+    else:
+        _sched_crop = 0.50  # pdfplumber found nothing → right half as fallback
+    sched_images_b64 = _pdf_to_image_b64(pdf_bytes, scale=1.5, crop_right_pct=_sched_crop)
 
     # Run three API calls in parallel — all finish in ~30s total
     # (1) extraction: schedule/title/notes/TABLE-1 — Haiku/Sonnet, schedule strip, 8192 tok

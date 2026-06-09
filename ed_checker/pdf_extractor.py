@@ -198,21 +198,7 @@ a) COUNT the filled dot/circle symbols that represent longitudinal reinforcement
 b) SPACING: Judge whether bars are evenly distributed around the perimeter or show visible gaps/clustering.
    Set "spacing_uniform": false only if there is a clear visual irregularity.
 
-c) ERRONEOUS BOXES: Look for a thin, single-line CAD rectangle that completely encloses a
-   section-view or detail drawing AND clearly does not belong structurally.
-   STRICT RULES — only flag if ALL of the following are true:
-   - You can clearly see a rectangle outline drawn around the view
-   - It is a thin drafting line (not a thick structural element border)
-   - It is NOT a table border, title block line, or part of the structural drawing
-   - You are highly confident it is an accidental CAD artefact
-   When you flag one, identify it by the label INSIDE or directly beside the enclosed area
-   (e.g. "DETAIL A" not "SECTION B-B"). If you are uncertain, DO NOT flag it.
-   ADDITIONAL EXCLUSIONS for erroneous box detection:
-   - Do NOT flag rectangular borders around PLAN OF PILECAP or REINFORCEMENT PLAN OF PILECAP —
-     plan views routinely carry a rectangular outline showing the pilecap footprint; this is a
-     structural element, not a CAD artefact.
-   - If you find NO erroneous boxes, return an empty array []. Do NOT return an entry saying
-     "No confirmed erroneous boxes detected" — simply omit the entry entirely.
+c) ERRONEOUS BOXES: Skip this check — always return an empty array []. Do not flag any boxes.
 
 CHECK 6 — Cross-reference completeness and unlabeled views
 

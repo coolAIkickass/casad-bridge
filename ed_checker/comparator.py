@@ -790,26 +790,10 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
                 'x': x, 'y': y, 'width': w, 'height': h,
             })
 
-    for eb in erroneous_boxes:
-        desc = eb.get('description') or 'Erroneous rectangular border around a section view'
-        # Skip "no confirmed" / "no erroneous boxes" entries that Claude sometimes
-        # returns as a confirmation message instead of an empty array.
-        if any(p in desc.lower() for p in ('no confirmed', 'no erroneous', 'not detected', 'no box')):
-            continue
-        bbox = eb.get('bbox')
-        x, y, w, h = _bbox('default', bbox)
-        issues.append({
-            'category':    'Drawing Quality',
-            'title':       f'Erroneous box: {desc}',
-            'description': (
-                f"{desc}. A rectangular outline is drawn around a section view — "
-                "this is a drafting artefact and should be removed."
-            ),
-            'suggestion':  'Remove the erroneous rectangle from this section view.',
-            'severity':    'warning',
-            'page_num':    1,
-            'x': x, 'y': y, 'width': w, 'height': h,
-        })
+    # Erroneous box detection disabled for MVP — produces too many false positives
+    # on drawings where rectangular borders around views are intentional.
+    # Re-enable by restoring the loop here and the CHECK 5c prompt section.
+    # for eb in erroneous_boxes: ...
 
     return issues
 

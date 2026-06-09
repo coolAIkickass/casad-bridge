@@ -528,7 +528,7 @@ button { cursor: pointer; font: inherit; }
 /* Summary bar */
 .summary-bar {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -548,8 +548,7 @@ button { cursor: pointer; font: inherit; }
 .summary-stat:last-child { border-right: none; }
 .stat-num   { font-size: 22px; font-weight: 800; line-height: 1; }
 .stat-label { font-size: 11px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
-.stat-error   .stat-num { color: var(--error); }
-.stat-warning .stat-num { color: var(--warning); }
+.stat-open     .stat-num { color: var(--blue); }
 .stat-resolved .stat-num { color: var(--success); }
 
 /* Active filter state */
@@ -560,25 +559,10 @@ button { cursor: pointer; font: inherit; }
   height: 3px;
   border-radius: 2px 2px 0 0;
 }
-.stat-error.active   { background: var(--error-bg); }
-.stat-error.active::after { background: var(--error); }
-.stat-warning.active { background: var(--warning-bg); }
-.stat-warning.active::after { background: var(--warning); }
+.stat-open.active     { background: var(--blue-light); }
+.stat-open.active::after { background: var(--blue); }
 .stat-resolved.active { background: rgba(22,163,74,.07); }
 .stat-resolved.active::after { background: var(--success); }
-
-/* Filter active indicator in issue list header */
-.filter-banner {
-  padding: 6px 14px;
-  font-size: 12px;
-  color: var(--text-muted);
-  background: var(--slate-bg);
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.filter-banner button { font-size: 11px; color: var(--blue); background: none; border: none; cursor: pointer; padding: 0; }
 
 /* Issue list */
 .issue-list {
@@ -636,8 +620,9 @@ button { cursor: pointer; font: inherit; }
 
 /* Issue cards */
 .issue-card {
-  padding: 12px 16px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
   cursor: pointer;
   transition: background .1s;
 }
@@ -645,23 +630,17 @@ button { cursor: pointer; font: inherit; }
 .issue-card:hover { background: var(--blue-light); }
 .issue-card.active { background: var(--blue-light); }
 .issue-card.resolved { opacity: .55; }
+.issue-card.sev-error   { border-left-color: var(--error); }
+.issue-card.sev-warning { border-left-color: var(--warning); }
 
-.issue-header {
+.issue-title-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 5px;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 4px;
 }
-.sev-badge {
-  font-size: 10px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 3px;
-  text-transform: uppercase;
-  letter-spacing: .03em;
-}
-.sev-badge.sev-error   { background: var(--error-bg);   color: var(--error);   border: 1px solid var(--error-border); }
-.sev-badge.sev-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
+.issue-title-row .issue-num   { flex-shrink: 0; }
+.issue-title-row .issue-title { flex: 1; margin-bottom: 0; }
 
 .resolve-btn {
   font-size: 11px;

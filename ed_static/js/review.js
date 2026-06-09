@@ -9,7 +9,7 @@ let currentViewport = null;
 let allIssues      = [];
 let selectedId     = null;
 let renderTask     = null;
-let activeFilter   = 'error';   // null | 'error' | 'warning' | 'resolved'
+let activeFilter   = 'open';   // 'open' | 'resolved'
 
 const canvas      = document.getElementById('pdf-canvas');
 const ctx         = canvas.getContext('2d');
@@ -107,9 +107,8 @@ function pct(val, dim) { return val / 100 * dim; }
 // ── Issue panel ──────────────────────────────────────
 
 function visibleIssues() {
-  if (!activeFilter) return allIssues;
   if (activeFilter === 'resolved') return allIssues.filter(i => i.status === 'resolved');
-  return allIssues.filter(i => i.severity === activeFilter && i.status !== 'resolved');
+  return allIssues.filter(i => i.status !== 'resolved');  // 'open' = all non-resolved
 }
 
 function renderIssuePanel() {
@@ -117,15 +116,6 @@ function renderIssuePanel() {
   const filtered = visibleIssues();
 
   panel.innerHTML = '';
-
-  // Filter banner when a filter is active
-  if (activeFilter) {
-    const label = activeFilter === 'resolved' ? 'Resolved' : activeFilter === 'error' ? 'Errors' : 'Warnings';
-    const banner = document.createElement('div');
-    banner.className = 'filter-banner';
-    banner.innerHTML = `Showing ${filtered.length} ${label.toLowerCase()} <button onclick="clearFilter()">Show all</button>`;
-    panel.appendChild(banner);
-  }
 
   if (allIssues.length === 0) {
     panel.innerHTML = '<div class="no-issues-msg"><span class="no-issues-icon">✓</span><strong>No issues found</strong><p>The drawing passed all checks. No errors or warnings were raised.</p></div>';
@@ -135,8 +125,18 @@ function renderIssuePanel() {
   if (filtered.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'no-issues-msg';
-    empty.innerHTML = `<span class="no-issues-icon">✓</span><strong>None in this category</strong><p>No ${activeFilter} items found.</p>`;
+    if (activeFilter === 'resolved') {
+      empty.innerHTML = '<span class="no-issues-icon">○</span><strong>Nothing resolved yet</strong><p>Mark issues as resolved as you correct them.</p>';
+    } else {
+      empty.innerHTML = '<div class="no-issues-msg all-resolved"><span class="no-issues-icon">✓</span><strong>All issues resolved</strong><p>Every flagged item has been marked as resolved. Ready to upload the corrected version.</p></div>';
+    }
     panel.appendChild(empty);
+    return;
+  }
+
+  const openCount = allIssues.filter(i => i.status === 'open').length;
+  if (activeFilter === 'open' && openCount === 0 && allIssues.length > 0) {
+    panel.innerHTML = '<div class="no-issues-msg all-resolved"><span class="no-issues-icon">✓</span><strong>All issues resolved</strong><p>Every flagged item has been marked as resolved. Ready to upload the corrected version.</p></div>';
     return;
   }
 
@@ -147,15 +147,9 @@ function renderIssuePanel() {
     categories[i.category].push(i);
   });
 
-  const openCount = allIssues.filter(i => i.status === 'open').length;
-  if (openCount === 0 && allIssues.length > 0) {
-    panel.innerHTML = '<div class="no-issues-msg all-resolved"><span class="no-issues-icon">✓</span><strong>All issues resolved</strong><p>Every flagged item has been marked as resolved. Ready to upload the corrected version.</p></div>';
-    return;
-  }
-
   let globalNum = 0;
   Object.entries(categories).forEach(([cat, issues]) => {
-    const openCount = issues.filter(i => i.status === 'open').length;
+    const catOpen = issues.filter(i => i.status !== 'resolved').length;
     const sec = document.createElement('div');
     sec.className = 'issue-category';
 
@@ -170,7 +164,7 @@ function renderIssuePanel() {
     hdr.className = 'category-header';
     hdr.innerHTML = `
       <span class="category-name">${cat}</span>
-      <span class="category-count">${openCount} open</span>
+      <span class="category-count">${catOpen} open</span>
       <span class="caret">▼</span>`;
     hdr.addEventListener('click', () => {
       const hidden = body.style.display === 'none';
@@ -187,18 +181,17 @@ function renderIssuePanel() {
 function buildCard(issue, num) {
   const resolved = issue.status === 'resolved';
   const card = document.createElement('div');
-  card.className = `issue-card${resolved ? ' resolved' : ''}`;
+  card.className = `issue-card sev-${issue.severity}${resolved ? ' resolved' : ''}`;
   card.dataset.id = issue.id;
 
   card.innerHTML = `
-    <div class="issue-header">
-      <span class="sev-badge sev-${issue.severity}">${issue.severity === 'error' ? '✕ Error' : '⚠ Warning'}</span>
+    <div class="issue-title-row">
+      <span class="issue-num">#${num}</span>
+      <span class="issue-title">${issue.title}</span>
       <button class="resolve-btn" data-id="${issue.id}" title="${resolved ? 'Mark as open' : 'Mark as resolved'}">
         ${resolved ? '↺ Reopen' : '✓ Resolve'}
       </button>
     </div>
-    <div class="issue-num">#${num}</div>
-    <div class="issue-title">${issue.title}</div>
     <div class="issue-desc">${issue.description}</div>
     ${issue.suggestion ? `<div class="issue-suggestion">💡 ${issue.suggestion}</div>` : ''}
   `;
@@ -216,11 +209,9 @@ function buildCard(issue, num) {
 }
 
 function updateSummary() {
-  const errors   = allIssues.filter(i => i.severity === 'error'   && i.status === 'open').length;
-  const warnings = allIssues.filter(i => i.severity === 'warning' && i.status === 'open').length;
+  const open     = allIssues.filter(i => i.status !== 'resolved').length;
   const resolved = allIssues.filter(i => i.status === 'resolved').length;
-  document.getElementById('summary-errors').textContent   = errors;
-  document.getElementById('summary-warnings').textContent = warnings;
+  document.getElementById('summary-open').textContent     = open;
   document.getElementById('summary-resolved').textContent = resolved;
 }
 
@@ -301,26 +292,16 @@ async function toggleResolve(id) {
 
 // ── Filter ────────────────────────────────────────────
 
-function setFilter(severity) {
-  activeFilter = (activeFilter === severity) ? null : severity;   // toggle off if same
+function setFilter(filter) {
+  activeFilter = (activeFilter === filter) ? 'open' : filter;  // clicking active tab resets to open
   document.querySelectorAll('.summary-stat').forEach(el => el.classList.remove('active'));
-  if (activeFilter) {
-    const map = { error: 'stat-error', warning: 'stat-warning', resolved: 'stat-resolved' };
-    document.querySelector('.' + map[activeFilter])?.classList.add('active');
-  }
+  const map = { open: 'stat-open', resolved: 'stat-resolved' };
+  document.querySelector('.' + map[activeFilter])?.classList.add('active');
   renderIssuePanel();
   renderHighlights(currentPage);
 }
 
-function clearFilter() {
-  activeFilter = null;
-  document.querySelectorAll('.summary-stat').forEach(el => el.classList.remove('active'));
-  renderIssuePanel();
-  renderHighlights(currentPage);
-}
-
-document.querySelector('.stat-error')   ?.addEventListener('click', () => setFilter('error'));
-document.querySelector('.stat-warning') ?.addEventListener('click', () => setFilter('warning'));
+document.querySelector('.stat-open')    ?.addEventListener('click', () => setFilter('open'));
 document.querySelector('.stat-resolved')?.addEventListener('click', () => setFilter('resolved'));
 
 // ── Controls ──────────────────────────────────────────
@@ -347,7 +328,7 @@ document.getElementById('btn-zoom-out').addEventListener('click', () => {
 async function init() {
   // Reflect initial defaults in UI
   document.getElementById('zoom-label').textContent = Math.round(scale * 100) + '%';
-  document.querySelector('.stat-error')?.classList.add('active');
+  document.querySelector('.stat-open')?.classList.add('active');
 
   // Load issues first so highlights appear as soon as PDF renders
   const resp = await fetch(`/ed/api/review/${window.REVIEW_ID}/issues`);

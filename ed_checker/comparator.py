@@ -410,7 +410,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
     w_dia = _norm_dia(drawing_bar.get('bar_dia_mm') or drawing_bar.get('reinforcement_text', ''))
     if d_dia and w_dia and d_dia != w_dia:
         issues.append(_issue(
-            'Reinforcement', f"{prefix}: Diameter mismatch — design {d_dia}mm, drawing {w_dia}mm",
+            'Bar Diameter', f"{prefix}: Diameter mismatch — design {d_dia}mm, drawing {w_dia}mm",
             f"Design input specifies {d_dia}mm diameter for bar '{bm}' ({comp}). Drawing shows {w_dia}mm.",
             f"Change bar diameter to {d_dia}mm as per design input.",
             'error', zone, bar_bbox
@@ -423,14 +423,14 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
         diff = _pct_diff(d_spacing, w_spacing)
         if diff and diff > 5:
             issues.append(_issue(
-                'Reinforcement', f"{prefix}: Spacing mismatch — design {round(d_spacing, 2)}mm c/c, drawing {round(w_spacing, 2)}mm c/c",
+                'Bar Spacing', f"{prefix}: Spacing mismatch — design {round(d_spacing, 2)}mm c/c, drawing {round(w_spacing, 2)}mm c/c",
                 f"Design input specifies {round(d_spacing, 2)}mm c/c for bar '{bm}' ({comp}). Drawing shows {round(w_spacing, 2)}mm c/c.",
                 f"Update spacing to {round(d_spacing, 2)}mm c/c.",
                 'error', zone, bar_bbox
             ))
     elif d_spacing and not w_spacing:
         issues.append(_issue(
-            'Reinforcement', f"{prefix}: Spacing not found in drawing ({round(d_spacing, 2)}mm expected)",
+            'Bar Spacing', f"{prefix}: Spacing not found in drawing ({round(d_spacing, 2)}mm expected)",
             f"Design input specifies spacing of {round(d_spacing, 2)}mm c/c for bar '{bm}' but drawing schedule does not show spacing.",
             f"Add {round(d_spacing, 2)}mm c/c spacing for bar '{bm}'.",
             'warning', zone, bar_bbox
@@ -448,7 +448,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
             tolerance = 2 * max(num_piles, 1)
             if abs(d_count - w_count) > tolerance:
                 issues.append(_issue(
-                    'Reinforcement', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
+                    'Bar Count', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
                     f"Design input specifies {d_count} bars for '{bm}' ({comp}). Drawing schedule shows {w_count} bars. "
                     f"Ring bar counts can vary by ±{tolerance} due to spacing rounding — verify manually.",
                     f"Check ring count for bar '{bm}' against Detail A/A' selection.",
@@ -456,7 +456,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 ))
         elif d_count != w_count:
             issues.append(_issue(
-                'Reinforcement', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
+                'Bar Count', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
                 f"Design input specifies {d_count} bars for '{bm}' ({comp}). Drawing schedule shows {w_count} bars.",
                 f"Update count to {d_count} nos.",
                 'error', zone, bar_bbox
@@ -469,7 +469,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
         diff = _pct_diff(d_len, w_len)
         if diff and diff > 2:
             issues.append(_issue(
-                'Reinforcement', f"{prefix}: Bar length mismatch — design {round(d_len, 2)}m, drawing {round(w_len, 2)}m",
+                'Bar Length', f"{prefix}: Bar length mismatch — design {round(d_len, 2)}m, drawing {round(w_len, 2)}m",
                 f"Design input bar length = {round(d_len, 2)}m for '{bm}' ({comp}). Drawing shows {round(w_len, 2)}m.",
                 f"Update bar length to {round(d_len, 2)}m.",
                 'error', zone, bar_bbox
@@ -484,7 +484,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
         diff = _pct_diff(calc_wt, w_total_wt)
         if diff and diff > 2:
             issues.append(_issue(
-                'Reinforcement', f"{prefix}: Schedule weight arithmetic error",
+                'Bar Weight', f"{prefix}: Schedule weight arithmetic error",
                 f"Bar '{bm}' ({comp}): total length × unit weight = {calc_wt:.1f}kg but schedule shows {w_total_wt:.1f}kg.",
                 f"Recheck weight calculation for bar '{bm}'.",
                 'error', zone, bar_bbox
@@ -492,24 +492,39 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
 
     # Bar shape dimension check.
     # Excel stores shape dims in metres; drawing schedule shows them in mm → convert × 1000.
+    # Use best-match (sorted) pairing instead of positional zip — robust to Claude returning
+    # segments in a different order or including an extra misread value.
     d_shape_dims = design_bar.get('shape_dims')
     w_shape_dims = drawing_bar.get('shape_dimensions')
     if d_shape_dims and w_shape_dims and isinstance(w_shape_dims, list):
-        for i, (d_dim, w_dim) in enumerate(zip(d_shape_dims, w_shape_dims)):
-            d_val_m  = _norm_float(d_dim)
-            w_val_mm = _norm_float(w_dim)
-            if d_val_m and w_val_mm:
-                d_val_mm = d_val_m * 1000  # convert design metres → mm
-                diff = _pct_diff(d_val_mm, w_val_mm)
-                if diff and diff > 2:
-                    issues.append(_issue(
-                        'Reinforcement',
-                        f"{prefix}: Bar shape dimension mismatch — design {d_val_mm:.0f}mm, drawing {w_val_mm:.0f}mm",
-                        f"Bar '{bm}' ({comp}): shape dimension {i+1} in design input is {d_val_mm:.0f}mm "
-                        f"({d_val_m}m) but drawing shows {w_val_mm:.0f}mm.",
-                        f"Correct the bar shape dimension for '{bm}' to {d_val_mm:.0f}mm.",
-                        'error', zone, bar_bbox
-                    ))
+        d_vals_mm = sorted(
+            v * 1000
+            for d in d_shape_dims
+            for v in [_norm_float(d)]
+            if v
+        )
+        w_vals_mm = sorted(
+            v
+            for w in w_shape_dims
+            for v in [_norm_float(w)]
+            if v
+        )
+        remaining_w = list(w_vals_mm)
+        for d_mm in d_vals_mm:
+            if not remaining_w:
+                break
+            closest = min(remaining_w, key=lambda w: abs(w - d_mm))
+            remaining_w.remove(closest)
+            diff = _pct_diff(d_mm, closest)
+            if diff and diff > 2:
+                issues.append(_issue(
+                    'Bar Shape',
+                    f"{prefix}: Bar shape dimension mismatch — design {d_mm:.0f}mm, drawing {closest:.0f}mm",
+                    f"Bar '{bm}' ({comp}): design input has segment {d_mm:.0f}mm "
+                    f"but closest value in drawing is {closest:.0f}mm.",
+                    f"Correct the bar shape dimension for '{bm}' to {d_mm:.0f}mm.",
+                    'error', zone, bar_bbox
+                ))
 
     return issues
 
@@ -570,7 +585,7 @@ def _check_sections(sections: list) -> list:
     issues = []
     if not sections:
         issues.append(_issue(
-            'Drawing Completeness', 'Could not verify required sections',
+            'Missing Views', 'Could not verify required sections',
             'The drawing review did not return a sections inventory. Required views could not be checked.',
             'Ensure ANTHROPIC_API_KEY is configured and the drawing is legible.',
             'warning', 'default'
@@ -583,7 +598,7 @@ def _check_sections(sections: list) -> list:
         present = any(req.upper() in name for name in found_names)
         if not present:
             issues.append(_issue(
-                'Drawing Completeness', f'Missing view: {req}',
+                'Missing Views', f'Missing view: {req}',
                 f'"{req}" was not found in the drawing.',
                 f'Add the "{req}" view to the drawing.',
                 'error', 'default'
@@ -593,7 +608,7 @@ def _check_sections(sections: list) -> list:
     for sec in sections:
         if sec.get('present') and not sec.get('scale'):
             issues.append(_issue(
-                'Drawing Completeness', f'Scale missing on {sec.get("name", "view")}',
+                'Missing Views', f'Scale missing on {sec.get("name", "view")}',
                 f'The view "{sec.get("name")}" does not show a scale (e.g. SCALE 1:30).',
                 'Add a scale label to this view.',
                 'warning', 'default', sec.get('bbox')
@@ -686,7 +701,7 @@ def _check_label_issues(label_issues: list, sections: list = None,
             desc + ' ' + li.get('suggestion', ''), sections, section_view_positions
         )
         issues.append(_issue(
-            'Labels & Annotations', desc, desc,
+            'Label Errors', desc, desc,
             li.get('suggestion', 'Review and correct this label.'),
             'warning', 'default', bbox
         ))
@@ -718,7 +733,7 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
         if not spacing_uniform:
             x, y, w, h = _bbox('default', bbox)
             issues.append({
-                'category':    'Reinforcement',
+                'category':    'Section Spacing',
                 'title':       f"Section {section_name}: bar '{bar_mark}' spacing appears uneven",
                 'description': (
                     f"In Section {section_name}, the '{bar_mark}' bars are not evenly distributed. "
@@ -760,7 +775,7 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
                 breakdown += f" ÷ {bundle_factor} (bundle)"
             x, y, w, h = _bbox('default', bbox)
             issues.append({
-                'category':    'Reinforcement',
+                'category':    'Section Bar Count',
                 'title':       (
                     f"Section {section_name}: bar '{bar_mark}' count — "
                     f"drawn {visual_count}, expected {expected}"
@@ -822,7 +837,7 @@ def _check_cut_mark_references(drawing_data: dict) -> list:
         bbox     = item.get('bbox')
         x, y, w, h = _bbox('default', bbox)
         issues.append({
-            'category':    'Drawing Completeness',
+            'category':    'Missing Views',
             'title':       f'Missing section view: {missing}',
             'description': (
                 f'Cut marks for "{missing}" are shown on "{found_on}" '
@@ -848,7 +863,7 @@ def _check_unlabeled_views(drawing_data: dict) -> list:
         bbox    = item.get('bbox')
         x, y, w, h = _bbox('default', bbox)
         issues.append({
-            'category':    'Drawing Completeness',
+            'category':    'Missing Views',
             'title':       f'Unlabeled view: {desc}',
             'description': (
                 f'{desc}. Every drawn view (section, plan, elevation) '
@@ -875,7 +890,7 @@ def _check_dimension_issues(dimension_issues: list, sections: list = None,
             desc + ' ' + di.get('suggestion', ''), sections, section_view_positions
         )
         issues.append(_issue(
-            'Dimensions', desc, desc,
+            'Dimension Errors', desc, desc,
             di.get('suggestion', 'Add the missing dimension.'),
             'warning', 'default', bbox
         ))

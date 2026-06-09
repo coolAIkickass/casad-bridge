@@ -55,7 +55,12 @@ Extract ALL of the following as precisely as possible:
    - bar_dia_mm: the φ / DIA column — always a small integer (8, 10, 12, 16, 20, 25, 32). Do NOT confuse with length or spacing.
    - spacing_mm: the c/c spacing column — null for longitudinal bars (shown as "-"). For rings/stirrups this is the pitch in mm.
    - length_m: the individual bar LENGTH in metres — a decimal number like 9.160, 4.049, 13.425. Do NOT use spacing or weight here.
-   - count: the total number of bars. For expressions like "4×13 = 52" set count=52 (the result after =) and count_text="4×13 = 52".
+   - count: the total number of bars. The count column may contain multiplication expressions.
+     ALWAYS use the value AFTER the "=" sign as the count — it is the total.
+     Examples: "4×13 = 52" → count=52, count_text="4×13 = 52"
+               "21 * 4 = 84" → count=84, count_text="21 * 4 = 84"
+               "6 × 21 = 126" → count=126, count_text="6 × 21 = 126"
+     Both "×" and "*" are multiplication symbols. The number BEFORE "=" is never the count.
    - If the same bar mark appears in two rows (e.g. two 'y' rows for different ring zones), return BOTH rows separately with the same bar_mark and component.
 
    BAR MARK COMPLETENESS — extract ALL rows, including bars with suffixed marks:

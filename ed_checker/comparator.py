@@ -475,19 +475,18 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 'error', zone, bar_bbox
             ))
 
-    # Weight sanity check
+    # Total weight: compare design input (Excel formula value, authoritative) vs drawing schedule
+    d_total_wt = design_bar.get('total_wt_kg')
     w_total_wt = _norm_float(drawing_bar.get('total_wt_kg'))
-    w_total_len = _norm_float(drawing_bar.get('total_length_m'))
-    w_unit_wt = _norm_float(drawing_bar.get('unit_wt_kg_m'))
-    if w_total_len and w_unit_wt and w_total_wt:
-        calc_wt = w_total_len * w_unit_wt
-        diff = _pct_diff(calc_wt, w_total_wt)
-        if diff and diff > 2:
+    if d_total_wt and w_total_wt:
+        diff = _pct_diff(d_total_wt, w_total_wt)
+        if diff and diff > 5:
             issues.append(_issue(
-                'Bar Weight', f"{prefix}: Schedule weight arithmetic error",
-                f"Bar '{bm}' ({comp}): total length × unit weight = {calc_wt:.1f}kg but schedule shows {w_total_wt:.1f}kg.",
-                f"Recheck weight calculation for bar '{bm}'.",
-                'error', zone, bar_bbox
+                'Bar Weight',
+                f"{prefix}: Total weight mismatch — design {d_total_wt:.1f}kg, drawing {w_total_wt:.1f}kg",
+                f"Design input total weight = {d_total_wt:.1f}kg for bar '{bm}' ({comp}). Drawing schedule shows {w_total_wt:.1f}kg.",
+                f"Recheck total weight for bar '{bm}' — likely a consequence of a count or length error.",
+                'warning', zone, bar_bbox
             ))
 
     # Bar shape dimension check.

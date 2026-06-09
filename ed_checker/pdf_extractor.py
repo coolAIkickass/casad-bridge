@@ -272,8 +272,21 @@ Return ONLY valid JSON (no markdown):
 
 SHAPE_DIMS_PROMPT = """From this engineering drawing schedule, extract bar shape dimensions.
 
-Look at the "SHAPE OF BAR" (or similar) sketch column in the reinforcement schedule table.
-For each bar mark, read ALL numeric dimension values written on its shape sketch.
+Look at the "SHAPE OF BAR" sketch column in the reinforcement schedule table.
+Each bar row has a small line-sketch of the bar shape drawn inside that column cell.
+Read the numeric labels written DIRECTLY ON the line segments of that sketch — these
+are the segment lengths, typically 2–5 numbers per bar (e.g. 825, 4350, 825).
+
+CRITICAL RULES — read carefully:
+- Read ONLY numbers that are printed ON the shape sketch lines inside the shape column cell.
+- Do NOT read from the LENGTH column, TOTAL LENGTH column, WEIGHT column, or SPACING column.
+- Do NOT read overall structural dimensions (pilecap width, pile length, pier height, etc.)
+  from any drawing view outside the schedule table.
+- Each number should be a bar segment length in mm, typically between 100 mm and 15000 mm.
+- Numbers like 1825 in a bar shape sketch that match no logical segment (when the bar's
+  other segments are ~825 mm) are likely misreads — omit them rather than guessing.
+- If you cannot clearly read a bar's shape sketch, omit that bar entirely (do not guess).
+- Return empty {} for any component with no clearly readable shape dimensions.
 
 Return ONLY valid JSON (no markdown):
 {
@@ -283,13 +296,6 @@ Return ONLY valid JSON (no markdown):
     "pier":    {"g": [500, 8956]}
   }
 }
-
-Rules:
-- Values are the numbers written on the shape sketch (in mm as shown in the drawing).
-- List them left-to-right as they appear on the sketch.
-- If you cannot clearly read a bar's dimensions, omit that bar (do not guess).
-- Only include bars where you can read at least one dimension with confidence.
-- Return empty dicts {} for any component with no readable shape dimensions.
 """
 
 

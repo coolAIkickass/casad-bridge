@@ -598,49 +598,53 @@ button { cursor: pointer; font: inherit; }
 
 /* Category sections */
 .issue-category { border-bottom: 1px solid var(--border); }
-.issue-category + .issue-category { margin-top: 6px; border-top: 6px solid var(--slate-bg); }
+.issue-category + .issue-category { border-top: 4px solid var(--slate-bg); }
 .category-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 16px;
-  background: #EEF2F7;
+  padding: 10px 16px;
+  background: var(--slate-bg);
   border-left: 3px solid var(--navy);
+  border-bottom: 1px solid var(--border);
   cursor: pointer;
   user-select: none;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--navy);
   text-transform: uppercase;
-  letter-spacing: .04em;
+  letter-spacing: .06em;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 .category-header:hover { background: #e2e8f0; }
 .category-name  { flex: 1; }
 .category-count {
   font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: none;
-  letter-spacing: 0;
-  background: var(--surface);
-  border: 1px solid var(--border-dark);
+  font-weight: 700;
+  color: var(--error);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
   border-radius: 10px;
-  padding: 1px 7px;
+  padding: 1px 8px;
 }
-.caret          { font-size: 10px; color: var(--text-muted); transition: transform .15s; }
+.caret { font-size: 9px; color: var(--text-faint); }
 .category-body  { }
 
 /* Issue cards */
 .issue-card {
-  padding: 10px 14px;
+  padding: 10px 14px 10px 12px;
   border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
   cursor: pointer;
   transition: background .1s;
 }
-.issue-card:last-child { border-bottom: none; }
-.issue-card:hover { background: var(--blue-light); }
+.issue-card.sev-error   { border-left-color: var(--error); }
+.issue-card:last-child  { border-bottom: none; }
+.issue-card:hover  { background: var(--blue-light); }
 .issue-card.active { background: var(--blue-light); }
-.issue-card.resolved { opacity: .55; }
+.issue-card.resolved { opacity: .55; border-left-color: var(--border-dark); }
 
 /* Severity badge pill */
 .sev-badge {

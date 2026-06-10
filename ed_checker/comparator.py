@@ -163,7 +163,7 @@ def compare(design_data: dict, drawing_data: dict) -> list:
             'Input', 'No design input provided',
             'No design input file was uploaded. Most checks could not be performed.',
             'Upload the E2E design input Excel alongside the drawing.',
-            'warning', 'default'
+            'error', 'default'
         ))
         return issues
 
@@ -236,7 +236,7 @@ def _check_title_block(tb: dict, design: dict) -> list:
             'Title Block', f'Drawing number format check: "{drg}"',
             f'Drawing number "{drg}" — verify it follows the project numbering convention.',
             'Confirm drawing number matches the project register.',
-            'warning', zone, tb_bbox
+            'error', zone, tb_bbox
         ))
 
     # Scale check
@@ -246,7 +246,7 @@ def _check_title_block(tb: dict, design: dict) -> list:
             'Title Block', f'Scale value unusual: "{scale}"',
             f'Scale field shows "{scale}". Expected "AS SHOWN" or a ratio like "1:50".',
             'Verify scale field.',
-            'warning', zone, tb_bbox
+            'error', zone, tb_bbox
         ))
 
     return issues
@@ -277,7 +277,7 @@ def _check_notes(notes: dict, design: dict) -> list:
             'Notes', 'Lap length concrete grade not found',
             'Could not read which concrete grade the lap length table references.',
             'Ensure the lap length table header is legible and states the concrete grade.',
-            'warning', zone, notes_bbox
+            'error', zone, notes_bbox
         ))
 
     # Pile geometry notes vs design input
@@ -355,7 +355,7 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
                     'Reinforcement', f'{comp.title()} schedule not found in drawing',
                     f'Could not extract the {comp} reinforcement schedule from the drawing.',
                     f'Ensure the {comp} schedule table is legible and present in the drawing.',
-                    'warning', zone
+                    'error', zone
                 ))
             continue
 
@@ -446,7 +446,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
             'Bar Spacing', f"{prefix}: Spacing not found in drawing ({round(d_spacing, 2)}mm expected)",
             f"Design input specifies spacing of {round(d_spacing, 2)}mm c/c for bar '{bm}' but drawing schedule does not show spacing.",
             f"Add {round(d_spacing, 2)}mm c/c spacing for bar '{bm}'.",
-            'warning', zone, bar_bbox
+            'error', zone, bar_bbox
         ))
 
     # Count check
@@ -465,7 +465,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                     f"Design input specifies {d_count} bars for '{bm}' ({comp}). Drawing schedule shows {w_count} bars. "
                     f"Ring bar counts can vary by ±{tolerance} due to spacing rounding — verify manually.",
                     f"Check ring count for bar '{bm}' against Detail A/A' selection.",
-                    'warning', zone, bar_bbox
+                    'error', zone, bar_bbox
                 ))
         elif d_count != w_count:
             issues.append(_issue(
@@ -499,7 +499,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 f"{prefix}: Total weight mismatch — design {d_total_wt:.1f}kg, drawing {w_total_wt:.1f}kg",
                 f"Design input total weight = {d_total_wt:.1f}kg for bar '{bm}' ({comp}). Drawing schedule shows {w_total_wt:.1f}kg.",
                 f"Recheck total weight for bar '{bm}' — likely a consequence of a count or length error.",
-                'warning', zone, bar_bbox
+                'error', zone, bar_bbox
             ))
 
     # Bar shape dimension check.
@@ -556,7 +556,7 @@ def _check_table1(table1: list, design: dict) -> list:
             'Levels (TABLE-1)', 'TABLE-1 not found or not legible',
             'Could not extract TABLE-1 (pier level/elevation data) from the drawing.',
             'Ensure TABLE-1 is present and legible in the drawing.',
-            'warning', 'table_1'
+            'error', 'table_1'
         ))
         return issues
 
@@ -606,7 +606,7 @@ def _check_sections(sections: list) -> list:
             'Missing Views', 'Could not verify required sections',
             'The drawing review did not return a sections inventory. Required views could not be checked.',
             'Ensure ANTHROPIC_API_KEY is configured and the drawing is legible.',
-            'warning', 'default'
+            'error', 'default'
         ))
         return issues
 
@@ -629,7 +629,7 @@ def _check_sections(sections: list) -> list:
                 'Missing Views', f'Scale missing on {sec.get("name", "view")}',
                 f'The view "{sec.get("name")}" does not show a scale (e.g. SCALE 1:30).',
                 'Add a scale label to this view.',
-                'warning', 'default', sec.get('bbox')
+                'error', 'default', sec.get('bbox')
             ))
 
     return issues
@@ -666,24 +666,14 @@ def _check_notes_completeness(notes_check: list, sections: list = None,
         if not entry or not entry.get('present'):
             bbox = (entry.get('bbox') if entry else None) or _find_section_bbox(
                 missing_msg, sections, section_view_positions)
-            # Concrete grades: warning (single-grade convention covers all components).
-            # Mandatory geometric notes and steel grade: error.
-            # Everything else: warning.
-            MANDATORY_NOTE_KEYS = {'pile_length', 'pile_fixity', 'pile_diameter', 'steel_grade'}
-            if item_key in concrete_keys:
-                if any_concrete_found:
-                    # Another component's grade was found — single-grade convention covers this.
-                    continue
-                severity = 'warning'
-            elif item_key in MANDATORY_NOTE_KEYS:
-                severity = 'error'
-            else:
-                severity = 'warning'
+            if item_key in concrete_keys and any_concrete_found:
+                # Another component's grade was found — single-grade convention covers this.
+                continue
             issues.append(_issue(
                 'Notes', missing_msg,
                 f'The note for "{item_key.replace("_", " ")}" is missing or not legible in the drawing.',
                 f'Add the required note for {item_key.replace("_", " ")}.',
-                severity, 'notes', bbox
+                'error', 'notes', bbox
             ))
 
     return issues
@@ -721,7 +711,7 @@ def _check_label_issues(label_issues: list, sections: list = None,
         issues.append(_issue(
             'Label Errors', desc, desc,
             li.get('suggestion', 'Review and correct this label.'),
-            'warning', 'default', bbox
+            'error', 'default', bbox
         ))
     return issues
 
@@ -747,17 +737,32 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
         if visual_count is None:
             continue
 
-        # Spacing uniformity — no schedule reference needed
-        if not spacing_uniform:
+        # Spacing — one issue per detected irregularity with location and type
+        spacing_issues = cc.get('spacing_issues') or []
+        # Backward compat: old Claude response sets spacing_uniform=False but no spacing_issues array
+        if not spacing_uniform and not spacing_issues:
+            spacing_issues = [{'type': 'uneven', 'location': '', 'description': 'Bars are not evenly distributed.'}]
+
+        _TYPE_LABEL = {
+            'clustering':  'bar clustering',
+            'gap':         'gap between bars',
+            'missing_bar': 'possible missing bar',
+        }
+        for si in spacing_issues:
             x, y, w, h = _bbox('default', bbox)
+            si_type  = si.get('type', 'uneven')
+            si_loc   = si.get('location', '')
+            si_desc  = si.get('description', '')
+            type_label = _TYPE_LABEL.get(si_type, si_type)
+            loc_suffix = f" at {si_loc}" if si_loc else ''
             issues.append({
                 'category':    'Section Spacing',
-                'title':       f"Section {section_name}: bar '{bar_mark}' spacing appears uneven",
-                'description': (
-                    f"In Section {section_name}, the '{bar_mark}' bars are not evenly distributed. "
-                    "Uneven spacing can indicate a drafting error."
+                'title':       f"Section {section_name}: bar '{bar_mark}' — {type_label}{loc_suffix}",
+                'description': si_desc or f"In Section {section_name}, the '{bar_mark}' bars show {type_label}.",
+                'suggestion':  (
+                    f"Check bar '{bar_mark}' spacing in Section {section_name}{loc_suffix}. "
+                    "Bars should be uniformly distributed."
                 ),
-                'suggestion':  f"Check bar '{bar_mark}' spacing in Section {section_name} — bars should be uniformly distributed.",
                 'severity':    'warning',
                 'page_num':    1,
                 'x': x, 'y': y, 'width': w, 'height': h,
@@ -894,6 +899,6 @@ def _check_dimension_issues(dimension_issues: list, sections: list = None,
         issues.append(_issue(
             'Dimension Errors', desc, desc,
             di.get('suggestion', 'Add the missing dimension.'),
-            'warning', 'default', bbox
+            'error', 'default', bbox
         ))
     return issues

@@ -99,7 +99,7 @@ function renderIssuePanel() {
   panel.innerHTML = '';
 
   if (allIssues.length === 0) {
-    panel.innerHTML = '<div class="no-issues-msg"><span class="no-issues-icon">✓</span><strong>No issues found</strong><p>The drawing passed all checks. No errors or warnings were raised.</p></div>';
+    panel.innerHTML = '<div class="no-issues-msg"><span class="no-issues-icon">✓</span><strong>No issues found</strong><p>The drawing passed all checks. No errors were found.</p></div>';
     return;
   }
 
@@ -129,6 +129,7 @@ function renderIssuePanel() {
   });
 
   let globalNum = 0;
+  let groupIndex = 0;
   Object.entries(categories).forEach(([cat, issues]) => {
     const catOpen = issues.filter(i => i.status !== 'resolved').length;
     const sec = document.createElement('div');
@@ -141,12 +142,15 @@ function renderIssuePanel() {
       body.appendChild(buildCard(issue, globalNum));
     });
 
+    const startCollapsed = groupIndex > 0;
+    if (startCollapsed) body.style.display = 'none';
+
     const hdr = document.createElement('div');
     hdr.className = 'category-header';
     hdr.innerHTML = `
       <span class="category-name">${cat}</span>
-      <span class="category-count">${catOpen} open</span>
-      <span class="caret">▼</span>`;
+      <span class="category-count">${catOpen}</span>
+      <span class="caret">${startCollapsed ? '▶' : '▼'}</span>`;
     hdr.addEventListener('click', () => {
       const hidden = body.style.display === 'none';
       body.style.display = hidden ? '' : 'none';
@@ -156,6 +160,7 @@ function renderIssuePanel() {
     sec.appendChild(hdr);
     sec.appendChild(body);
     panel.appendChild(sec);
+    groupIndex++;
   });
 }
 
@@ -165,11 +170,9 @@ function buildCard(issue, num) {
   card.className = `issue-card sev-${issue.severity}${resolved ? ' resolved' : ''}`;
   card.dataset.id = issue.id;
 
-  const badgeLabel = issue.severity === 'error' ? 'Error' : 'Warning';
   card.innerHTML = `
     <div class="issue-title-row">
       <span class="issue-num">#${num}</span>
-      <span class="sev-badge sev-badge-${issue.severity}">${badgeLabel}</span>
       <span class="issue-title">${issue.title}</span>
       <button class="resolve-btn" data-id="${issue.id}" title="${resolved ? 'Mark as open' : 'Mark as resolved'}">
         ${resolved ? '↺ Reopen' : '✓ Resolve'}

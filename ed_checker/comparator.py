@@ -179,7 +179,6 @@ def compare(design_data: dict, drawing_data: dict) -> list:
     schedule_section_positions = drawing_data.get('schedule_section_positions') or {}
     section_view_positions     = drawing_data.get('section_view_positions') or {}
     section_bboxes             = drawing_data.get('schedule_section_bboxes') or {}
-    sections                   = drawing_data.get('sections') or []
 
     issues += _check_title_block(drawing_data.get('title_block') or {}, design_data)
     issues += _check_notes(drawing_data.get('notes') or {}, design_data)
@@ -188,13 +187,14 @@ def compare(design_data: dict, drawing_data: dict) -> list:
         section_bboxes, schedule_section_positions,
     )
     issues += _check_table1(drawing_data.get('table_1') or [], design_data)
-    issues += _check_sections(sections)
+    # Section presence and notes completeness are now text-extracted (authoritative)
+    issues += _check_sections(drawing_data.get('sections_from_text') or [])
     issues += _check_notes_completeness(
-        drawing_data.get('notes_check') or [], sections, section_view_positions)
+        drawing_data.get('notes_completeness_from_text') or [], section_view_positions)
     issues += _check_label_issues(
-        drawing_data.get('label_issues') or [], sections, section_view_positions)
+        drawing_data.get('label_issues') or [], [], section_view_positions)
     issues += _check_dimension_issues(
-        drawing_data.get('dimension_issues') or [], sections, section_view_positions)
+        drawing_data.get('dimension_issues') or [], [], section_view_positions)
     issues += _check_cross_sections(drawing_data, design_data or {})
     issues += _check_cut_mark_references(drawing_data)
     issues += _check_unlabeled_views(drawing_data)
@@ -599,37 +599,22 @@ REQUIRED_SECTIONS = [
     'SCHEDULE OF REINFORCEMENT',
 ]
 
-def _check_sections(sections: list) -> list:
+def _check_sections(sections_from_text: list) -> list:
+    """Check required section presence using pdfplumber-extracted text (authoritative)."""
     issues = []
-    if not sections:
-        issues.append(_issue(
-            'Missing Views', 'Could not verify required sections',
-            'The drawing review did not return a sections inventory. Required views could not be checked.',
-            'Ensure ANTHROPIC_API_KEY is configured and the drawing is legible.',
-            'error', 'default'
-        ))
+    if not sections_from_text:
+        # No text extraction result — skip rather than flag as configuration error
         return issues
 
-    found_names = {s.get('name', '').upper() for s in sections if s.get('present')}
-
-    for req in REQUIRED_SECTIONS:
-        present = any(req.upper() in name for name in found_names)
-        if not present:
+    for entry in sections_from_text:
+        if not entry.get('present'):
+            name = entry.get('name', 'Unknown view')
+            bbox = entry.get('bbox')
             issues.append(_issue(
-                'Missing Views', f'Missing view: {req}',
-                f'"{req}" was not found in the drawing.',
-                f'Add the "{req}" view to the drawing.',
-                'error', 'default'
-            ))
-
-    # Check each present section has a scale
-    for sec in sections:
-        if sec.get('present') and not sec.get('scale'):
-            issues.append(_issue(
-                'Missing Views', f'Scale missing on {sec.get("name", "view")}',
-                f'The view "{sec.get("name")}" does not show a scale (e.g. SCALE 1:30).',
-                'Add a scale label to this view.',
-                'error', 'default', sec.get('bbox')
+                'Missing Views', f'Missing view: {name}',
+                f'"{name}" was not found in the drawing (checked via PDF text extraction).',
+                f'Add the "{name}" view to the drawing.',
+                'error', 'default', bbox
             ))
 
     return issues
@@ -647,33 +632,33 @@ REQUIRED_NOTES = {
     'steel_grade':       'Steel grade (Fe415/Fe500/Fe550) not specified in notes',
 }
 
-def _check_notes_completeness(notes_check: list, sections: list = None,
+def _check_notes_completeness(notes_completeness_from_text: list,
                                section_view_positions: dict = None) -> list:
+    """Check required notes presence using pdfplumber text extraction (authoritative)."""
     issues = []
-    if not notes_check:
+    if not notes_completeness_from_text:
         return issues
 
-    found = {n.get('item'): n for n in notes_check}
+    found = {n.get('item'): n for n in notes_completeness_from_text}
 
-    # If ANY concrete grade is present, the others are implied by the single-grade convention.
+    # Any concrete grade covers all three components (single-grade convention).
     concrete_keys = ('concrete_pile', 'concrete_pilecap', 'concrete_pier')
     any_concrete_found = any(
         found.get(k) and found[k].get('present') for k in concrete_keys
     )
 
+    notes_bbox = _find_section_bbox('NOTES', [], section_view_positions)
+
     for item_key, missing_msg in REQUIRED_NOTES.items():
         entry = found.get(item_key)
         if not entry or not entry.get('present'):
-            bbox = (entry.get('bbox') if entry else None) or _find_section_bbox(
-                missing_msg, sections, section_view_positions)
             if item_key in concrete_keys and any_concrete_found:
-                # Another component's grade was found — single-grade convention covers this.
                 continue
             issues.append(_issue(
                 'Notes', missing_msg,
-                f'The note for "{item_key.replace("_", " ")}" is missing or not legible in the drawing.',
+                f'The note for "{item_key.replace("_", " ")}" was not found in the drawing text.',
                 f'Add the required note for {item_key.replace("_", " ")}.',
-                'error', 'notes', bbox
+                'error', 'notes', notes_bbox
             ))
 
     return issues

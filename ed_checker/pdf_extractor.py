@@ -14,6 +14,34 @@ import pdfplumber
 log = logging.getLogger(__name__)
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 
+# ── Text-extraction constants ─────────────────────────────────────────────────
+
+# Required section/view names for a PPP drawing. Each tuple: (display_name, [match_keywords]).
+# Keywords are matched against the upper-cased join of all section_view_positions keys.
+_REQUIRED_PPP_SECTIONS = [
+    ('SECTION A-A FOR PILE',           ['A-A FOR PILE']),
+    ('SECTION Z-Z (PILE)',             ['Z-Z']),
+    ('SECTION A-A FOR PILECAP & PIER', ['A-A FOR PILECAP']),
+    ('SECTION B-B FOR PILECAP & PIER', ['B-B FOR PILECAP']),
+    ('PLAN OF PILECAP',                ['PLAN OF PILECAP']),
+    ('REINFORCEMENT PLAN OF PILECAP',  ['REINFORCEMENT PLAN']),
+    ('TABLE-1',                        ['TABLE-1', 'TABLE 1']),
+    ('LAP LENGTH TABLE',               ['LAP LENGTH']),
+    ('SCHEDULE OF REINFORCEMENT',      ['SCHEDULE OF REINFORCEMENT']),
+]
+
+# Keywords indicating a required notes item is present in the drawing's raw text.
+_NOTE_KEYWORDS: dict = {
+    'pile_length':     ['PILE LENGTH', 'LENGTH OF PILE'],
+    'pile_fixity':     ['FIXITY', 'FIX. LENGTH', 'FIX LENGTH', 'FIXATION'],
+    'pile_diameter':   ['PILE DIA', 'DIAMETER OF PILE', 'PILE DIAMETER'],
+    'concrete_pile':   ['M30', 'M35', 'M40', 'M45', 'M50'],
+    'concrete_pilecap':['M30', 'M35', 'M40', 'M45', 'M50'],  # same grades — any grade covers all
+    'concrete_pier':   ['M30', 'M35', 'M40', 'M45', 'M50'],
+    'steel_grade':     ['FE415', 'FE500', 'FE550', 'FE 415', 'FE 500', 'FE 550', 'HYSD', 'TMT'],
+    'irc_code_ref':    ['IRC:', 'IRC-', 'IRC '],
+}
+
 
 def _norm_float(v):
     try:
@@ -129,31 +157,20 @@ Return ONLY valid JSON with this structure (no markdown, no extra text):
 Use null for any value not found or not legible.
 """
 
-REVIEW_PROMPT = """You are doing a quality review of a CASAD bridge engineering drawing (Pile-Pilecap-Pier foundation type).
+REVIEW_PROMPT_TEMPLATE = """You are doing a quality review of a CASAD bridge engineering drawing (Pile-Pilecap-Pier foundation type).
 
 Scan the ENTIRE drawing image carefully and return findings for each check below.
-For every finding include a bbox: {"x": <left%>, "y": <top%>, "w": <width%>, "h": <height%>} as % of image dimensions.
+For every finding include a bbox: {{"x": <left%>, "y": <top%>, "w": <width%>, "h": <height%>}} as % of image dimensions.
 
-CHECK 1 — Required views/sections
-For each view listed, report whether it is present and what scale is shown on it:
-SECTION A-A FOR PILE, SECTION Z-Z (PILE),
-SECTION A-A FOR PILECAP & PIER, SECTION B-B FOR PILECAP & PIER,
-PLAN OF PILECAP, REINFORCEMENT PLAN OF PILECAP,
-DETAIL A (ring details), TABLE-1, LAP LENGTH TABLE, SCHEDULE OF REINFORCEMENT
-
-CHECK 2 — Notes completeness
-Check whether the NOTES section contains each of these items and extract its value.
-Use EXACTLY these item values in the "item" field — no variations:
-  "pile_length", "pile_fixity", "pile_diameter", "max_pile_load",
-  "bore_log_ref", "concrete_pile", "concrete_pilecap", "concrete_pier",
-  "steel_grade", "pile_projection", "irc_code_ref"
+The following section/view labels were extracted from the PDF text layer (authoritative — do not second-guess presence of these views):
+{SECTION_LABELS}
 
 CHECK 3 — Label & annotation quality
-Scan all visible text labels and annotations for GENUINE ERRORS ONLY:
-- Spelling errors: only flag if you can clearly read the incorrect letters AND the correct
-  spelling is unambiguous. Do NOT flag a word that looks correct at normal reading speed.
-  Do NOT flag CONTRACTOR, REINFORCEMENT, FOUNDATION, or other common engineering words
-  unless you can see the misspelling character-by-character with certainty.
+The label text above was read directly from the PDF — use these strings (not the image) to check spelling.
+Flag GENUINE ERRORS ONLY:
+- Spelling errors in the labels listed above: only flag if the misspelling is unambiguous. Do NOT flag
+  CONTRACTOR, REINFORCEMENT, FOUNDATION, or other common engineering words unless you can see the
+  misspelling character-by-character with certainty.
 - Bar mark labels in section views that don't match the schedule
 - Scale labels that are clearly inconsistent with each other
 - Any label that clearly points to the wrong component
@@ -161,16 +178,12 @@ Scan all visible text labels and annotations for GENUINE ERRORS ONLY:
 - Concrete grade mismatch: if a section view or plan view has a concrete grade annotation
   (e.g. "M35", "M50") directly labelled on the structural drawing, cross-check it against
   the grade stated in the NOTES section of the same drawing. If they differ, flag it.
-  Example: notes say M50 for pilecap/pier but SECTION A-A FOR PILECAP & PIER shows "M35".
 
 STRICT EXCLUSIONS — do NOT flag any of the following:
-- "SECTION A-A FOR PILE" vs "SECTION A-A FOR PILECAP & PIER" — these are two different sections with
-  correct distinct names; the "FOR PILE" vs "FOR PILECAP & PIER" suffix is intentional, not inconsistent.
-- "BUNDLE BARS" — this is the correct engineering term; do not flag it as a grammar issue.
+- "SECTION A-A FOR PILE" vs "SECTION A-A FOR PILECAP & PIER" — intentional distinct names.
+- "BUNDLE BARS" — correct engineering term; do not flag as grammar issue.
 - Dimension values, units, or notation styles that follow standard structural drawing conventions.
-- Text density, font size, or legibility observations about schedule tables (e.g. "text appears cut off
-  in schedule", "bar marks are small and difficult to cross-reference"). These are style observations,
-  not annotation errors — do NOT include them in label_issues.
+- Text density, font size, or legibility observations about schedule tables.
 Only report items you are CERTAIN are incorrect. When in doubt, omit.
 
 CHECK 4 — Dimension completeness (MISSING DIMENSIONS ONLY)
@@ -191,7 +204,7 @@ CRITICAL RULES for CHECK 4:
 
 CHECK 5 — Cross-section bar count & quality
 For every circular or rectangular cross-section view visible in the drawing (e.g. SECTION Z-Z for pile,
-SECTION A-A, B-B, C-C, D-D for pilecap/pier), do the following:
+SECTION A-A, B-B, C-C for pilecap/pier), do the following:
 
 a) COUNT the filled dot/circle symbols that represent longitudinal reinforcement bars inside that view.
    - Circular pile section: count dots arranged around the ring perimeter.
@@ -207,13 +220,9 @@ b) SPACING — Detailed spacing analysis for each cross-section:
    - Compute the expected angular gap = 360° ÷ bar_count (use pair_count if bundle bars).
    - For EACH irregularity found, add one entry to spacing_issues:
      • "clustering": two consecutive bars/pairs that appear visibly closer together than the average gap
-       (e.g. two bars that should be ~17° apart appear at less than ~10° separation — they look
-       "squeezed" next to each other while the remaining bars have equal spacing)
-     • "gap": an arc more than ~1.5× the expected gap with no bar (a large empty stretch of ring)
-     • "missing_bar": a location where the geometry strongly implies a bar should exist but none is drawn
-       (e.g. every 17° there is a bar, but at one spot the next bar is ~34° away, indicating one is absent)
-   - For bundle-bar PAIRS: treat each pair as one unit. A pair touching or nearly overlapping another pair
-     is "clustering". A span of ~2× the pair-to-pair gap with no pair is "gap".
+     • "gap": an arc more than ~1.5× the expected gap with no bar
+     • "missing_bar": geometry strongly implies a bar should exist but none is drawn
+   - For bundle-bar PAIRS: treat each pair as one unit.
 
    For RECTANGULAR sections (pilecap/pier):
    - Count bars on each side (top, bottom, left, right).
@@ -221,84 +230,42 @@ b) SPACING — Detailed spacing analysis for each cross-section:
 
    Return an array — empty [] if spacing looks fully uniform:
    "spacing_issues": [
-     {
-       "type": "clustering" | "gap" | "missing_bar",
-       "location": "bottom-left, approximately 7–8 o'clock",
-       "description": "Two bundle-bar pairs appear much closer together than the average spacing"
-     }
+     {{"type": "clustering" | "gap" | "missing_bar", "location": "approx 7–8 o'clock", "description": "..."}}
    ]
    Also set "spacing_uniform": false if spacing_issues is non-empty, true if empty.
 
-c) ERRONEOUS BOXES: Skip this check — always return an empty array []. Do not flag any boxes.
+c) ERRONEOUS BOXES: Skip — always return [].
 
-CHECK 6 — Cross-reference completeness and unlabeled views
+CHECK 6 — Unlabeled views
+The following section labels are confirmed present in this drawing (extracted from PDF text):
+{SECTION_LABELS}
 
-a) CUT MARK CROSS-REFERENCE:
-   SEARCH DIRECTION — start from drawn cut-mark arrow symbols, not from section titles:
-   Step 1: Find every physical cut-mark symbol — a DRAWN graphical crossing-arrow drawn ON
-           a plan or elevation view to show WHERE a cross-section is taken.
-   Step 2: Read the letter label on that arrow (A, B, C, D, …).
-   Step 3: Check whether a titled view "SECTION X-X" exists ANYWHERE else in the drawing.
-   Step 4: If no such titled view exists → flag it.
-   Example: drawn arrows labeled "D" appear on PLAN OF PILECAP but no "SECTION D-D" view
-            is drawn anywhere → flag missing_section="SECTION D-D".
+The following cut-mark letters were found in the PDF but have NO corresponding section view label — they may be drawn but unlabeled, or the section may be completely absent:
+{UNRESOLVED_CUTS}
 
-   CRITICAL EXCLUSIONS — read carefully before flagging anything:
-   - A section's OWN TITLE TEXT is proof it exists, not a missing reference. If the text
-     "SECTION C-C" appears as the printed title label of a drawn view, SECTION C-C is
-     PRESENT in the drawing. Do NOT flag it as missing.
-   - "found_on_view" must be a DIFFERENT view from "missing_section". A section cannot
-     contain a cut-mark arrow pointing to itself — if your logic produces this, discard it.
-   - Do NOT flag section names that appear as text within another section's title, label,
-     notes, annotations, or any tabular element (LAP LENGTH TABLE, SCHEDULE OF REINFORCEMENT,
-     TABLE-1). Text references are never cut-mark arrows.
-   - ONLY flag when you see the actual drawn graphical arrow symbol on a plan/elevation view.
-   - "found_on_view" must name a structural drawing view (e.g. "PLAN OF PILECAP",
-     "SECTION B-B FOR PILECAP & PIER") — never a table, schedule, or the same section.
+For each entry in the unresolved list above:
+- Look visually in the drawing for a drawn structural view (cross-section circle, rectangle, elevation) that corresponds to that cut letter.
+- If you can see a drawn view for it but it has NO title label → add it to unlabeled_views.
+- If no drawn view at all exists for it → it is a missing section (handled separately, do NOT add here).
 
-b) UNLABELED VIEWS — systematic scan of the entire drawing:
-   For EVERY visible drawn component in the drawing — every cross-section circle or rectangle,
-   every elevation outline, every plan view boundary, every detail sketch — check whether it
-   has a title label (text such as "SECTION X-X", "PLAN OF ...", "DETAIL A") located
-   above, below, or immediately beside it.
-
-   Process: mentally map each drawn structural component to its title. Any drawn component
-   that has NO title anywhere nearby is an unlabeled view — flag it.
-
-   Pay particular attention to:
-   - Views drawn immediately adjacent to or beside another labeled view (a common omission)
-   - Small circular cross-sections or rectangular outlines that appear standalone with no text
-
-   Flag each unlabeled drawn view separately with its approximate location bbox.
+Additionally, scan the entire drawing for any OTHER drawn structural views not in the confirmed label list above that also lack a title label. Flag each separately in unlabeled_views.
 
 Return ONLY valid JSON (no markdown):
-{
-  "sections": [
-    {"name": "SECTION Z-Z (PILE)", "present": true, "scale": "1:30", "bbox": {"x":5,"y":60,"w":18,"h":15}}
-  ],
-  "notes_check": [
-    {"item": "pile_length", "present": true, "value": "12.0 M", "bbox": {"x":40,"y":70,"w":20,"h":3}},
-    {"item": "bore_log_ref", "present": false, "value": null, "bbox": null}
-  ],
+{{
   "label_issues": [
-    {"category": "Spelling", "description": "CONTARCTOR should be CONTRACTOR", "suggestion": "Fix spelling", "bbox": {"x":10,"y":55,"w":15,"h":3}}
+    {{"category": "Spelling", "description": "CONTARCTOR should be CONTRACTOR", "suggestion": "Fix spelling", "bbox": {{"x":10,"y":55,"w":15,"h":3}}}}
   ],
   "dimension_issues": [
-    {"description": "Pile spacing c/c dimension is not shown anywhere in the plan view", "suggestion": "Add pile c/c spacing dimension to PLAN OF PILECAP", "bbox": {"x":25,"y":20,"w":20,"h":25}}
+    {{"description": "Pile spacing c/c dimension is not shown anywhere in the plan view", "suggestion": "Add pile c/c spacing dimension to PLAN OF PILECAP", "bbox": {{"x":25,"y":20,"w":20,"h":25}}}}
   ],
   "cross_section_checks": [
-    {"section_name": "Z-Z", "component": "pile", "bar_mark": "x", "visual_count": 21, "is_bundle": true, "spacing_uniform": true, "spacing_issues": [], "bbox": {"x":5,"y":60,"w":18,"h":15}}
+    {{"section_name": "Z-Z", "component": "pile", "bar_mark": "x", "visual_count": 21, "is_bundle": true, "spacing_uniform": true, "spacing_issues": [], "bbox": {{"x":5,"y":60,"w":18,"h":15}}}}
   ],
-  "erroneous_boxes": [
-    {"description": "Rectangular border enclosing SECTION A-A FOR PILE", "bbox": {"x":3,"y":5,"w":22,"h":20}}
-  ],
-  "missing_referenced_sections": [
-    {"cut_letter": "D", "found_on_view": "SECTION B-B FOR PILECAP & PIER", "missing_section": "SECTION D-D", "bbox": {"x":0,"y":0,"w":60,"h":50}}
-  ],
+  "erroneous_boxes": [],
   "unlabeled_views": [
-    {"description": "Circular cross-section view adjacent to SECTION C-C has no title label", "bbox": {"x":30,"y":10,"w":12,"h":15}}
+    {{"description": "Cross-section view for cut letter D is drawn but has no SECTION D-D title label", "bbox": {{"x":30,"y":10,"w":12,"h":15}}}}
   ]
-}
+}}
 """
 
 
@@ -342,37 +309,51 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
     from concurrent.futures import ThreadPoolExecutor
 
     text_data        = _extract_text(pdf_bytes)
+
+    # Build the dynamic review prompt — inject pdfplumber-extracted labels into placeholders.
+    section_labels   = text_data.get('all_label_text', [])
+    cut_letters      = text_data.get('cut_letters', set())
+    section_view_pos = text_data.get('section_view_positions', {})
+    text_missing     = _text_missing_sections(cut_letters, section_view_pos)
+
+    label_block = '\n'.join(f'  • {l}' for l in section_labels) or '  (none extracted)'
+    unresolved_block = (
+        '\n'.join(f'  • Cut letter "{m["cut_letter"]}" → {m["missing_section"]} not found'
+                  for m in text_missing)
+        or '  (none — all cut letters resolved)'
+    )
+    review_prompt = REVIEW_PROMPT_TEMPLATE.format(
+        SECTION_LABELS=label_block,
+        UNRESOLVED_CUTS=unresolved_block,
+    )
+
     # Full-page image at 1.3× for the review pass (sections, notes, labels).
-    # 1.3× gives ~1.69× more pixels vs 1.0×, improving bar-dot resolution in
-    # cross-section views without exceeding the 512MB Render memory budget.
     full_images_b64  = _pdf_to_image_b64(pdf_bytes, scale=1.3)
-    # Schedule-strip image at 1.5×, cropped to just right of the schedule's
-    # leftmost column. Crop is derived from pdfplumber's actual header positions
-    # so it works regardless of drawing layout — not a hardcoded fraction.
+    # Schedule-strip image at 1.5×, cropped to just right of the schedule's leftmost column.
     _sched_pos = text_data.get('schedule_section_positions', {})
     if _sched_pos:
         _leftmost = min(pos['x'] for pos in _sched_pos.values() if pos)
-        _sched_crop = 1.0 - max(0.0, _leftmost - 5.0) / 100.0  # 5 % margin
+        _sched_crop = 1.0 - max(0.0, _leftmost - 5.0) / 100.0
     else:
-        _sched_crop = 0.50  # pdfplumber found nothing → right half as fallback
+        _sched_crop = 0.50
     sched_images_b64 = _pdf_to_image_b64(pdf_bytes, scale=1.5, crop_right_pct=_sched_crop)
 
-    # Run three API calls in parallel — all finish in ~30s total
+    # Run three API calls in parallel:
     # (1) extraction: schedule/title/notes/TABLE-1 — Haiku/Sonnet, schedule strip, 8192 tok
-    # (2) review: CHECK 1-6 — Haiku, full page, 8192 tok
-    # (3) shape dims: bar shape sketch dimensions only — Haiku, schedule strip, 2048 tok
+    # (2) review: CHECK 3-6 — Haiku, full page, 8192 tok (CHECK 1/2 removed — text handles them)
+    # (3) shape dims: bar shape sketch dimensions — Haiku, schedule strip, 2048 tok
     vision_data, review_data, shape_dims_data = None, None, None
     extract_images = sched_images_b64 if sched_images_b64 else full_images_b64
     if extract_images or full_images_b64:
         with ThreadPoolExecutor(max_workers=3) as pool:
             f_extract    = pool.submit(_call_vision, extract_images, EXTRACTION_PROMPT,
                                        EXTRACT_MODEL, 8192)
-            f_review     = pool.submit(_call_vision, full_images_b64, REVIEW_PROMPT,
+            f_review     = pool.submit(_call_vision, full_images_b64, review_prompt,
                                        REVIEW_MODEL, 8192)
             f_shape_dims = pool.submit(_call_vision, extract_images, SHAPE_DIMS_PROMPT,
                                        REVIEW_MODEL, 2048)
-            vision_data    = f_extract.result()
-            review_data    = f_review.result()
+            vision_data     = f_extract.result()
+            review_data     = f_review.result()
             shape_dims_data = f_shape_dims.result()
         log.info('All vision calls complete — extraction=%s review=%s shape_dims=%s',
                  'ok' if vision_data else 'failed',
@@ -380,28 +361,28 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                  'ok' if shape_dims_data else 'failed')
 
     result = {
-        'title_block':                  {},
-        'schedule':                     {},
-        'schedule_section_bboxes':      {},
-        'notes':                        {},
-        'table_1':                      [],
-        'sections':                     [],
-        'notes_check':                  [],
-        'label_issues':                 [],
-        'dimension_issues':             [],
-        'cross_section_checks':         [],
-        'erroneous_boxes':              [],
-        'missing_referenced_sections':  [],
-        'unlabeled_views':              [],
-        'raw_text':                     text_data.get('raw_lines', []),
-        'schedule_section_positions':   text_data.get('schedule_section_positions', {}),
-        'section_view_positions':       text_data.get('section_view_positions', {}),
+        'title_block':                   {},
+        'schedule':                      {},
+        'schedule_section_bboxes':       {},
+        'notes':                         {},
+        'table_1':                       [],
+        'label_issues':                  [],
+        'dimension_issues':              [],
+        'cross_section_checks':          [],
+        'erroneous_boxes':               [],
+        'missing_referenced_sections':   text_missing,   # from pdfplumber text (authoritative)
+        'unlabeled_views':               [],
+        'sections_from_text':            text_data.get('sections_from_text', []),
+        'notes_completeness_from_text':  text_data.get('notes_completeness_from_text', []),
+        'raw_text':                      text_data.get('raw_lines', []),
+        'schedule_section_positions':    text_data.get('schedule_section_positions', {}),
+        'section_view_positions':        section_view_pos,
     }
 
     if vision_data:
-        result['title_block']           = vision_data.get('title_block') or {}
-        result['notes']                 = vision_data.get('notes') or {}
-        result['table_1']               = vision_data.get('table_1') or []
+        result['title_block']             = vision_data.get('title_block') or {}
+        result['notes']                   = vision_data.get('notes') or {}
+        result['table_1']                 = vision_data.get('table_1') or []
         result['schedule_section_bboxes'] = vision_data.get('schedule_section_bboxes') or {}
         raw_sched = vision_data.get('schedule') or []
         for row in raw_sched:
@@ -411,8 +392,6 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                 continue
             comp_dict = result['schedule'].setdefault(comp, {})
             if bm in comp_dict:
-                # Same bar mark appears twice (e.g. two 'y' rows for ring zones).
-                # Accumulate counts and total lengths; keep other fields from first row.
                 existing = comp_dict[bm]
                 def _add_field(key):
                     a = _norm_float(existing.get(key))
@@ -425,7 +404,6 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
             else:
                 comp_dict[bm] = row
 
-    # Merge shape dimensions from the dedicated lightweight call into each bar's schedule row.
     if shape_dims_data:
         for comp, bars in (shape_dims_data.get('shape_dims') or {}).items():
             comp = comp.lower()
@@ -436,14 +414,12 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                     bar_row['shape_dimensions'] = dims
 
     if review_data:
-        result['sections']                    = review_data.get('sections')                    or []
-        result['notes_check']                 = review_data.get('notes_check')                 or []
-        result['label_issues']                = review_data.get('label_issues')                or []
-        result['dimension_issues']            = review_data.get('dimension_issues')            or []
-        result['cross_section_checks']        = review_data.get('cross_section_checks')        or []
-        result['erroneous_boxes']             = review_data.get('erroneous_boxes')             or []
-        result['missing_referenced_sections'] = review_data.get('missing_referenced_sections') or []
-        result['unlabeled_views']             = review_data.get('unlabeled_views')             or []
+        result['label_issues']       = review_data.get('label_issues')       or []
+        result['dimension_issues']   = review_data.get('dimension_issues')   or []
+        result['cross_section_checks'] = review_data.get('cross_section_checks') or []
+        result['erroneous_boxes']    = review_data.get('erroneous_boxes')    or []
+        # Merge any Claude-reported unlabeled views with text-derived ones
+        result['unlabeled_views']    = review_data.get('unlabeled_views')    or []
 
     # Fill title block / notes gaps from pdfplumber text
     for key, val in text_data.get('title_block', {}).items():
@@ -535,23 +511,84 @@ def _extract_text(pdf_bytes: bytes) -> dict:
     except Exception as e:
         raw_lines.append(f'[pdfplumber error: {e}]')
 
-    schedule_section_positions, section_view_positions = {}, {}
+    schedule_section_positions, section_view_positions, cut_letters = {}, {}, set()
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if pdf.pages:
-                schedule_section_positions, section_view_positions = \
+                schedule_section_positions, section_view_positions, cut_letters = \
                     _extract_positions(pdf.pages[0])
     except Exception as e:
         log.warning('_extract_positions failed: %s', e)
 
+    sections_from_text         = _sections_from_text(section_view_positions)
+    notes_completeness_from_text = _notes_completeness_from_text(raw_lines)
+    all_label_text             = sorted(section_view_positions.keys())
 
     return {
-        'title_block':              title_block,
-        'notes':                    notes,
-        'raw_lines':                raw_lines,
-        'schedule_section_positions': schedule_section_positions,
-        'section_view_positions':   section_view_positions,
+        'title_block':                   title_block,
+        'notes':                         notes,
+        'raw_lines':                     raw_lines,
+        'schedule_section_positions':    schedule_section_positions,
+        'section_view_positions':        section_view_positions,
+        'cut_letters':                   cut_letters,
+        'sections_from_text':            sections_from_text,
+        'notes_completeness_from_text':  notes_completeness_from_text,
+        'all_label_text':                all_label_text,
     }
+
+
+# ── Text-analysis helpers ─────────────────────────────────────────────────────
+
+def _sections_from_text(section_view_positions: dict) -> list:
+    """Return presence status for each required PPP section using pdfplumber label positions."""
+    all_labels = ' '.join(section_view_positions.keys()).upper()
+    result = []
+    for name, keywords in _REQUIRED_PPP_SECTIONS:
+        present = any(kw.upper() in all_labels for kw in keywords)
+        bbox = None
+        if present:
+            for label, pos in section_view_positions.items():
+                if any(kw.upper() in label for kw in keywords):
+                    bbox = pos
+                    break
+        result.append({'name': name, 'present': present, 'bbox': bbox})
+    return result
+
+
+def _notes_completeness_from_text(raw_lines: list) -> list:
+    """Return presence status for each required note item using keyword scan of raw text."""
+    text = '\n'.join(raw_lines).upper()
+    # Concrete keys share the same grade keywords — if any grade found, all three are covered.
+    concrete_keys = ('concrete_pile', 'concrete_pilecap', 'concrete_pier')
+    concrete_found = any(kw.upper() in text for kw in _NOTE_KEYWORDS.get('concrete_pile', []))
+    result = []
+    for item_key, keywords in _NOTE_KEYWORDS.items():
+        if item_key in concrete_keys:
+            present = concrete_found
+        else:
+            present = any(kw.upper() in text for kw in keywords)
+        result.append({'item': item_key, 'present': present, 'value': None})
+    return result
+
+
+def _text_missing_sections(cut_letters: set, section_view_positions: dict) -> list:
+    """Cross-reference cut-mark letters against section label text. Returns missing list."""
+    # Find which letters are resolved by a SECTION X-X label in the drawing
+    found_section_letters: set = set()
+    for label in section_view_positions.keys():
+        m = re.search(r'SECTION\s+([A-Z])-\1', label.upper())
+        if m:
+            found_section_letters.add(m.group(1))
+
+    missing = []
+    for letter in sorted(cut_letters - found_section_letters):
+        missing.append({
+            'cut_letter': letter,
+            'found_on_view': 'drawing (cut marks detected in PDF text)',
+            'missing_section': f'SECTION {letter}-{letter}',
+            'bbox': None,
+        })
+    return missing
 
 
 # ── pdfplumber position extraction ───────────────────────────────────────────
@@ -599,14 +636,22 @@ def _extract_positions(page) -> tuple:
 
     # ── 2. Find section view labels on the left side ─────────────────────────
     line_words: dict = {}
+    single_letter_counts: dict = {}
     for w in words:
         if w['x0'] >= schedule_x_min:
             continue
         line_y = round(w['top'] / 3) * 3
         line_words.setdefault(line_y, []).append(w)
+        # Track isolated single uppercase letters for cut-mark detection
+        t = w['text'].strip()
+        if len(t) == 1 and t.isupper() and t.isalpha():
+            single_letter_counts[t] = single_letter_counts.get(t, 0) + 1
+
+    # Cut-mark letters appear in PAIRS (at both ends of a cut line)
+    cut_letters = {letter for letter, count in single_letter_counts.items() if count >= 2}
 
     section_view_positions = {}
-    TRIGGER_WORDS = {'SECTION', 'TABLE-1', 'LAP', 'NOTES', 'DETAIL'}
+    TRIGGER_WORDS = {'SECTION', 'TABLE-1', 'LAP', 'NOTES', 'DETAIL', 'PLAN', 'REINFORCEMENT'}
     for line_y, lw in sorted(line_words.items()):
         lw_sorted = sorted(lw, key=lambda x: x['x0'])
         line_text = ' '.join(w['text'] for w in lw_sorted).upper().strip()
@@ -619,11 +664,12 @@ def _extract_positions(page) -> tuple:
             section_view_positions[name] = to_pct(x0, top, x1, top + view_h_pts)
 
     log.info(
-        '_extract_positions: schedule_sections=%s section_views=%d',
+        '_extract_positions: schedule_sections=%s section_views=%d cut_letters=%s',
         list(schedule_section_positions.keys()),
         len(section_view_positions),
+        sorted(cut_letters),
     )
-    return schedule_section_positions, section_view_positions
+    return schedule_section_positions, section_view_positions, cut_letters
 
 
 # ── Claude vision pass ────────────────────────────────────────────────────────

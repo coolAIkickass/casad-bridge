@@ -314,8 +314,8 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
         UNRESOLVED_CUTS=unresolved_block,
     )
 
-    # Full-page image at 2.5× for the review pass (sections, notes, labels).
-    full_images_b64  = _pdf_to_image_b64(pdf_bytes, scale=2.5)
+    # Full-page image at 1.3× for the review pass — proven safe on Render's 512MB limit.
+    full_images_b64  = _pdf_to_image_b64(pdf_bytes, scale=1.3)
     # Schedule-strip image at 1.5×, cropped to just right of the schedule's leftmost column.
     _sched_pos = text_data.get('schedule_section_positions', {})
     if _sched_pos:
@@ -336,6 +336,9 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                 pos = _sched_pos.get(comp)
                 if not pos:
                     continue
+                if pos.get('h', 0) <= 0:
+                    log.warning('Skipping %s band — non-positive height %.2f', comp, pos.get('h', 0))
+                    continue
                 clip = (
                     max(0.0, (pos['x'] - 2.0) / 100),   # 2% left margin (captures bar mark col)
                     max(0.0, (pos['y'] - 1.0) / 100),   # 1% top margin
@@ -345,9 +348,16 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                 imgs = _pdf_to_image_b64(pdf_bytes, scale=2.5, clip_rect_pct=clip)
                 shape_band_images.extend(imgs)
                 _band_comps.append(comp)
-            if shape_band_images:
+            # Require at least 2 valid component bands; a single band usually means
+            # pdfplumber found a false positive but missed most schedule sections.
+            if len(shape_band_images) >= 2:
                 log.info('Schedule bands: %d component band image(s) at 2.5× (%s)',
                          len(shape_band_images), _band_comps)
+            else:
+                log.warning('Only %d valid band(s) found (%s) — falling back to schedule strip',
+                            len(shape_band_images), _band_comps)
+                shape_band_images = []
+                _band_comps = []
         except Exception as e:
             log.warning('Component band rendering failed (%s) — falling back to schedule strip', e)
             shape_band_images = []
@@ -652,9 +662,13 @@ def _extract_positions(page) -> tuple:
         schedule_words_x.append(w['x0'])
         text = w['text'].strip().upper()
         for comp, keyword in COMP_KEYWORDS.items():
-            if text == keyword and comp not in comp_header_y:
-                comp_header_y[comp] = w['top']
-                break
+            # Only consider words in the schedule body (above 80% = excludes title block).
+            # Take the topmost occurrence — AutoCAD PDFs store text in drawing order,
+            # not top-to-bottom, so the first word in stream order may be a false positive
+            # from the title block drawn later in the PDF stream.
+            if text == keyword and w['top'] < ph * 0.80:
+                if comp not in comp_header_y or w['top'] < comp_header_y[comp]:
+                    comp_header_y[comp] = w['top']
 
     sorted_comps = sorted(comp_header_y.items(), key=lambda kv: kv[1])
     sect_x0 = min(schedule_words_x) if schedule_words_x else schedule_x_min

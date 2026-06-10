@@ -53,50 +53,77 @@ _model_alias = os.environ.get('ED_MODEL', 'haiku').lower()
 EXTRACT_MODEL = 'claude-haiku-4-5-20251001' if _model_alias == 'haiku' else 'claude-sonnet-4-6'
 REVIEW_MODEL  = 'claude-haiku-4-5-20251001'  # always Haiku — review call doesn't need Sonnet
 
-EXTRACTION_PROMPT = """You are analyzing a CASAD AutoCAD engineering drawing for a bridge structure (Pile-Pilecap-Pier foundation).
+SCHEDULE_PROMPT_TEMPLATE = """You are analyzing reinforcement schedule tables from a CASAD bridge engineering drawing.
 
-Extract ALL of the following as precisely as possible:
+IMAGE LAYOUT:
+{IMAGE_MAP}
 
-1. SCHEDULE OF REINFORCEMENT — multiple sections exist (Pilecap, Pile per pile, Pier).
+PART A — SCHEDULE ROWS
+For EACH row in the schedule tables, extract:
+{
+  "bar_mark": "a",
+  "component": "pilecap" | "pile" | "pier",
+  "reinforcement_text": "25Φ – 42 NOS.",
+  "bar_dia_mm": 25,
+  "spacing_mm": null,
+  "count_text": "42",
+  "count": 42,
+  "length_m": 13.425,
+  "total_length_m": 563.85,
+  "unit_wt_kg_m": 3.857,
+  "total_wt_kg": 2174.77
+}
 
-   First, identify the bounding box of EACH COMPONENT'S ENTIRE SCHEDULE SECTION (the full table block
-   for that component, including its header row). Return these in "schedule_section_bboxes".
-   Bboxes are percentages of the full image: {"x": <left%>, "y": <top%>, "w": <width%>, "h": <height%>}.
-   Example: {"pilecap": {"x": 63, "y": 22, "w": 34, "h": 14}, "pile": {...}, "pier": {...}}
+COLUMN MAPPING RULES — read carefully:
+- bar_dia_mm: the φ / DIA column — always a small integer (8, 10, 12, 16, 20, 25, 32). Do NOT confuse with length or spacing.
+- spacing_mm: the c/c spacing column — null for longitudinal bars (shown as "-"). For rings/stirrups this is the pitch in mm.
+- length_m: the individual bar LENGTH in metres — a decimal like 9.160, 4.049, 13.425. Do NOT use spacing or weight here.
+- count: the total number of bars. May contain multiplication expressions.
+  ALWAYS use the value AFTER the "=" sign as the count — it is the total.
+  Examples: "4×13 = 52" → count=52, count_text="4×13 = 52"
+            "21 * 4 = 84" → count=84, count_text="21 * 4 = 84"
+            "6 × 21 = 126" → count=126, count_text="6 × 21 = 126"
+  Both "×" and "*" are multiplication symbols. The number BEFORE "=" is never the count.
+- If the same bar mark appears in two rows (e.g. two 'y' rows for different ring zones), return BOTH rows separately.
 
-   Then for EACH row in any schedule table, extract:
-   {
-     "bar_mark": "a",
-     "component": "pilecap" | "pile" | "pier",
-     "reinforcement_text": "25Φ – 42 NOS.",
-     "bar_dia_mm": 25,
-     "spacing_mm": null,
-     "count_text": "42",
-     "count": 42,
-     "length_m": 13.425,
-     "total_length_m": 563.85,
-     "unit_wt_kg_m": 3.857,
-     "total_wt_kg": 2174.77
-   }
+BAR MARK COMPLETENESS — extract ALL rows including suffixed marks:
+k1, j1, i1, f1, y1, x1, z — scan to the bottom of each component section. Do not stop early.
 
-   COLUMN MAPPING RULES — read these carefully:
-   - bar_dia_mm: the φ / DIA column — always a small integer (8, 10, 12, 16, 20, 25, 32). Do NOT confuse with length or spacing.
-   - spacing_mm: the c/c spacing column — null for longitudinal bars (shown as "-"). For rings/stirrups this is the pitch in mm.
-   - length_m: the individual bar LENGTH in metres — a decimal number like 9.160, 4.049, 13.425. Do NOT use spacing or weight here.
-   - count: the total number of bars. The count column may contain multiplication expressions.
-     ALWAYS use the value AFTER the "=" sign as the count — it is the total.
-     Examples: "4×13 = 52" → count=52, count_text="4×13 = 52"
-               "21 * 4 = 84" → count=84, count_text="21 * 4 = 84"
-               "6 × 21 = 126" → count=126, count_text="6 × 21 = 126"
-     Both "×" and "*" are multiplication symbols. The number BEFORE "=" is never the count.
-   - If the same bar mark appears in two rows (e.g. two 'y' rows for different ring zones), return BOTH rows separately with the same bar_mark and component.
+PART B — SHAPE DIMENSIONS
+Also look at the "SHAPE OF BAR" sketch column in each row. Each row has a small line-sketch of
+the bar shape with numeric labels written ON the line segments.
+Read ONLY numbers printed ON the shape sketch lines inside the shape column cell.
 
-   BAR MARK COMPLETENESS — extract ALL rows, including bars with suffixed marks:
-   k1, j1, i1, f1, y1, x1, z — these small labels appear at the end of each component section.
-   Do not stop after the first few rows. Scan the full table to the bottom of each section.
-   No per-row bbox is needed — section bboxes handle highlighting.
+CRITICAL RULES for shape dimensions:
+- Do NOT read from the LENGTH, TOTAL LENGTH, WEIGHT, or SPACING columns.
+- Each shape segment length is typically between 100 mm and 15000 mm.
+- BAR MARK DIGIT BLEED: Bar marks with numeric suffixes (f1, y1, i1, j1, k1, x1, d1) appear
+  immediately LEFT of the shape sketch column. The trailing digit is NOT part of a shape dimension.
+  Example: bar mark "f1", sketch shows "300" → read 300, NOT 1300.
+  A 3-digit segment must remain 3 digits — do not prepend any digit from the bar mark label.
+- If you cannot clearly read a bar's shape sketch, omit that bar entirely (do not guess).
+- Return empty {} for any component with no clearly readable shape dimensions.
 
-2. TITLE BLOCK — extract:
+Return ONLY valid JSON (no markdown, no extra text):
+{
+  "schedule": [
+    {"bar_mark": "a", "component": "pilecap", "bar_dia_mm": 25, "spacing_mm": null,
+     "count_text": "42", "count": 42, "length_m": 13.425, "total_length_m": 563.85,
+     "unit_wt_kg_m": 3.857, "total_wt_kg": 2174.77, "reinforcement_text": "25Φ – 42 NOS."}
+  ],
+  "shape_dims": {
+    "pilecap": {"a": [825, 4350, 825], "b": [825, 4350, 825], "e": [450, 3600]},
+    "pile":    {"x": [300, 13125]},
+    "pier":    {"g": [500, 8956]}
+  }
+}
+Use null for any schedule value not found or not legible.
+"""
+
+TITLE_PROMPT = """You are analyzing a CASAD AutoCAD engineering drawing for a bridge structure (Pile-Pilecap-Pier foundation).
+Extract the title block, notes, and TABLE-1 from this image (right-side strip of the drawing).
+
+1. TITLE BLOCK — extract:
    {
      "project_name": "...",
      "drawing_number": "IND/RAJ/PPP-01A",
@@ -113,7 +140,7 @@ Extract ALL of the following as precisely as possible:
      "bbox": {"x": 63.0, "y": 77.0, "w": 35.0, "h": 21.0}
    }
 
-3. NOTES — extract these specific values if present:
+2. NOTES — extract these specific values if present:
    {
      "pile_length_m": 12.0,
      "pile_fixity_m": 7.9,
@@ -131,7 +158,7 @@ Extract ALL of the following as precisely as possible:
    (e.g. "Concrete Mix M35", "All M35", or just "M35" in the notes), set
    concrete_pile, concrete_pilecap AND concrete_pier all to that grade.
 
-4. TABLE-1 (levels table, if visible) — for each pier row:
+3. TABLE-1 (levels table, if visible) — for each pier row:
    {
      "pier_id": "P7",
      "top_pier_cap_m": 98.5,
@@ -142,14 +169,8 @@ Extract ALL of the following as precisely as possible:
      "bbox": {"x": 82.0, "y": 2.0, "w": 16.0, "h": 3.0}
    }
 
-Return ONLY valid JSON with this structure (no markdown, no extra text):
+Return ONLY valid JSON (no markdown, no extra text):
 {
-  "schedule": [...],
-  "schedule_section_bboxes": {
-    "pilecap": {"x": 63, "y": 22, "w": 34, "h": 14},
-    "pile":    {"x": 63, "y": 36, "w": 34, "h": 12},
-    "pier":    {"x": 63, "y": 48, "w": 34, "h": 22}
-  },
   "title_block": {...},
   "notes": {...},
   "table_1": [...]
@@ -269,46 +290,6 @@ Return ONLY valid JSON (no markdown):
 """
 
 
-SHAPE_DIMS_PROMPT = """From this engineering drawing schedule, extract bar shape dimensions.
-
-IMAGE LAYOUT — you will receive 1 or 3 images:
-- 3 images (normal): Image 1 = PILECAP rows, Image 2 = PILE rows, Image 3 = PIER rows.
-  Each is a high-resolution crop of that component's block in the schedule. Map your output
-  to the correct component based on which image you read each bar from.
-- 1 image (fallback): the full schedule strip — identify components by their header labels.
-
-Look at the "SHAPE OF BAR" sketch column in the reinforcement schedule table.
-Each bar row has a small line-sketch of the bar shape drawn inside that column cell.
-Read the numeric labels written DIRECTLY ON the line segments of that sketch — these
-are the segment lengths, typically 2–5 numbers per bar (e.g. 825, 4350, 825).
-
-CRITICAL RULES — read carefully:
-- Read ONLY numbers that are printed ON the shape sketch lines inside the shape column cell.
-- Do NOT read from the LENGTH column, TOTAL LENGTH column, WEIGHT column, or SPACING column.
-- Do NOT read overall structural dimensions (pilecap width, pile length, pier height, etc.)
-  from any drawing view outside the schedule table.
-- Each number should be a bar segment length in mm, typically between 100 mm and 15000 mm.
-- BAR MARK DIGIT BLEED — CRITICAL: Bar marks with numeric suffixes (f1, y1, i1, j1, k1,
-  x1, d1) appear in the leftmost column, immediately LEFT of the shape sketch column.
-  The trailing digit in the bar mark is NOT part of a shape dimension.
-  Example: bar mark "f1", shape sketch shows "300" → read 300, NOT 1300.
-  A 3-digit segment (like 300, 825, 500) must remain 3 digits — do not prepend any digit
-  from the bar mark label in the adjacent column.
-- Numbers like 1825 in a bar shape sketch that match no logical segment (when the bar's
-  other segments are ~825 mm) are likely misreads — omit them rather than guessing.
-- If you cannot clearly read a bar's shape sketch, omit that bar entirely (do not guess).
-- Return empty {} for any component with no clearly readable shape dimensions.
-
-Return ONLY valid JSON (no markdown):
-{
-  "shape_dims": {
-    "pilecap": {"a": [825, 4350, 825], "b": [825, 4350, 825], "e": [450, 3600]},
-    "pile":    {"x": [300, 13125]},
-    "pier":    {"g": [500, 8956]}
-  }
-}
-"""
-
 
 def extract_from_drawing(pdf_bytes: bytes) -> dict:
     """Main entry point. Returns structured drawing data dict."""
@@ -333,8 +314,8 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
         UNRESOLVED_CUTS=unresolved_block,
     )
 
-    # Full-page image at 1.3× for the review pass (sections, notes, labels).
-    full_images_b64  = _pdf_to_image_b64(pdf_bytes, scale=1.3)
+    # Full-page image at 2.5× for the review pass (sections, notes, labels).
+    full_images_b64  = _pdf_to_image_b64(pdf_bytes, scale=2.5)
     # Schedule-strip image at 1.5×, cropped to just right of the schedule's leftmost column.
     _sched_pos = text_data.get('schedule_section_positions', {})
     if _sched_pos:
@@ -344,11 +325,11 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
         _sched_crop = 0.50
     sched_images_b64 = _pdf_to_image_b64(pdf_bytes, scale=1.5, crop_right_pct=_sched_crop)
 
-    # High-res component band images for bar shape dimension extraction.
-    # Each component section is cropped individually at 3× so bar shape sketches
-    # and their numeric labels are ~4× larger than in the 1.5× schedule strip.
+    # Per-component band images at 2.5× for schedule row + shape dimension extraction.
+    # Each component section is cropped individually so numeric labels are clearly readable.
     # Falls back to the schedule strip if pdfplumber found no section positions.
     shape_band_images = []
+    _band_comps = []   # tracks which component each band image corresponds to
     if _sched_pos:
         try:
             for comp in ('pilecap', 'pile', 'pier'):
@@ -361,38 +342,52 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                     min(1.0, (pos['x'] + pos['w'] + 1.0) / 100),
                     min(1.0, (pos['y'] + pos['h'] + 8.0) / 100),  # 8% bottom — last section can extend past 82% hardcoded limit
                 )
-                imgs = _pdf_to_image_b64(pdf_bytes, scale=3.0, clip_rect_pct=clip)
+                imgs = _pdf_to_image_b64(pdf_bytes, scale=2.5, clip_rect_pct=clip)
                 shape_band_images.extend(imgs)
+                _band_comps.append(comp)
             if shape_band_images:
-                log.info('Shape dims: %d component band image(s) at 3×', len(shape_band_images))
+                log.info('Schedule bands: %d component band image(s) at 2.5× (%s)',
+                         len(shape_band_images), _band_comps)
         except Exception as e:
             log.warning('Component band rendering failed (%s) — falling back to schedule strip', e)
             shape_band_images = []
+            _band_comps = []
     if not shape_band_images:
         shape_band_images = sched_images_b64 or full_images_b64
 
+    # Build dynamic image map for SCHEDULE_PROMPT so Claude knows which component each image covers.
+    if _band_comps:
+        _image_map = '\n'.join(
+            f'- Image {i+1} = {c.upper()} schedule rows (high-res crop of that component block)'
+            for i, c in enumerate(_band_comps)
+        )
+    else:
+        _image_map = ('- 1 image: the full schedule strip — '
+                      'identify components by their header labels (PILECAP / PILE / PIER).')
+    schedule_prompt = SCHEDULE_PROMPT_TEMPLATE.format(IMAGE_MAP=_image_map)
+
     # Run three API calls in parallel:
-    # (1) extraction: schedule/title/notes/TABLE-1 — Haiku/Sonnet, schedule strip, 8192 tok
-    # (2) review: CHECK 3-6 — Haiku, full page, 8192 tok (CHECK 1/2 removed — text handles them)
-    # (3) shape dims: bar shape sketches — Haiku, 3× component bands (or strip fallback), 4096 tok
-    vision_data, review_data, shape_dims_data = None, None, None
-    extract_images = sched_images_b64 if sched_images_b64 else full_images_b64
-    if extract_images or full_images_b64:
+    # (1) schedule: rows + shape dims — Haiku/Sonnet, 2.5× component bands, 8192 tok
+    # (2) title: title block/notes/TABLE-1 — Haiku, 1.5× schedule strip, 4096 tok
+    # (3) review: CHECK 3-6 — Haiku, 2.5× full page, 8192 tok
+    schedule_data, title_data, review_data = None, None, None
+    title_images = sched_images_b64 or full_images_b64
+    if shape_band_images or full_images_b64:
         with ThreadPoolExecutor(max_workers=3) as pool:
-            f_extract    = pool.submit(_call_vision, extract_images, EXTRACTION_PROMPT,
-                                       EXTRACT_MODEL, 8192)
-            f_review     = pool.submit(_call_vision, full_images_b64, review_prompt,
-                                       REVIEW_MODEL, 8192)
-            f_shape_dims = pool.submit(_call_vision, shape_band_images, SHAPE_DIMS_PROMPT,
-                                       REVIEW_MODEL, 4096,
-                                       max_images=len(shape_band_images))
-            vision_data     = f_extract.result()
-            review_data     = f_review.result()
-            shape_dims_data = f_shape_dims.result()
-        log.info('All vision calls complete — extraction=%s review=%s shape_dims=%s',
-                 'ok' if vision_data else 'failed',
-                 'ok' if review_data else 'failed',
-                 'ok' if shape_dims_data else 'failed')
+            f_schedule = pool.submit(_call_vision, shape_band_images, schedule_prompt,
+                                     EXTRACT_MODEL, 8192,
+                                     max_images=len(shape_band_images))
+            f_title    = pool.submit(_call_vision, title_images, TITLE_PROMPT,
+                                     REVIEW_MODEL, 4096)
+            f_review   = pool.submit(_call_vision, full_images_b64, review_prompt,
+                                     REVIEW_MODEL, 8192)
+            schedule_data = f_schedule.result()
+            title_data    = f_title.result()
+            review_data   = f_review.result()
+        log.info('All vision calls complete — schedule=%s title=%s review=%s',
+                 'ok' if schedule_data else 'failed',
+                 'ok' if title_data else 'failed',
+                 'ok' if review_data else 'failed')
 
     result = {
         'title_block':                   {},
@@ -413,12 +408,13 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
         'section_view_positions':        section_view_pos,
     }
 
-    if vision_data:
-        result['title_block']             = vision_data.get('title_block') or {}
-        result['notes']                   = vision_data.get('notes') or {}
-        result['table_1']                 = vision_data.get('table_1') or []
-        result['schedule_section_bboxes'] = vision_data.get('schedule_section_bboxes') or {}
-        raw_sched = vision_data.get('schedule') or []
+    if title_data:
+        result['title_block'] = title_data.get('title_block') or {}
+        result['notes']       = title_data.get('notes') or {}
+        result['table_1']     = title_data.get('table_1') or []
+
+    if schedule_data:
+        raw_sched = schedule_data.get('schedule') or []
         for row in raw_sched:
             comp = (row.get('component') or 'unknown').lower()
             bm   = (row.get('bar_mark') or '').strip().lower()
@@ -438,8 +434,8 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
             else:
                 comp_dict[bm] = row
 
-    if shape_dims_data:
-        for comp, bars in (shape_dims_data.get('shape_dims') or {}).items():
+        # shape_dims merged from same call — no separate shape_dims_data
+        for comp, bars in (schedule_data.get('shape_dims') or {}).items():
             comp = comp.lower()
             for bm, dims in (bars or {}).items():
                 bm = bm.strip().lower()

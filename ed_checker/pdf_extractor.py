@@ -850,9 +850,15 @@ def _call_vision(images_b64: list, prompt: str, model: str = 'claude-sonnet-4-6'
         if response.stop_reason == 'max_tokens':
             log.warning('Response hit max_tokens — attempting JSON repair')
 
-        if raw.startswith('```'):
-            raw = re.sub(r'^```(?:json)?\n?', '', raw)
-            raw = re.sub(r'\n?```$', '', raw)
+        # Extract JSON robustly — Claude sometimes adds preamble text or wraps in a code block.
+        code_block = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', raw)
+        if code_block:
+            raw = code_block.group(1).strip()
+        elif not raw.startswith(('{', '[')):
+            # Skip any preamble and start from the first JSON object or array
+            m = re.search(r'[{\[]', raw)
+            if m:
+                raw = raw[m.start():]
 
         parsed = _parse_json_with_repair(raw)
         if parsed is None:

@@ -314,8 +314,11 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
         UNRESOLVED_CUTS=unresolved_block,
     )
 
-    # Full-page image at 1.3× for the review pass — proven safe on Render's 512MB limit.
-    full_images_b64  = _pdf_to_image_b64(pdf_bytes, scale=1.3)
+    # Full-page image at 2.0× for the review pass.
+    # 1.3× made section circles ~150 px in diameter — too small to count bundle bar pairs
+    # accurately (Claude undercounts by 15-25%). 2.0× gives ~230 px circles and reliable
+    # counting. PNG stays ~1.2 MB (well within API and Render memory limits).
+    full_images_b64  = _pdf_to_image_b64(pdf_bytes, scale=2.0)
     # Schedule-strip image at 1.5×, cropped to just right of the schedule's leftmost column.
     _sched_pos = text_data.get('schedule_section_positions', {})
     if _sched_pos:

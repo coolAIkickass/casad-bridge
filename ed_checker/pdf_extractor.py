@@ -233,28 +233,43 @@ c) ERRONEOUS BOXES: Skip this check — always return an empty array []. Do not 
 
 CHECK 6 — Cross-reference completeness and unlabeled views
 
-a) CUT MARK CROSS-REFERENCE: Look for physical cut-mark symbols — these are DRAWN graphical
-   arrows (crossing lines with arrowheads) physically drawn ON a structural plan or elevation
-   view to indicate where a cross-section is taken. For each such arrow symbol with a letter
-   label (A, B, C, D, etc.), check whether the corresponding section view exists in the drawing.
-   Flag if the section view is missing.
-   Example: drawn arrow symbols labeled "D" on SECTION B-B but no SECTION D-D view drawn → flag.
+a) CUT MARK CROSS-REFERENCE:
+   SEARCH DIRECTION — start from drawn cut-mark arrow symbols, not from section titles:
+   Step 1: Find every physical cut-mark symbol — a DRAWN graphical crossing-arrow drawn ON
+           a plan or elevation view to show WHERE a cross-section is taken.
+   Step 2: Read the letter label on that arrow (A, B, C, D, …).
+   Step 3: Check whether a titled view "SECTION X-X" exists ANYWHERE else in the drawing.
+   Step 4: If no such titled view exists → flag it.
+   Example: drawn arrows labeled "D" appear on PLAN OF PILECAP but no "SECTION D-D" view
+            is drawn anywhere → flag missing_section="SECTION D-D".
 
-   CRITICAL EXCLUSIONS for cut-mark detection:
-   - Do NOT flag section names that appear as text within another section's title or label.
-     Example: "SECTION Z-Z (PILE) details reference Z1-Z1" — the text "Z1-Z1" here is a
-     text reference inside a label, NOT a drawn cut-mark arrow. Do NOT flag Z1-Z1 as missing.
-   - Do NOT flag section names referenced in notes or annotations as text.
-   - Do NOT flag any section name found in a LAP LENGTH TABLE, SCHEDULE OF REINFORCEMENT,
-     TABLE-1, or any other tabular element — tables contain text references only, never
-     physical cut-mark arrows.
-   - ONLY flag when you see the actual drawn graphical arrow symbol (not text).
-   - The "found_on_view" field must name a structural drawing view (e.g. "SECTION B-B FOR
-     PILECAP & PIER", "PLAN OF PILECAP") — never a table or schedule.
+   CRITICAL EXCLUSIONS — read carefully before flagging anything:
+   - A section's OWN TITLE TEXT is proof it exists, not a missing reference. If the text
+     "SECTION C-C" appears as the printed title label of a drawn view, SECTION C-C is
+     PRESENT in the drawing. Do NOT flag it as missing.
+   - "found_on_view" must be a DIFFERENT view from "missing_section". A section cannot
+     contain a cut-mark arrow pointing to itself — if your logic produces this, discard it.
+   - Do NOT flag section names that appear as text within another section's title, label,
+     notes, annotations, or any tabular element (LAP LENGTH TABLE, SCHEDULE OF REINFORCEMENT,
+     TABLE-1). Text references are never cut-mark arrows.
+   - ONLY flag when you see the actual drawn graphical arrow symbol on a plan/elevation view.
+   - "found_on_view" must name a structural drawing view (e.g. "PLAN OF PILECAP",
+     "SECTION B-B FOR PILECAP & PIER") — never a table, schedule, or the same section.
 
-b) UNLABELED VIEWS: Identify any cross-section, plan, or elevation view that has been drawn but has
-   NO title label. Every drawn view must have a label like "SECTION X-X", "PLAN OF...", "DETAIL A", etc.
-   Flag each unlabeled drawn view with its approximate location.
+b) UNLABELED VIEWS — systematic scan of the entire drawing:
+   For EVERY visible drawn component in the drawing — every cross-section circle or rectangle,
+   every elevation outline, every plan view boundary, every detail sketch — check whether it
+   has a title label (text such as "SECTION X-X", "PLAN OF ...", "DETAIL A") located
+   above, below, or immediately beside it.
+
+   Process: mentally map each drawn structural component to its title. Any drawn component
+   that has NO title anywhere nearby is an unlabeled view — flag it.
+
+   Pay particular attention to:
+   - Views drawn immediately adjacent to or beside another labeled view (a common omission)
+   - Small circular cross-sections or rectangular outlines that appear standalone with no text
+
+   Flag each unlabeled drawn view separately with its approximate location bbox.
 
 Return ONLY valid JSON (no markdown):
 {

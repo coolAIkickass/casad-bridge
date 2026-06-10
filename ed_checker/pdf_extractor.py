@@ -699,6 +699,9 @@ def _extract_positions(page) -> tuple:
     for line_y, lw in sorted(line_words.items()):
         lw_sorted = sorted(lw, key=lambda x: x['x0'])
         line_text = ' '.join(w['text'] for w in lw_sorted).upper().strip()
+        # Normalise non-standard hyphens (soft hyphen U+00AD, en-dash, em-dash) to ASCII '-'
+        # so regex and keyword matching work regardless of how the CAD app encoded the label.
+        line_text = line_text.replace('\xad', '-').replace('–', '-').replace('—', '-')
         if any(t in line_text for t in TRIGGER_WORDS):
             x0  = min(w['x0']     for w in lw_sorted)
             x1  = max(w['x1']     for w in lw_sorted)

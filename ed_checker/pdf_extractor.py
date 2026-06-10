@@ -200,8 +200,34 @@ a) COUNT the filled dot/circle symbols that represent longitudinal reinforcement
    - State which bar mark these dots correspond to (e.g. "x" for pile longitudinal, "g" for pier longitudinal).
    - Set "is_bundle": true if bars are drawn as pairs, or if the word BUNDLE or LEGGED appears near the view.
 
-b) SPACING: Judge whether bars are evenly distributed around the perimeter or show visible gaps/clustering.
-   Set "spacing_uniform": false only if there is a clear visual irregularity.
+b) SPACING — Detailed spacing analysis for each cross-section:
+
+   For CIRCULAR sections (pile, e.g. SECTION Z-Z):
+   - Imagine a clock face overlaid on the ring. Note the approximate clock positions of all visible bars/pairs.
+   - Compute the expected angular gap = 360° ÷ bar_count (use pair_count if bundle bars).
+   - For EACH irregularity found, add one entry to spacing_issues:
+     • "clustering": two consecutive bars/pairs that appear visibly closer together than the average gap
+       (e.g. two bars that should be ~17° apart appear at less than ~10° separation — they look
+       "squeezed" next to each other while the remaining bars have equal spacing)
+     • "gap": an arc more than ~1.5× the expected gap with no bar (a large empty stretch of ring)
+     • "missing_bar": a location where the geometry strongly implies a bar should exist but none is drawn
+       (e.g. every 17° there is a bar, but at one spot the next bar is ~34° away, indicating one is absent)
+   - For bundle-bar PAIRS: treat each pair as one unit. A pair touching or nearly overlapping another pair
+     is "clustering". A span of ~2× the pair-to-pair gap with no pair is "gap".
+
+   For RECTANGULAR sections (pilecap/pier):
+   - Count bars on each side (top, bottom, left, right).
+   - Flag if bars on one side are clustered to one corner, leaving a visible gap on the opposite end.
+
+   Return an array — empty [] if spacing looks fully uniform:
+   "spacing_issues": [
+     {
+       "type": "clustering" | "gap" | "missing_bar",
+       "location": "bottom-left, approximately 7–8 o'clock",
+       "description": "Two bundle-bar pairs appear much closer together than the average spacing"
+     }
+   ]
+   Also set "spacing_uniform": false if spacing_issues is non-empty, true if empty.
 
 c) ERRONEOUS BOXES: Skip this check — always return an empty array []. Do not flag any boxes.
 
@@ -246,7 +272,7 @@ Return ONLY valid JSON (no markdown):
     {"description": "Pile spacing c/c dimension is not shown anywhere in the plan view", "suggestion": "Add pile c/c spacing dimension to PLAN OF PILECAP", "bbox": {"x":25,"y":20,"w":20,"h":25}}
   ],
   "cross_section_checks": [
-    {"section_name": "Z-Z", "component": "pile", "bar_mark": "x", "visual_count": 21, "is_bundle": true, "spacing_uniform": true, "bbox": {"x":5,"y":60,"w":18,"h":15}}
+    {"section_name": "Z-Z", "component": "pile", "bar_mark": "x", "visual_count": 21, "is_bundle": true, "spacing_uniform": true, "spacing_issues": [], "bbox": {"x":5,"y":60,"w":18,"h":15}}
   ],
   "erroneous_boxes": [
     {"description": "Rectangular border enclosing SECTION A-A FOR PILE", "bbox": {"x":3,"y":5,"w":22,"h":20}}
@@ -301,8 +327,10 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
     from concurrent.futures import ThreadPoolExecutor
 
     text_data        = _extract_text(pdf_bytes)
-    # Full-page image at 1.0× for the review pass (sections, notes, labels)
-    full_images_b64  = _pdf_to_image_b64(pdf_bytes, scale=1.0)
+    # Full-page image at 1.3× for the review pass (sections, notes, labels).
+    # 1.3× gives ~1.69× more pixels vs 1.0×, improving bar-dot resolution in
+    # cross-section views without exceeding the 512MB Render memory budget.
+    full_images_b64  = _pdf_to_image_b64(pdf_bytes, scale=1.3)
     # Schedule-strip image at 1.5×, cropped to just right of the schedule's
     # leftmost column. Crop is derived from pdfplumber's actual header positions
     # so it works regardless of drawing layout — not a hardcoded fraction.

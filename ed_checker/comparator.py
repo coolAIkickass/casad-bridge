@@ -457,7 +457,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
     if d_count and w_count:
         if is_ring:
             # Ring bars: allow ±2 per pile absolute tolerance (count derives from geometric
-            # spacing and varies by 1–2 due to length rounding). Flag as warning only.
+            # spacing and varies by 1–2 due to length rounding).
             tolerance = 2 * max(num_piles, 1)
             if abs(d_count - w_count) > tolerance:
                 issues.append(_issue(
@@ -763,7 +763,7 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
                     f"Check bar '{bar_mark}' spacing in Section {section_name}{loc_suffix}. "
                     "Bars should be uniformly distributed."
                 ),
-                'severity':    'warning',
+                'severity':    'error',
                 'page_num':    1,
                 'x': x, 'y': y, 'width': w, 'height': h,
             })

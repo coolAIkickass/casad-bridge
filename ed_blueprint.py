@@ -85,7 +85,7 @@ def _save_issues(review_id, issues, cur):
              issue.get('title', 'Issue'),
              issue.get('description', ''),
              issue.get('suggestion', ''),
-             issue.get('severity', 'warning'),
+             issue.get('severity', 'error'),
              issue.get('page_num', 1),
              issue.get('x', 5), issue.get('y', 5),
              issue.get('width', 20), issue.get('height', 10))
@@ -164,7 +164,7 @@ def upload():
                 'category': 'Input', 'title': 'Design input parse error',
                 'description': f'Could not parse design input: {err}',
                 'suggestion': 'Check that the Excel file matches the CASAD E2E BBS format.',
-                'severity': 'warning', 'page_num': 1,
+                'severity': 'error', 'page_num': 1,
                 'x': 5, 'y': 5, 'width': 30, 'height': 8,
             })
         _save_issues(review_id, issues, cur)
@@ -379,7 +379,7 @@ def reupload(drawing_id):
                 'category': 'Input', 'title': 'Design input parse error',
                 'description': f'Could not parse design input: {err}',
                 'suggestion': 'Check that the Excel file matches the CASAD E2E BBS format.',
-                'severity': 'warning', 'page_num': 1,
+                'severity': 'error', 'page_num': 1,
                 'x': 5, 'y': 5, 'width': 30, 'height': 8,
             })
         _save_issues(review_id, issues, cur)

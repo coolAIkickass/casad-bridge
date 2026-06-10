@@ -271,6 +271,12 @@ Return ONLY valid JSON (no markdown):
 
 SHAPE_DIMS_PROMPT = """From this engineering drawing schedule, extract bar shape dimensions.
 
+IMAGE LAYOUT — you will receive 1 or 3 images:
+- 3 images (normal): Image 1 = PILECAP rows, Image 2 = PILE rows, Image 3 = PIER rows.
+  Each is a high-resolution crop of that component's block in the schedule. Map your output
+  to the correct component based on which image you read each bar from.
+- 1 image (fallback): the full schedule strip — identify components by their header labels.
+
 Look at the "SHAPE OF BAR" sketch column in the reinforcement schedule table.
 Each bar row has a small line-sketch of the bar shape drawn inside that column cell.
 Read the numeric labels written DIRECTLY ON the line segments of that sketch — these
@@ -338,10 +344,37 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
         _sched_crop = 0.50
     sched_images_b64 = _pdf_to_image_b64(pdf_bytes, scale=1.5, crop_right_pct=_sched_crop)
 
+    # High-res component band images for bar shape dimension extraction.
+    # Each component section is cropped individually at 3× so bar shape sketches
+    # and their numeric labels are ~4× larger than in the 1.5× schedule strip.
+    # Falls back to the schedule strip if pdfplumber found no section positions.
+    shape_band_images = []
+    if _sched_pos:
+        try:
+            for comp in ('pilecap', 'pile', 'pier'):
+                pos = _sched_pos.get(comp)
+                if not pos:
+                    continue
+                clip = (
+                    max(0.0, (pos['x'] - 2.0) / 100),   # 2% left margin (captures bar mark col)
+                    max(0.0, (pos['y'] - 1.0) / 100),   # 1% top margin
+                    min(1.0, (pos['x'] + pos['w'] + 1.0) / 100),
+                    min(1.0, (pos['y'] + pos['h'] + 8.0) / 100),  # 8% bottom — last section can extend past 82% hardcoded limit
+                )
+                imgs = _pdf_to_image_b64(pdf_bytes, scale=3.0, clip_rect_pct=clip)
+                shape_band_images.extend(imgs)
+            if shape_band_images:
+                log.info('Shape dims: %d component band image(s) at 3×', len(shape_band_images))
+        except Exception as e:
+            log.warning('Component band rendering failed (%s) — falling back to schedule strip', e)
+            shape_band_images = []
+    if not shape_band_images:
+        shape_band_images = sched_images_b64 or full_images_b64
+
     # Run three API calls in parallel:
     # (1) extraction: schedule/title/notes/TABLE-1 — Haiku/Sonnet, schedule strip, 8192 tok
     # (2) review: CHECK 3-6 — Haiku, full page, 8192 tok (CHECK 1/2 removed — text handles them)
-    # (3) shape dims: bar shape sketch dimensions — Haiku, schedule strip, 2048 tok
+    # (3) shape dims: bar shape sketches — Haiku, 3× component bands (or strip fallback), 4096 tok
     vision_data, review_data, shape_dims_data = None, None, None
     extract_images = sched_images_b64 if sched_images_b64 else full_images_b64
     if extract_images or full_images_b64:
@@ -350,8 +383,9 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                                        EXTRACT_MODEL, 8192)
             f_review     = pool.submit(_call_vision, full_images_b64, review_prompt,
                                        REVIEW_MODEL, 8192)
-            f_shape_dims = pool.submit(_call_vision, extract_images, SHAPE_DIMS_PROMPT,
-                                       REVIEW_MODEL, 2048)
+            f_shape_dims = pool.submit(_call_vision, shape_band_images, SHAPE_DIMS_PROMPT,
+                                       REVIEW_MODEL, 4096,
+                                       max_images=len(shape_band_images))
             vision_data     = f_extract.result()
             review_data     = f_review.result()
             shape_dims_data = f_shape_dims.result()
@@ -675,36 +709,37 @@ def _extract_positions(page) -> tuple:
 # ── Claude vision pass ────────────────────────────────────────────────────────
 
 def _pdf_to_image_b64(pdf_bytes: bytes, scale: float = 1.0,
-                       crop_right_pct: float = None) -> list:
+                       crop_right_pct: float = None,
+                       clip_rect_pct: tuple = None) -> list:
     """Render each PDF page to a PNG and return list of base64 strings.
 
-    crop_right_pct: if set (e.g. 0.40), crop the image to the rightmost fraction
-    of the page width before encoding. Used to isolate the schedule strip at higher
-    resolution without sending the full large image.
+    crop_right_pct: keep the rightmost fraction of the page (e.g. 0.40 = right 40%).
+    clip_rect_pct:  (x0, y0, x1, y1) as fractions 0–1 of page dimensions — arbitrary crop.
+      Takes priority over crop_right_pct when both are supplied.
     """
     try:
         import fitz  # PyMuPDF
-        log.info('PyMuPDF rendering PDF (%d bytes) scale=%.1f crop_right=%.0f%%',
-                 len(pdf_bytes), scale, (crop_right_pct or 0) * 100)
+        log.info('PyMuPDF rendering PDF (%d bytes) scale=%.1f', len(pdf_bytes), scale)
         doc = fitz.open(stream=pdf_bytes, filetype='pdf')
         images = []
         for i, page in enumerate(doc):
             mat = fitz.Matrix(scale, scale)
-            pix = page.get_pixmap(matrix=mat)
+            pw, ph = page.rect.width, page.rect.height
 
-            if crop_right_pct and 0 < crop_right_pct < 1.0:
-                # Render only the right strip of the page in page-space coordinates,
-                # then re-render at the target scale so PyMuPDF does the crop natively.
-                page_w = page.rect.width
-                clip_page = fitz.Rect(
-                    page_w * (1.0 - crop_right_pct), 0,
-                    page_w, page.rect.height
-                )
-                pix = page.get_pixmap(matrix=mat, clip=clip_page)
-                log.info('Page %d cropped to right %.0f%%: %dx%d px',
+            if clip_rect_pct:
+                x0f, y0f, x1f, y1f = clip_rect_pct
+                clip = fitz.Rect(pw * x0f, ph * y0f, pw * x1f, ph * y1f)
+                pix = page.get_pixmap(matrix=mat, clip=clip)
+                log.info('Page %d clip (%.0f%%,%.0f%%)→(%.0f%%,%.0f%%): %dx%d px',
+                         i+1, x0f*100, y0f*100, x1f*100, y1f*100, pix.width, pix.height)
+            elif crop_right_pct and 0 < crop_right_pct < 1.0:
+                clip = fitz.Rect(pw * (1.0 - crop_right_pct), 0, pw, ph)
+                pix = page.get_pixmap(matrix=mat, clip=clip)
+                log.info('Page %d right %.0f%%: %dx%d px',
                          i+1, crop_right_pct * 100, pix.width, pix.height)
             else:
-                log.info('Page %d rendered: %dx%d px', i+1, pix.width, pix.height)
+                pix = page.get_pixmap(matrix=mat)
+                log.info('Page %d full: %dx%d px', i+1, pix.width, pix.height)
 
             b64 = base64.standard_b64encode(pix.tobytes('png')).decode()
             log.info('Page %d b64 len=%d', i+1, len(b64))
@@ -776,7 +811,7 @@ def _parse_json_with_repair(raw: str) -> dict | None:
 
 
 def _call_vision(images_b64: list, prompt: str, model: str = 'claude-sonnet-4-6',
-                  max_tokens: int = 8192) -> dict | None:
+                  max_tokens: int = 8192, max_images: int = 1) -> dict | None:
     """Send pre-rendered page images + prompt to Claude. Returns parsed JSON or None."""
     if not ANTHROPIC_API_KEY or not images_b64:
         return None
@@ -784,12 +819,13 @@ def _call_vision(images_b64: list, prompt: str, model: str = 'claude-sonnet-4-6'
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        images_to_send = images_b64[:max_images]
         log.info('Vision call: model=%s sending %d image(s), prompt length=%d chars',
-                 model, len(images_b64[:1]), len(prompt))
+                 model, len(images_to_send), len(prompt))
 
         content = [
             {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': b64}}
-            for b64 in images_b64[:1]
+            for b64 in images_to_send
         ]
         content.append({'type': 'text', 'text': prompt})
 

@@ -488,6 +488,19 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 'error', zone, bar_bbox
             ))
 
+    d_total_len = design_bar.get('total_len_m')
+    w_total_len = _norm_float(drawing_bar.get('total_length_m'))
+    if d_total_len and w_total_len:
+        diff = _pct_diff(d_total_len, w_total_len)
+        if diff and diff > 2:
+            issues.append(_issue(
+                'Bar Total Length',
+                f"{prefix}: Total length mismatch — design {round(d_total_len, 2)}m, drawing {round(w_total_len, 2)}m",
+                f"Design input total length = {round(d_total_len, 2)}m for '{bm}' ({comp}). Drawing schedule shows {round(w_total_len, 2)}m.",
+                f"Update total length for bar '{bm}' to {round(d_total_len, 2)}m.",
+                'error', zone, bar_bbox
+            ))
+
     # Total weight: compare design input (Excel formula value, authoritative) vs drawing schedule
     d_total_wt = design_bar.get('total_wt_kg')
     w_total_wt = _norm_float(drawing_bar.get('total_wt_kg'))

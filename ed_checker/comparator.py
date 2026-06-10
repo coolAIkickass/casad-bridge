@@ -501,6 +501,19 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 'error', zone, bar_bbox
             ))
 
+    d_unit_wt = design_bar.get('unit_wt')
+    w_unit_wt = _norm_float(drawing_bar.get('unit_wt_kg_m'))
+    if d_unit_wt and w_unit_wt:
+        diff = _pct_diff(d_unit_wt, w_unit_wt)
+        if diff and diff > 2:
+            issues.append(_issue(
+                'Bar Unit Weight',
+                f"{prefix}: Unit weight mismatch — design {round(d_unit_wt, 3)} kg/m, drawing {round(w_unit_wt, 3)} kg/m",
+                f"Design input unit weight = {round(d_unit_wt, 3)} kg/m for '{bm}' ({comp}). Drawing schedule shows {round(w_unit_wt, 3)} kg/m.",
+                f"Unit weight for bar '{bm}' should be {round(d_unit_wt, 3)} kg/m — check for typo in schedule.",
+                'error', zone, bar_bbox
+            ))
+
     # Total weight: compare design input (Excel formula value, authoritative) vs drawing schedule
     d_total_wt = design_bar.get('total_wt_kg')
     w_total_wt = _norm_float(drawing_bar.get('total_wt_kg'))

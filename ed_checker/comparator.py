@@ -142,6 +142,19 @@ def _pct_diff(a, b):
     return None
 
 
+def _strip_1prefix_misread(w_val: float, d_vals_mm: list) -> float:
+    """Correct the 'bar mark digit bleed' misread: if w_val has a leading '1' prepended
+    to a value that matches one of the design dims (e.g. 1300 when design has 300),
+    return the stripped value. Only triggers when the stripped value is within 3% of a
+    known design dim. Leaves w_val unchanged otherwise."""
+    w_str = f"{int(round(w_val))}"
+    if len(w_str) >= 2 and w_str[0] == '1':
+        stripped = float(w_str[1:])
+        if any(abs(stripped - d) / d < 0.03 for d in d_vals_mm if d > 0):
+            return stripped
+    return w_val
+
+
 def compare(design_data: dict, drawing_data: dict) -> list:
     issues = []
 
@@ -512,15 +525,21 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
         for d_mm in d_vals_mm:
             if not remaining_w:
                 break
-            closest = min(remaining_w, key=lambda w: abs(w - d_mm))
-            remaining_w.remove(closest)
-            diff = _pct_diff(d_mm, closest)
+            # Correct "1-prefix misread": e.g. Claude returns 1300 when design expects 300,
+            # caused by the trailing digit of a bar mark (f1, y1, i1 etc.) bleeding into the
+            # adjacent shape sketch column. If stripping the leading "1" from a drawing value
+            # lands within 3% of the design value, treat the corrected value as the match.
+            corrected_w = [_strip_1prefix_misread(w, d_vals_mm) for w in remaining_w]
+            closest_corrected = min(corrected_w, key=lambda w: abs(w - d_mm))
+            closest_idx = corrected_w.index(closest_corrected)
+            remaining_w.pop(closest_idx)
+            diff = _pct_diff(d_mm, closest_corrected)
             if diff and diff > 2:
                 issues.append(_issue(
                     'Bar Shape',
-                    f"{prefix}: Bar shape dimension mismatch — design {d_mm:.0f}mm, drawing {closest:.0f}mm",
+                    f"{prefix}: Bar shape dimension mismatch — design {d_mm:.0f}mm, drawing {closest_corrected:.0f}mm",
                     f"Bar '{bm}' ({comp}): design input has segment {d_mm:.0f}mm "
-                    f"but closest value in drawing is {closest:.0f}mm.",
+                    f"but closest value in drawing is {closest_corrected:.0f}mm.",
                     f"Correct the bar shape dimension for '{bm}' to {d_mm:.0f}mm.",
                     'error', zone, bar_bbox
                 ))

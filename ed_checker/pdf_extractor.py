@@ -274,6 +274,12 @@ CRITICAL RULES — read carefully:
 - Do NOT read overall structural dimensions (pilecap width, pile length, pier height, etc.)
   from any drawing view outside the schedule table.
 - Each number should be a bar segment length in mm, typically between 100 mm and 15000 mm.
+- BAR MARK DIGIT BLEED — CRITICAL: Bar marks with numeric suffixes (f1, y1, i1, j1, k1,
+  x1, d1) appear in the leftmost column, immediately LEFT of the shape sketch column.
+  The trailing digit in the bar mark is NOT part of a shape dimension.
+  Example: bar mark "f1", shape sketch shows "300" → read 300, NOT 1300.
+  A 3-digit segment (like 300, 825, 500) must remain 3 digits — do not prepend any digit
+  from the bar mark label in the adjacent column.
 - Numbers like 1825 in a bar shape sketch that match no logical segment (when the bar's
   other segments are ~825 mm) are likely misreads — omit them rather than guessing.
 - If you cannot clearly read a bar's shape sketch, omit that bar entirely (do not guess).

@@ -60,7 +60,7 @@ IMAGE LAYOUT:
 
 PART A — SCHEDULE ROWS
 For EACH row in the schedule tables, extract:
-{
+{{
   "bar_mark": "a",
   "component": "pilecap" | "pile" | "pier",
   "reinforcement_text": "25Φ – 42 NOS.",
@@ -72,7 +72,7 @@ For EACH row in the schedule tables, extract:
   "total_length_m": 563.85,
   "unit_wt_kg_m": 3.857,
   "total_wt_kg": 2174.77
-}
+}}
 
 COLUMN MAPPING RULES — read carefully:
 - bar_dia_mm: the φ / DIA column — always a small integer (8, 10, 12, 16, 20, 25, 32). Do NOT confuse with length or spacing.
@@ -102,21 +102,21 @@ CRITICAL RULES for shape dimensions:
   Example: bar mark "f1", sketch shows "300" → read 300, NOT 1300.
   A 3-digit segment must remain 3 digits — do not prepend any digit from the bar mark label.
 - If you cannot clearly read a bar's shape sketch, omit that bar entirely (do not guess).
-- Return empty {} for any component with no clearly readable shape dimensions.
+- Return empty {{}} for any component with no clearly readable shape dimensions.
 
 Return ONLY valid JSON (no markdown, no extra text):
-{
+{{
   "schedule": [
-    {"bar_mark": "a", "component": "pilecap", "bar_dia_mm": 25, "spacing_mm": null,
+    {{"bar_mark": "a", "component": "pilecap", "bar_dia_mm": 25, "spacing_mm": null,
      "count_text": "42", "count": 42, "length_m": 13.425, "total_length_m": 563.85,
-     "unit_wt_kg_m": 3.857, "total_wt_kg": 2174.77, "reinforcement_text": "25Φ – 42 NOS."}
+     "unit_wt_kg_m": 3.857, "total_wt_kg": 2174.77, "reinforcement_text": "25Φ – 42 NOS."}}
   ],
-  "shape_dims": {
-    "pilecap": {"a": [825, 4350, 825], "b": [825, 4350, 825], "e": [450, 3600]},
-    "pile":    {"x": [300, 13125]},
-    "pier":    {"g": [500, 8956]}
-  }
-}
+  "shape_dims": {{
+    "pilecap": {{"a": [825, 4350, 825], "b": [825, 4350, 825], "e": [450, 3600]}},
+    "pile":    {{"x": [300, 13125]}},
+    "pier":    {{"g": [500, 8956]}}
+  }}
+}}
 Use null for any schedule value not found or not legible.
 """
 

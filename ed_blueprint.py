@@ -1,5 +1,6 @@
 # ed_blueprint.py — ED Checker (Drawing Review) app mounted at /ed
 import os
+import gzip
 import uuid
 import logging
 import threading
@@ -140,6 +141,21 @@ def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, pars
         log.exception('Failed to save background check results for review %s', review_id)
 
 
+def _compress_dxf(b: bytes) -> bytes:
+    return gzip.compress(b) if b else None
+
+
+def _decompress_dxf(b) -> bytes:
+    """Decompress gzip-compressed DXF. Falls back to raw bytes for legacy uncompressed rows."""
+    if not b:
+        return None
+    raw = bytes(b)
+    try:
+        return gzip.decompress(raw)
+    except OSError:
+        return raw  # legacy row stored uncompressed
+
+
 @ed_bp.route('/')
 def index():
     per_page = 10
@@ -207,7 +223,7 @@ def upload():
         'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data, dxf_content) '
         'VALUES (%s,%s,1,%s,%s,%s,%s,%s)',
         (review_id, drawing_id, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json,
-         psycopg2.Binary(dxf_bytes) if dxf_bytes else None)
+         psycopg2.Binary(_compress_dxf(dxf_bytes)) if dxf_bytes else None)
     )
     conn.commit()
     cur.close()
@@ -406,7 +422,7 @@ def reupload(drawing_id):
     prev = cur.fetchone()
     design_data = json.loads(prev['design_data']) if prev and prev['design_data'] else {}
     # Reuse stored DXF unless the engineer uploads a new one
-    dxf_bytes = bytes(prev['dxf_content']) if prev and prev.get('dxf_content') else None
+    dxf_bytes = _decompress_dxf(prev['dxf_content']) if prev and prev.get('dxf_content') else None
 
     # Allow overriding design inputs if new files are uploaded on this re-upload
     new_design_files = [
@@ -434,7 +450,7 @@ def reupload(drawing_id):
         'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data, dxf_content) '
         'VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
         (review_id, drawing_id, new_ver, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json,
-         psycopg2.Binary(dxf_bytes) if dxf_bytes else None)
+         psycopg2.Binary(_compress_dxf(dxf_bytes)) if dxf_bytes else None)
     )
     conn.commit()
     cur.close()

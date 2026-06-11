@@ -32,13 +32,14 @@ function setFile(file) {
   const raw = file.name.replace(/\.pdf$/i, '').replace(/[_\-]+/g, ' ').trim();
   nameInput.value = raw.length > 60 ? raw.slice(0, 57) + '…' : raw;
 
-  // Draw attention to the design input zone
-  designDropZone.classList.remove('attention');
-  void designDropZone.offsetWidth;  // force reflow to restart animation
-  designDropZone.classList.add('attention');
-  designDropZone.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  designDropZone.addEventListener('animationend', () => {
-    designDropZone.classList.remove('attention');
+  // Draw attention to the DXF slot (next logical step after PDF)
+  const nextZone = dxfDropZone || designDropZone;
+  nextZone.classList.remove('attention');
+  void nextZone.offsetWidth;  // force reflow to restart animation
+  nextZone.classList.add('attention');
+  nextZone.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  nextZone.addEventListener('animationend', () => {
+    nextZone.classList.remove('attention');
   }, { once: true });
 }
 
@@ -62,7 +63,49 @@ dropZone.addEventListener('drop', (e) => {
   if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
 });
 
-// ── Slot 2: Design inputs (multiple) ──────────────────────────────────────
+// ── Slot 2: AutoCAD DXF (single file) ─────────────────────────────────────
+const dxfInput    = document.getElementById('dxf-input');
+const dxfList     = document.getElementById('dxf-file-list');
+const dxfDropZone = document.getElementById('dxf-drop-zone');
+let dxfFile = null;
+
+function renderDxfFile() {
+  dxfList.innerHTML = '';
+  if (!dxfFile) return;
+  const li = document.createElement('li');
+  li.innerHTML = `
+    <div class="file-row">
+      <span class="file-row-icon">DXF</span>
+      <span class="file-row-name">${dxfFile.name}</span>
+      <span class="file-row-meta">${formatSize(dxfFile.size)}</span>
+      <button type="button" class="file-row-remove" title="Remove">✕</button>
+    </div>`;
+  li.querySelector('.file-row-remove').addEventListener('click', () => {
+    dxfFile = null;
+    dxfInput.value = '';
+    renderDxfFile();
+  });
+  dxfList.appendChild(li);
+}
+
+if (dxfInput) {
+  dxfInput.addEventListener('change', () => {
+    if (dxfInput.files[0]) { dxfFile = dxfInput.files[0]; renderDxfFile(); }
+  });
+  if (dxfDropZone) {
+    dxfDropZone.addEventListener('click', (e) => { if (!e.target.closest('button, li')) dxfInput.click(); });
+    dxfDropZone.addEventListener('dragover',  (e) => { e.preventDefault(); dxfDropZone.classList.add('dragover'); });
+    dxfDropZone.addEventListener('dragleave', ()  => dxfDropZone.classList.remove('dragover'));
+    dxfDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dxfDropZone.classList.remove('dragover');
+      const f = e.dataTransfer.files[0];
+      if (f && f.name.toLowerCase().endsWith('.dxf')) { dxfFile = f; renderDxfFile(); }
+    });
+  }
+}
+
+// ── Slot 3: Design inputs (multiple) ──────────────────────────────────────
 const designInput    = document.getElementById('design-input');
 const designList     = document.getElementById('design-file-list');
 const designDropZone = document.getElementById('design-drop-zone');

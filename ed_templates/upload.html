@@ -138,21 +138,4 @@
 </div>
 
 <script src="/ed/static/js/upload.js"></script>
-<script>
-// Wire DXF file input to show selected filename
-(function() {
-  var dxfInput = document.getElementById('dxf-input');
-  var dxfList  = document.getElementById('dxf-file-list');
-  if (!dxfInput) return;
-  dxfInput.addEventListener('change', function() {
-    dxfList.innerHTML = '';
-    if (dxfInput.files.length) {
-      var li = document.createElement('li');
-      li.className = 'design-file-item';
-      li.textContent = dxfInput.files[0].name + ' (' + (dxfInput.files[0].size / 1024).toFixed(0) + ' KB)';
-      dxfList.appendChild(li);
-    }
-  });
-})();
-</script>
 {% endblock %}

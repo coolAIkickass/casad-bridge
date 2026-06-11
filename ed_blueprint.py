@@ -1,6 +1,7 @@
 # ed_blueprint.py — ED Checker (Drawing Review) app mounted at /ed
 import os
 import gzip
+import time
 import uuid
 import logging
 import threading
@@ -105,9 +106,13 @@ def _save_issues(review_id, issues, cur):
 
 def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, parse_errors):
     """Run drawing check in a background thread; saves issues and marks review complete."""
-    log = logging.getLogger(__name__)
+    log = logging.getLogger('ed.bg')
+    t0 = time.time()
+    log.info('BG START review=%s pdf=%dKB dxf=%dKB', review_id,
+             len(pdf_bytes)//1024, len(dxf_bytes)//1024 if dxf_bytes else 0)
     try:
         issues, detected_type = run_check(pdf_bytes, design_data, dxf_bytes=dxf_bytes)
+        log.info('BG run_check done — %.1fs, %d issues, type=%s', time.time()-t0, len(issues), detected_type)
         for err in parse_errors:
             issues.append({
                 'category': 'Input', 'title': 'Design input parse error',
@@ -117,7 +122,7 @@ def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, pars
                 'x': 5, 'y': 5, 'width': 30, 'height': 8,
             })
     except Exception as e:
-        log.exception('run_check failed for review %s', review_id)
+        log.exception('BG run_check FAILED after %.1fs — review %s', time.time()-t0, review_id)
         issues = [{
             'category': 'System', 'title': 'Checker error',
             'description': f'An unexpected error occurred: {e}',
@@ -133,16 +138,16 @@ def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, pars
         _save_issues(review_id, issues, cur)
         cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
         cur.execute("UPDATE drawings SET drawing_type=%s WHERE id=%s", (detected_type, drawing_id))
-        # Store compressed DXF now — background thread has no request timeout
         if dxf_bytes:
+            log.info('BG storing compressed DXF — %.1fs', time.time()-t0)
             cur.execute("UPDATE reviews SET dxf_content=%s WHERE id=%s",
                         (psycopg2.Binary(_compress_dxf(dxf_bytes)), review_id))
         conn.commit()
         cur.close()
         conn.close()
-        log.info('Background check complete — review %s, %d issues', review_id, len(issues))
+        log.info('BG COMPLETE — review %s, %d issues, total %.1fs', review_id, len(issues), time.time()-t0)
     except Exception as e:
-        log.exception('Failed to save background check results for review %s', review_id)
+        log.exception('BG DB save FAILED after %.1fs — review %s', time.time()-t0, review_id)
 
 
 def _compress_dxf(b: bytes) -> bytes:
@@ -195,50 +200,65 @@ def index():
 
 @ed_bp.route('/upload', methods=['POST'])
 def upload():
+    _ulog = logging.getLogger('ed.upload')
+    t0 = time.time()
+    _ulog.info('UPLOAD START — receiving multipart body')
+
     f = request.files.get('file')
     if not f or not f.filename.lower().endswith('.pdf'):
         return "Only PDF files are accepted.", 400
     pdf_bytes = f.read()
+    _ulog.info('STEP 1 PDF read — %.1fs, size=%d KB', time.time()-t0, len(pdf_bytes)//1024)
+
     name  = request.form.get('drawing_name', '').strip() or f.filename
     dtype = request.form.get('drawing_type', 'General')
 
-    # Optional DXF for exact schedule extraction
     dxf_file  = request.files.get('dxf_file')
     dxf_bytes = dxf_file.read() if (dxf_file and dxf_file.filename.lower().endswith('.dxf')) else None
+    _ulog.info('STEP 2 DXF read — %.1fs, size=%d KB', time.time()-t0, len(dxf_bytes)//1024 if dxf_bytes else 0)
 
     design_files = [
         (u.filename, u.read())
         for u in request.files.getlist('design_inputs')
         if u and u.filename
     ]
+    _ulog.info('STEP 3 design files read — %.1fs, count=%d', time.time()-t0, len(design_files))
 
-    # Parse design inputs once; store JSON so re-uploads can reuse without re-uploading files
     design_data, parse_errors = parse_design_inputs(design_files)
-    design_data_json = json.dumps(design_data) if design_data else None
+    _ulog.info('STEP 4 design inputs parsed — %.1fs', time.time()-t0)
 
+    design_data_json = json.dumps(design_data) if design_data else None
     drawing_id = str(uuid.uuid4())
     review_id  = str(uuid.uuid4())
     now = datetime.now().isoformat()
+
     conn = _get_db()
+    _ulog.info('STEP 5 DB connected — %.1fs', time.time()-t0)
+
     cur  = conn.cursor()
     cur.execute('INSERT INTO drawings (id, name, drawing_type, created_at) VALUES (%s,%s,%s,%s)',
                 (drawing_id, name, dtype, now))
-    # dxf_content stored by background thread to keep this INSERT small (avoid SSL EOF on large DXF)
+    _ulog.info('STEP 6 drawings INSERT done — %.1fs', time.time()-t0)
+
+    # dxf_content stored by background thread — keep this INSERT small (PDF only)
     cur.execute(
         'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data) '
         'VALUES (%s,%s,1,%s,%s,%s,%s)',
         (review_id, drawing_id, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json)
     )
+    _ulog.info('STEP 7 reviews INSERT done — %.1fs', time.time()-t0)
+
     conn.commit()
     cur.close()
     conn.close()
+    _ulog.info('STEP 8 DB commit+close — %.1fs', time.time()-t0)
 
-    # Run check in background — user sees the review page immediately
     threading.Thread(
         target=_run_check_bg,
         args=(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, parse_errors),
         daemon=True,
     ).start()
+    _ulog.info('STEP 9 background thread started — redirecting after %.1fs total', time.time()-t0)
 
     return redirect(url_for('ed.review', review_id=review_id))
 

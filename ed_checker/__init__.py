@@ -2,13 +2,15 @@
 ED Checker — main entry point.
 
 Public API:
-  parse_design_inputs(design_files)          -> (design_data dict, parse_errors list)
-  run_check(drawing_pdf_bytes, design_data)  -> list of issue dicts
+  parse_design_inputs(design_files)                        -> (design_data dict, parse_errors list)
+  run_check(drawing_pdf_bytes, design_data, dxf_bytes)     -> (issues list, detected_type str)
 """
 import os
+import re
 import logging
 from .excel_parser import parse_e2e_excel
-from .pdf_extractor import extract_from_drawing
+from .pdf_extractor import extract_from_drawing, _extract_text as _pdf_extract_text
+from .pdf_extractor import _text_missing_sections
 from .comparator import compare
 
 log = logging.getLogger(__name__)
@@ -63,39 +65,66 @@ def detect_drawing_type(drawing_data: dict) -> str:
     return 'General'
 
 
-def run_check(drawing_pdf_bytes: bytes, design_data: dict) -> tuple:
+def run_check(drawing_pdf_bytes: bytes, design_data: dict,
+              dxf_bytes: bytes = None) -> tuple:
     """
-    drawing_pdf_bytes : raw bytes of the drawing PDF
+    drawing_pdf_bytes : raw bytes of the drawing PDF (required — used for display)
     design_data       : already-parsed design data dict (from parse_design_inputs)
                         pass {} or None if no design input was provided
+    dxf_bytes         : optional AutoCAD DXF bytes; when provided, exact DXF extraction
+                        replaces Claude vision for schedule, title block, notes, TABLE-1,
+                        and cross-section bar counting
 
-    Returns list of issue dicts compatible with the DB issues table.
+    Returns (issues list, detected_type str).
     """
-    drawing_data = extract_from_drawing(drawing_pdf_bytes)
+    if dxf_bytes:
+        drawing_data, vision_ran = _run_dxf_extraction(drawing_pdf_bytes, dxf_bytes)
+    else:
+        drawing_data = extract_from_drawing(drawing_pdf_bytes)
+        api_key_missing = not os.environ.get('ANTHROPIC_API_KEY', '').strip()
+        vision_ran = bool(drawing_data.get('schedule'))
 
-    # Detect if vision ran or was skipped
-    api_key_missing = not os.environ.get('ANTHROPIC_API_KEY', '').strip()
-    vision_ran = bool(drawing_data.get('schedule'))
+        if not vision_ran:
+            log.warning(
+                'Vision extraction returned no schedule data. '
+                'api_key_missing=%s raw_text_lines=%d',
+                api_key_missing,
+                len(drawing_data.get('raw_text', []))
+            )
 
-    if not vision_ran:
-        log.warning(
-            'Vision extraction returned no schedule data. '
-            'api_key_missing=%s raw_text_lines=%d',
-            api_key_missing,
-            len(drawing_data.get('raw_text', []))
-        )
+    if dxf_bytes:
+        # DXF path: schedule extraction is exact — no vision fallback needed
+        if not vision_ran:
+            issues = [{
+                'category': 'Configuration',
+                'title': 'DXF extraction returned no schedule data',
+                'description': (
+                    'The uploaded DXF file was parsed but no reinforcement schedule was found. '
+                    'Ensure the DXF contains the schedule in the right portion of the drawing '
+                    'and that text entities are present (not just lines).'
+                ),
+                'suggestion': 'Check that the DXF was exported with text (not as outlines). '
+                              'Try File > Save As > AutoCAD DXF in AutoCAD.',
+                'severity': 'error', 'page_num': 1,
+                'x': 5, 'y': 5, 'width': 90, 'height': 10,
+            }]
+            issues += compare(design_data or None, drawing_data)
+        else:
+            issues = compare(design_data or None, drawing_data)
 
-    if api_key_missing and not vision_ran:
-        # One clear message instead of per-component "not found" warnings
+    elif not os.environ.get('ANTHROPIC_API_KEY', '').strip() and not vision_ran:
         issues = [{
             'category': 'Configuration',
             'title': 'AI vision check not available — ANTHROPIC_API_KEY not set',
             'description': (
                 'Schedule tables, TABLE-1 levels, and notes could not be checked because '
                 'the AI vision API key is not configured on this server. '
-                'Title block format checks ran from text extraction.'
+                'Title block format checks ran from text extraction. '
+                'Alternatively, upload an AutoCAD DXF file for exact schedule extraction '
+                'without needing the vision API.'
             ),
-            'suggestion': 'Set ANTHROPIC_API_KEY in the Render service environment variables.',
+            'suggestion': 'Set ANTHROPIC_API_KEY in the Render service environment variables, '
+                          'or upload a DXF file alongside the PDF.',
             'severity': 'warning', 'page_num': 1,
             'x': 5, 'y': 5, 'width': 90, 'height': 10,
         }]
@@ -103,16 +132,16 @@ def run_check(drawing_pdf_bytes: bytes, design_data: dict) -> tuple:
         issues += [i for i in text_only if i.get('category') not in ('Reinforcement', 'Levels (TABLE-1)')]
 
     elif not vision_ran:
-        # API key is set but vision still failed — surface a diagnostic warning
         issues = [{
             'category': 'Configuration',
             'title': 'AI vision extraction failed',
             'description': (
                 'The ANTHROPIC_API_KEY is configured but the AI vision check returned no data. '
                 'This may be caused by a PDF rendering error (PyMuPDF) or an API timeout. '
-                'Check server logs for details.'
+                'Alternatively, upload an AutoCAD DXF file for exact schedule extraction.'
             ),
-            'suggestion': 'Check Render logs for errors from checker/pdf_extractor.py.',
+            'suggestion': 'Check Render logs for errors from ed_checker/pdf_extractor.py, '
+                          'or upload a DXF file alongside the PDF.',
             'severity': 'warning', 'page_num': 1,
             'x': 5, 'y': 5, 'width': 90, 'height': 10,
         }]
@@ -124,6 +153,61 @@ def run_check(drawing_pdf_bytes: bytes, design_data: dict) -> tuple:
 
     detected_type = detect_drawing_type(drawing_data)
     return issues, detected_type
+
+
+def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
+    """
+    Run DXF extraction and merge pdfplumber position data.
+    Returns (drawing_data dict, vision_ran bool).
+    vision_ran is True when the DXF schedule was non-empty.
+    """
+    from .dxf_extractor import extract_from_dxf
+
+    drawing_data = extract_from_dxf(dxf_bytes)
+
+    # Always run pdfplumber on the PDF — it gives accurate PDF-coordinate positions
+    # for marker placement on the review UI, and supplements completeness checks.
+    try:
+        text_data = _pdf_extract_text(pdf_bytes)
+
+        # Override schedule_section_positions — these must be PDF coordinates
+        drawing_data['schedule_section_positions'] = text_data.get('schedule_section_positions', {})
+
+        # Prefer pdfplumber section_view_positions if available (PDF coords for markers)
+        if text_data.get('section_view_positions'):
+            drawing_data['section_view_positions'] = text_data['section_view_positions']
+
+        # Prefer pdfplumber completeness checks (reads actual PDF text, may catch more)
+        if text_data.get('sections_from_text'):
+            drawing_data['sections_from_text'] = text_data['sections_from_text']
+        if text_data.get('notes_completeness_from_text'):
+            drawing_data['notes_completeness_from_text'] = text_data['notes_completeness_from_text']
+
+        # Supplement title block and notes gaps from pdfplumber (belt-and-suspenders)
+        for key, val in text_data.get('title_block', {}).items():
+            if not drawing_data['title_block'].get(key):
+                drawing_data['title_block'][key] = val
+        for key, val in text_data.get('notes', {}).items():
+            if not drawing_data['notes'].get(key):
+                drawing_data['notes'][key] = val
+
+        # Use pdfplumber cut_letters if DXF found none (DXF cut marks can be harder to detect)
+        if not drawing_data.get('cut_letters') and text_data.get('cut_letters'):
+            drawing_data['cut_letters'] = text_data['cut_letters']
+        elif text_data.get('cut_letters'):
+            # Union: letters found by either method
+            drawing_data['cut_letters'] = drawing_data['cut_letters'] | text_data['cut_letters']
+
+    except Exception as e:
+        log.warning('pdfplumber merge failed: %s', e)
+
+    # Compute cut-mark cross-reference using merged cut_letters + section_view_positions
+    cut_letters      = drawing_data.get('cut_letters', set())
+    sv_pos           = drawing_data.get('section_view_positions', {})
+    drawing_data['missing_referenced_sections'] = _text_missing_sections(cut_letters, sv_pos)
+
+    vision_ran = bool(drawing_data.get('schedule'))
+    return drawing_data, vision_ran
 
 
 def _ext(filename: str) -> str:

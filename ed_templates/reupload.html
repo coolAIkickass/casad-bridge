@@ -45,6 +45,21 @@
         </div>
       </div>
 
+      <!-- Optional: replace the DXF used for schedule extraction -->
+      <div class="slot-label slot-label-opt" style="margin-top:16px">
+        <span class="slot-num slot-num-opt">+</span>
+        <span>Updated DXF <span class="slot-hint">optional — replaces previously uploaded DXF</span></span>
+      </div>
+      <div class="design-input-zone">
+        <input type="file" id="dxf-input" name="dxf_file" accept=".dxf" hidden>
+        <div class="design-inner">
+          <p class="drop-secondary">Replacement AutoCAD DXF &nbsp;·&nbsp;
+            <button type="button" class="link-btn" onclick="document.getElementById('dxf-input').click()">Browse</button>
+          </p>
+        </div>
+        <ul class="design-file-list" id="dxf-file-list"></ul>
+      </div>
+
       <button type="submit" class="btn btn-primary btn-upload" id="submit-btn" disabled>
         Submit for Re-review
       </button>
@@ -53,4 +68,20 @@
 </div>
 
 <script src="/ed/static/js/upload.js"></script>
+<script>
+(function() {
+  var dxfInput = document.getElementById('dxf-input');
+  var dxfList  = document.getElementById('dxf-file-list');
+  if (!dxfInput) return;
+  dxfInput.addEventListener('change', function() {
+    dxfList.innerHTML = '';
+    if (dxfInput.files.length) {
+      var li = document.createElement('li');
+      li.className = 'design-file-item';
+      li.textContent = dxfInput.files[0].name + ' (' + (dxfInput.files[0].size / 1024).toFixed(0) + ' KB)';
+      dxfList.appendChild(li);
+    }
+  });
+})();
+</script>
 {% endblock %}

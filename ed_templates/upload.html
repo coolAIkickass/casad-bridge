@@ -38,9 +38,25 @@
         </div>
       </div>
 
-      <!-- Slot 2: Design inputs (optional) -->
+      <!-- Slot 2: AutoCAD DXF (optional, enables exact extraction) -->
       <div class="slot-label slot-label-opt">
         <span class="slot-num slot-num-opt">2</span>
+        <span>AutoCAD DXF</span>
+        <span class="slot-hint">Exact schedule &amp; bar counts — no AI misreads</span>
+      </div>
+      <div class="design-input-zone" id="dxf-drop-zone" style="margin-bottom:12px">
+        <input type="file" id="dxf-input" name="dxf_file" accept=".dxf" hidden>
+        <div class="design-inner" id="dxf-label">
+          <p class="drop-secondary">AutoCAD DXF file &nbsp;·&nbsp;
+            <button type="button" class="link-btn" onclick="document.getElementById('dxf-input').click()">Browse</button>
+          </p>
+        </div>
+        <ul class="design-file-list" id="dxf-file-list"></ul>
+      </div>
+
+      <!-- Slot 3: Design inputs (optional) -->
+      <div class="slot-label slot-label-opt">
+        <span class="slot-num slot-num-opt">3</span>
         <span>Design Inputs</span>
         <span class="slot-hint">Upload for full schedule + level checks</span>
       </div>
@@ -122,4 +138,21 @@
 </div>
 
 <script src="/ed/static/js/upload.js"></script>
+<script>
+// Wire DXF file input to show selected filename
+(function() {
+  var dxfInput = document.getElementById('dxf-input');
+  var dxfList  = document.getElementById('dxf-file-list');
+  if (!dxfInput) return;
+  dxfInput.addEventListener('change', function() {
+    dxfList.innerHTML = '';
+    if (dxfInput.files.length) {
+      var li = document.createElement('li');
+      li.className = 'design-file-item';
+      li.textContent = dxfInput.files[0].name + ' (' + (dxfInput.files[0].size / 1024).toFixed(0) + ' KB)';
+      dxfList.appendChild(li);
+    }
+  });
+})();
+</script>
 {% endblock %}

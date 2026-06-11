@@ -51,6 +51,7 @@ def init_ed_db():
             created_at   TEXT NOT NULL
         );
         ALTER TABLE reviews ADD COLUMN IF NOT EXISTS design_data TEXT;
+        ALTER TABLE reviews ADD COLUMN IF NOT EXISTS dxf_content BYTEA;
         CREATE TABLE IF NOT EXISTS issues (
             id          TEXT PRIMARY KEY,
             review_id   TEXT NOT NULL REFERENCES reviews(id),
@@ -134,6 +135,10 @@ def upload():
     name  = request.form.get('drawing_name', '').strip() or f.filename
     dtype = request.form.get('drawing_type', 'General')
 
+    # Optional DXF for exact schedule extraction
+    dxf_file  = request.files.get('dxf_file')
+    dxf_bytes = dxf_file.read() if (dxf_file and dxf_file.filename.lower().endswith('.dxf')) else None
+
     design_files = [
         (u.filename, u.read())
         for u in request.files.getlist('design_inputs')
@@ -152,13 +157,15 @@ def upload():
     cur.execute('INSERT INTO drawings (id, name, drawing_type, created_at) VALUES (%s,%s,%s,%s)',
                 (drawing_id, name, dtype, now))
     cur.execute(
-        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data) VALUES (%s,%s,1,%s,%s,%s,%s)',
-        (review_id, drawing_id, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json)
+        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data, dxf_content) '
+        'VALUES (%s,%s,1,%s,%s,%s,%s,%s)',
+        (review_id, drawing_id, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json,
+         psycopg2.Binary(dxf_bytes) if dxf_bytes else None)
     )
     conn.commit()
 
     try:
-        issues, detected_type = run_check(pdf_bytes, design_data)
+        issues, detected_type = run_check(pdf_bytes, design_data, dxf_bytes=dxf_bytes)
         for err in parse_errors:
             issues.append({
                 'category': 'Input', 'title': 'Design input parse error',
@@ -294,6 +301,13 @@ def diagnostics():
     except ImportError as e:
         info['openpyxl'] = f'MISSING — {e}'
 
+    # ezdxf (DXF extraction)
+    try:
+        import ezdxf
+        info['ezdxf'] = ezdxf.__version__
+    except ImportError as e:
+        info['ezdxf'] = f'MISSING — {e}'
+
     # DB
     try:
         conn = _get_db()
@@ -341,13 +355,15 @@ def reupload(drawing_id):
         return "Only PDF files are accepted.", 400
     pdf_bytes = f.read()
 
-    # Load design_data from the most recent previous version — no need to re-upload files
+    # Load design_data and dxf_content from the most recent previous version
     cur.execute(
-        'SELECT design_data FROM reviews WHERE drawing_id=%s ORDER BY version DESC LIMIT 1',
+        'SELECT design_data, dxf_content FROM reviews WHERE drawing_id=%s ORDER BY version DESC LIMIT 1',
         (drawing_id,)
     )
     prev = cur.fetchone()
     design_data = json.loads(prev['design_data']) if prev and prev['design_data'] else {}
+    # Reuse stored DXF unless the engineer uploads a new one
+    dxf_bytes = bytes(prev['dxf_content']) if prev and prev.get('dxf_content') else None
 
     # Allow overriding design inputs if new files are uploaded on this re-upload
     new_design_files = [
@@ -359,6 +375,11 @@ def reupload(drawing_id):
     if new_design_files:
         design_data, parse_errors = parse_design_inputs(new_design_files)
 
+    # Allow overriding DXF if new one is uploaded
+    new_dxf = request.files.get('dxf_file')
+    if new_dxf and new_dxf.filename.lower().endswith('.dxf'):
+        dxf_bytes = new_dxf.read()
+
     design_data_json = json.dumps(design_data) if design_data else None
 
     cur.execute('SELECT MAX(version) AS v FROM reviews WHERE drawing_id=%s', (drawing_id,))
@@ -367,13 +388,15 @@ def reupload(drawing_id):
     review_id = str(uuid.uuid4())
     now = datetime.now().isoformat()
     cur.execute(
-        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data) VALUES (%s,%s,%s,%s,%s,%s,%s)',
-        (review_id, drawing_id, new_ver, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json)
+        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data, dxf_content) '
+        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
+        (review_id, drawing_id, new_ver, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json,
+         psycopg2.Binary(dxf_bytes) if dxf_bytes else None)
     )
     conn.commit()
 
     try:
-        issues, detected_type = run_check(pdf_bytes, design_data)
+        issues, detected_type = run_check(pdf_bytes, design_data, dxf_bytes=dxf_bytes)
         for err in parse_errors:
             issues.append({
                 'category': 'Input', 'title': 'Design input parse error',

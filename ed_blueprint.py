@@ -28,7 +28,15 @@ DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 def _get_db():
     url = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
-    return psycopg2.connect(url, cursor_factory=psycopg2.extras.RealDictCursor)
+    return psycopg2.connect(
+        url,
+        cursor_factory=psycopg2.extras.RealDictCursor,
+        connect_timeout=10,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5,
+    )
 
 
 def init_ed_db():

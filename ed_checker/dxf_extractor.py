@@ -9,9 +9,11 @@ The PDF is still required for display in the review UI; the DXF is used only for
 extraction.
 """
 import io
+import os
 import re
 import math
 import logging
+import tempfile
 
 log = logging.getLogger(__name__)
 
@@ -39,22 +41,33 @@ _NOTE_KEYWORDS = {
     'irc_code_ref':     ['IRC:', 'IRC-', 'IRC '],
 }
 
-# Component section header keywords that appear in the schedule
-_COMP_KEYWORDS = {
-    'pilecap': ('PILECAP',),
-    'pile':    ('PILE (SCHEDULE', 'PILE (PER PILE', 'PILE (PILE'),
-    'pier':    ('PIER (CIRCULAR', 'PIER (RECTANGULAR', 'PIER (CAPSULE', 'PIER (REC'),
+# Bar mark → component mapping (replaces header-based component detection)
+# Based on CASAD PPP drawing convention — works without finding component header rows.
+_BAR_MARK_COMP = {
+    'x': 'pile', 'y': 'pile', 'y1': 'pile', 'z': 'pile',
+    'a': 'pilecap', 'b': 'pilecap', 'c': 'pilecap', 'd': 'pilecap',
+    'e': 'pilecap', 'f': 'pilecap', 'f1': 'pilecap',
+    'g': 'pier', 'h': 'pier', 'h1': 'pier', 'h2': 'pier',
+    'i': 'pier', 'i1': 'pier',
+    'j': 'pier', 'j1': 'pier',
+    'k': 'pier', 'k1': 'pier',
+    'l': 'pier', 'l1': 'pier',
+    'm': 'pier', 'm1': 'pier',
+    'n': 'pier', 'n1': 'pier',
 }
 
-# Schedule column header keywords → internal field name
+# Schedule column header keywords → internal field name.
+# CASAD schedule column headers span multiple Y-rows (e.g. "TOTAL" on one line,
+# "LENGTH IN" on next, "METER" on next). _build_col_map receives all sub-rows
+# and concatenates text per X-band before matching.
 _COL_KEYWORDS = {
-    'bar_mark':       ['BAR MARK', 'BAR\nMARK', 'MARK'],
+    'bar_mark':       ['BAR MARK', 'BAR\nMARK', 'MARK', 'MK.', 'MK'],
     'bar_dia_mm':     ['DIA', 'Ø', 'φ', 'PHI', 'DIAMETER'],
     'spacing_mm':     ['SPACING', 'C/C', 'PITCH', 'SPC'],
     'count':          ['NOS', 'NO.', 'NUMBER', 'COUNT', 'NOS.'],
     'length_m':       ['LENGTH OF BAR', 'LENGTH OF', 'BAR LENGTH', 'LENGTH (M)', 'LENGTH(M)', 'LENGTH'],
     'total_length_m': ['TOTAL LENGTH', 'TOTAL LEN', 'TOT. LEN'],
-    'unit_wt_kg_m':   ['UNIT WT', 'UNIT WEIGHT', 'WT./M', 'KG/M', 'UNIT W'],
+    'unit_wt_kg_m':   ['UNIT WT', 'UNIT WEIGHT', 'WT./M', 'KG/M', 'UNIT W', 'WEIGHT/R', 'R. MT.', 'WEIGHT/'],
     'total_wt_kg':    ['TOTAL WT', 'TOTAL WEIGHT', 'TOTAL WGT', 'TOT. WT'],
 }
 
@@ -91,11 +104,24 @@ def extract_from_dxf(dxf_bytes: bytes) -> dict:
         log.error('ezdxf not installed. Run: pip install ezdxf>=1.3.0')
         return _empty()
 
+    # ezdxf.read(BytesIO) fails on AutoCAD DXF files that contain binary data
+    # (embedded images, binary chunks in MTEXT). ezdxf.readfile() handles encoding
+    # detection correctly. Write to a temp file and use readfile() instead.
+    tmp_path = None
     try:
-        doc = ezdxf.read(io.BytesIO(dxf_bytes))
+        with tempfile.NamedTemporaryFile(suffix='.dxf', delete=False) as tmp:
+            tmp.write(dxf_bytes)
+            tmp_path = tmp.name
+        doc = ezdxf.readfile(tmp_path)
     except Exception as e:
         log.error('DXF parse failed: %s', e, exc_info=True)
         return _empty()
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     msp     = doc.modelspace()
     extents = _get_extents(doc)
@@ -268,90 +294,78 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
     """Extract reinforcement schedule from DXF text entities."""
     x_min, y_min, x_max, y_max = extents
     dw = x_max - x_min
+    dh = y_max - y_min
 
-    # Schedule occupies the right ~45% of the drawing
-    sched_x_min = x_min + dw * 0.50
+    # The schedule sits in roughly the middle third of CASAD drawings.
+    # Previous threshold of 50% cut through the column headers (DIA/NOS/LENGTH
+    # at 45-49%, bar marks at 38%). Use 30% to capture the full schedule.
+    sched_x_min = x_min + dw * 0.30
     sched_text = [t for t in all_text if t['x'] >= sched_x_min]
 
     if not sched_text:
         log.warning('No text found in schedule area (x >= %.1f)', sched_x_min)
         return {}
 
-    log.info('Schedule area: %d text entities at x >= %.1f', len(sched_text), sched_x_min)
+    log.info('Schedule area: %d text entities at x >= %.1f (%.0f%% from left)',
+             len(sched_text), sched_x_min, (sched_x_min - x_min) / dw * 100)
 
-    # Group into rows
     rows = _group_rows(sched_text, tol_frac=0.004, extents=extents)
     if not rows:
         return {}
 
-    # Find component headers and column headers
-    comp_rows   = {}   # comp_name → row index in `rows`
-    header_idx  = None
-
+    # Find the column header row: must contain at least 2 of DIA / NOS / LENGTH.
+    # These are the most reliably unique schedule-header keywords.
+    header_idx = None
     for idx, row in enumerate(rows):
-        row_text = ' '.join(t['text'] for t in row).upper().strip()
-        # Normalise typography
-        row_text = row_text.replace('\xad', '-').replace('–', '-')
-
-        # Column header row detection
-        if header_idx is None and any(k in row_text for k in ('DIA', ' NOS', 'LENGTH', 'UNIT WT')):
+        row_text = ' '.join(t['text'] for t in row).upper()
+        if sum(1 for k in ('DIA', 'NOS', 'LENGTH') if k in row_text) >= 2:
             header_idx = idx
-            continue
-
-        # Component header detection
-        for comp, keywords in _COMP_KEYWORDS.items():
-            if any(row_text.startswith(kw) for kw in keywords) or any(kw == row_text for kw in keywords):
-                comp_rows[comp] = idx
-
-    if header_idx is None:
-        # Try looser match: any row with BAR anywhere
-        for idx, row in enumerate(rows):
-            if 'BAR' in ' '.join(t['text'] for t in row).upper():
-                header_idx = idx
-                break
+            break
 
     if header_idx is None:
         log.warning('Schedule column header row not found')
         return {}
 
-    col_map = _build_col_map(rows[header_idx])
-    log.info('Schedule column map: %s', {k: f'x≈{v:.1f}' for k, v in col_map.items()})
+    # CASAD schedule headers span multiple Y-lines (e.g. "TOTAL" on one row,
+    # "LENGTH IN" on the next, "METER" on the next). Collect all sub-rows
+    # within 1.2% of drawing height of the identified header row and combine them.
+    # 4% was too large — it pulled data rows into the header band, drowning
+    # 'TOTAL LENGTH' text with actual numeric values and breaking column detection.
+    header_y = rows[header_idx][0]['y']
+    header_sub_rows = [row for row in rows if abs(row[0]['y'] - header_y) < dh * 0.012]
 
-    # Determine component assignment for each row by proximity to component header
-    # Build sorted list: (row_index, comp_name) for component headers
-    comp_boundaries = sorted(comp_rows.items(), key=lambda kv: kv[1])
+    col_map = _build_col_map(header_sub_rows)
+    log.info('Schedule column map: %s', {k: f'x≈{v:.0f}' for k, v in col_map.items()})
 
-    def _row_component(row_idx):
-        comp = None
-        for name, cidx in comp_boundaries:
-            if row_idx > cidx:
-                comp = name
-        return comp
+    if not col_map:
+        log.warning('Column map empty — cannot parse schedule rows')
+        return {}
 
-    # Parse data rows
+    # Parse data rows.
+    # Component is derived from the bar mark letter (CASAD naming convention)
+    # — no need to find component header rows ('PILECAP = 3077 KG' etc.) which
+    # vary in format across drawings.
     schedule = {}
-    for idx, row in enumerate(rows[header_idx + 1:], start=header_idx + 1):
-        # Skip if this is a component header row
-        if idx in {v for v in comp_rows.values()}:
-            continue
-
-        comp = _row_component(idx)
-        if comp is None:
-            continue
-
+    for row in rows[header_idx + 1:]:
         bar_data = _parse_schedule_row(row, col_map)
         if not bar_data:
             continue
-        bm = bar_data.get('bar_mark', '').strip().lower()
+        # Strip surrounding single/double quotes that AutoCAD adds to bar marks
+        # e.g. the DXF TEXT entity stores "'a'" (3 chars) not 'a' (1 char)
+        bm = bar_data.get('bar_mark', '').strip().strip("'\"").lower()
         if not bm or bm not in _KNOWN_MARKS:
             continue
 
+        comp = _BAR_MARK_COMP.get(bm)
+        if comp is None:
+            log.debug('Unknown bar mark %r — skipping', bm)
+            continue
+
+        bar_data['bar_mark'] = bm
         comp_dict = schedule.setdefault(comp, {})
         if bm in comp_dict:
             # Duplicate bar mark — accumulate totals (e.g. two y rows for pile)
             ex = comp_dict[bm]
-            if not isinstance(ex, dict):
-                continue
             for f in ('count', 'total_length_m', 'total_wt_kg'):
                 ov = _safe_float(ex.get(f))
                 nv = _safe_float(bar_data.get(f))
@@ -360,34 +374,71 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
         else:
             comp_dict[bm] = bar_data
 
-    log.info('Schedule parsed: %s',
-             {c: list(b.keys()) for c, b in schedule.items()})
+    log.info('Schedule parsed: %s', {c: list(b.keys()) for c, b in schedule.items()})
     return schedule
 
 
-def _build_col_map(header_row: list) -> dict:
-    """Map column field name → x-center position from the header row."""
-    col_map = {}
-    # First pass: try to match full header phrases across adjacent cells
-    full_text = ' '.join(t['text'].upper() for t in header_row)
-    used_idxs = set()
+def _build_col_map(header_rows: list) -> dict:
+    """
+    Map column field name → x-center position from one or more header rows.
+    header_rows: list of row-lists (each row is [{text, x, y}]).
 
-    for field, keywords in _COL_KEYWORDS.items():
-        for kw in sorted(keywords, key=len, reverse=True):  # longest match first
-            if kw.upper() in full_text:
-                # Find which cell(s) contain this keyword
-                for i, t in enumerate(header_row):
-                    if i in used_idxs:
-                        continue
-                    cell_text = t['text'].upper()
-                    if kw.upper() in cell_text or cell_text in kw.upper():
-                        col_map[field] = t['x']
-                        used_idxs.add(i)
-                        break
-                if field in col_map:
+    CASAD schedule headers span multiple Y-lines, so the caller passes ALL
+    sub-rows in the header band. Text cells at the same X across multiple rows
+    are concatenated to form the full column header string before keyword matching.
+    """
+    # Flatten all cells across all header rows
+    all_cells = [cell for row in header_rows for cell in row]
+    if not all_cells:
+        return {}
+
+    x_vals = [c['x'] for c in all_cells]
+    x_span = max(x_vals) - min(x_vals) if len(x_vals) > 1 else 1.0
+    # Group cells into X-bands (one band = one column).
+    # Tolerance: 2% of the header X-span keeps tightly-spaced columns separate.
+    x_tol = max(x_span * 0.02, 50)
+
+    col_groups = {}  # x_center → list of text strings
+    for cell in sorted(all_cells, key=lambda c: c['x']):
+        placed = False
+        for x_center in list(col_groups.keys()):
+            if abs(cell['x'] - x_center) < x_tol:
+                col_groups[x_center].append(cell['text'].upper().strip())
+                placed = True
+                break
+        if not placed:
+            col_groups[cell['x']] = [cell['text'].upper().strip()]
+
+    # For each column band, concatenate all text parts and match against keywords.
+    col_map = {}
+    used_fields = set()
+    for x_center in sorted(col_groups.keys()):
+        full_col_text = ' '.join(col_groups[x_center])
+        for field, keywords in _COL_KEYWORDS.items():
+            if field in used_fields:
+                continue
+            for kw in sorted(keywords, key=len, reverse=True):
+                if _kw_in_col(kw, full_col_text):
+                    col_map[field] = x_center
+                    used_fields.add(field)
                     break
 
     return col_map
+
+
+def _kw_in_col(kw: str, col_text: str) -> bool:
+    """
+    Check whether a column keyword matches a column's concatenated header text.
+    Substring match covers single-word keywords and exact-phrase headers.
+    Word-set match handles multi-word keywords whose parts appear in different
+    Y-rows of the header (and so arrive in X-sorted, not reading, order).
+    """
+    kw_u = kw.upper()
+    col_u = col_text.upper()
+    if kw_u in col_u:
+        return True
+    words = kw_u.split()
+    return len(words) > 1 and all(w in col_u for w in words)
 
 
 def _parse_schedule_row(row: list, col_map: dict) -> dict | None:
@@ -419,19 +470,24 @@ def _parse_schedule_row(row: list, col_map: dict) -> dict | None:
     if not bar_mark:
         return None
 
+    count_val = _parse_count(cell_map.get('count', ''))
+
     return {
         'bar_mark':       bar_mark,
         'component':      None,   # filled in by caller
         'reinforcement_text': None,
         'bar_dia_mm':     _parse_dia(cell_map.get('bar_dia_mm', '')),
         'spacing_mm':     _parse_spacing(cell_map.get('spacing_mm', '')),
-        'count_text':     cell_map.get('count', ''),
-        'count':          _parse_count(cell_map.get('count', '')),
+        # count_text cleared when parse fails — prevents _norm_count() in comparator from
+        # reading trailing digits in multiplier notation like 'x4' (4 piles) as a bar count.
+        'count_text':     str(count_val) if count_val is not None else '',
+        'count':          count_val,
         'length_m':       _safe_float(cell_map.get('length_m')),
         'total_length_m': _safe_float(cell_map.get('total_length_m')),
         'unit_wt_kg_m':   _safe_float(cell_map.get('unit_wt_kg_m')),
         'total_wt_kg':    _safe_float(cell_map.get('total_wt_kg')),
         'shape_dimensions': None,
+        'from_dxf':       True,   # signals comparator to skip checks unavailable from DXF
     }
 
 

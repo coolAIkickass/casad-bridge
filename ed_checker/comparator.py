@@ -442,12 +442,15 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 'error', zone, bar_bbox
             ))
     elif d_spacing and not w_spacing:
-        issues.append(_issue(
-            'Bar Spacing', f"{prefix}: Spacing not found in drawing ({round(d_spacing, 2)}mm expected)",
-            f"Design input specifies spacing of {round(d_spacing, 2)}mm c/c for bar '{bm}' but drawing schedule does not show spacing.",
-            f"Add {round(d_spacing, 2)}mm c/c spacing for bar '{bm}'.",
-            'error', zone, bar_bbox
-        ))
+        if not drawing_bar.get('from_dxf'):
+            # DXF schedule has no separate C/C column — spacing cannot be verified from DXF.
+            # Only flag missing spacing for PDF path where the column should be present.
+            issues.append(_issue(
+                'Bar Spacing', f"{prefix}: Spacing not found in drawing ({round(d_spacing, 2)}mm expected)",
+                f"Design input specifies spacing of {round(d_spacing, 2)}mm c/c for bar '{bm}' but drawing schedule does not show spacing.",
+                f"Add {round(d_spacing, 2)}mm c/c spacing for bar '{bm}'.",
+                'error', zone, bar_bbox
+            ))
 
     # Count check
     d_count = design_bar.get('count')

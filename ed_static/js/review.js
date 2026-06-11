@@ -310,12 +310,32 @@ document.getElementById('btn-zoom-out').addEventListener('click', () => {
   renderPage(currentPage);
 });
 
+// ── Polling — wait for background check to complete ──
+
+async function waitForComplete() {
+  const issueList = document.getElementById('issue-list');
+  issueList.innerHTML = '<div class="panel-loading">AI is analysing the drawing — this takes 1–2 minutes. Results will appear automatically…</div>';
+  while (true) {
+    await new Promise(r => setTimeout(r, 4000));
+    try {
+      const r = await fetch(`/ed/api/review/${window.REVIEW_ID}/status`);
+      const d = await r.json();
+      if (d.status !== 'processing') break;
+    } catch (_) { /* network blip — keep polling */ }
+  }
+}
+
 // ── Init ──────────────────────────────────────────────
 
 async function init() {
   // Reflect initial defaults in UI
   document.getElementById('zoom-label').textContent = Math.round(scale * 100) + '%';
   document.querySelector('.stat-open')?.classList.add('active');
+
+  // If the check is still running, wait for it before loading issues
+  if (window.REVIEW_STATUS === 'processing') {
+    await waitForComplete();
+  }
 
   // Load issues first so highlights appear as soon as PDF renders
   const resp = await fetch(`/ed/api/review/${window.REVIEW_ID}/issues`);

@@ -2,6 +2,7 @@
 import os
 import uuid
 import logging
+import threading
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
@@ -101,6 +102,44 @@ def _save_issues(review_id, issues, cur):
         )
 
 
+def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, parse_errors):
+    """Run drawing check in a background thread; saves issues and marks review complete."""
+    log = logging.getLogger(__name__)
+    try:
+        issues, detected_type = run_check(pdf_bytes, design_data, dxf_bytes=dxf_bytes)
+        for err in parse_errors:
+            issues.append({
+                'category': 'Input', 'title': 'Design input parse error',
+                'description': f'Could not parse design input: {err}',
+                'suggestion': 'Check that the Excel file matches the CASAD E2E BBS format.',
+                'severity': 'error', 'page_num': 1,
+                'x': 5, 'y': 5, 'width': 30, 'height': 8,
+            })
+    except Exception as e:
+        log.exception('run_check failed for review %s', review_id)
+        issues = [{
+            'category': 'System', 'title': 'Checker error',
+            'description': f'An unexpected error occurred: {e}',
+            'suggestion': 'Check server logs.',
+            'severity': 'error', 'page_num': 1,
+            'x': 5, 'y': 5, 'width': 30, 'height': 8,
+        }]
+        detected_type = 'General'
+
+    try:
+        conn = _get_db()
+        cur  = conn.cursor()
+        _save_issues(review_id, issues, cur)
+        cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
+        cur.execute("UPDATE drawings SET drawing_type=%s WHERE id=%s", (detected_type, drawing_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        log.info('Background check complete — review %s, %d issues', review_id, len(issues))
+    except Exception as e:
+        log.exception('Failed to save background check results for review %s', review_id)
+
+
 @ed_bp.route('/')
 def index():
     per_page = 10
@@ -171,33 +210,16 @@ def upload():
          psycopg2.Binary(dxf_bytes) if dxf_bytes else None)
     )
     conn.commit()
-
-    try:
-        issues, detected_type = run_check(pdf_bytes, design_data, dxf_bytes=dxf_bytes)
-        for err in parse_errors:
-            issues.append({
-                'category': 'Input', 'title': 'Design input parse error',
-                'description': f'Could not parse design input: {err}',
-                'suggestion': 'Check that the Excel file matches the CASAD E2E BBS format.',
-                'severity': 'error', 'page_num': 1,
-                'x': 5, 'y': 5, 'width': 30, 'height': 8,
-            })
-        _save_issues(review_id, issues, cur)
-        cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
-        cur.execute("UPDATE drawings SET drawing_type=%s WHERE id=%s", (detected_type, drawing_id))
-    except Exception as e:
-        _save_issues(review_id, [{
-            'category': 'System', 'title': 'Checker error',
-            'description': f'An unexpected error occurred: {e}',
-            'suggestion': 'Check server logs.',
-            'severity': 'error', 'page_num': 1,
-            'x': 5, 'y': 5, 'width': 30, 'height': 8,
-        }], cur)
-        cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
-
-    conn.commit()
     cur.close()
     conn.close()
+
+    # Run check in background — user sees the review page immediately
+    threading.Thread(
+        target=_run_check_bg,
+        args=(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, parse_errors),
+        daemon=True,
+    ).start()
+
     return redirect(url_for('ed.review', review_id=review_id))
 
 
@@ -247,6 +269,19 @@ def api_issues(review_id):
     cur.close()
     conn.close()
     return jsonify([dict(i) for i in issues])
+
+
+@ed_bp.route('/api/review/<review_id>/status')
+def api_review_status(review_id):
+    conn = _get_db()
+    cur  = conn.cursor()
+    cur.execute('SELECT status FROM reviews WHERE id=%s', (review_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'status': row['status']})
 
 
 @ed_bp.route('/api/review/<review_id>/extract')
@@ -402,31 +437,14 @@ def reupload(drawing_id):
          psycopg2.Binary(dxf_bytes) if dxf_bytes else None)
     )
     conn.commit()
-
-    try:
-        issues, detected_type = run_check(pdf_bytes, design_data, dxf_bytes=dxf_bytes)
-        for err in parse_errors:
-            issues.append({
-                'category': 'Input', 'title': 'Design input parse error',
-                'description': f'Could not parse design input: {err}',
-                'suggestion': 'Check that the Excel file matches the CASAD E2E BBS format.',
-                'severity': 'error', 'page_num': 1,
-                'x': 5, 'y': 5, 'width': 30, 'height': 8,
-            })
-        _save_issues(review_id, issues, cur)
-        cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
-        cur.execute("UPDATE drawings SET drawing_type=%s WHERE id=%s", (detected_type, drawing_id))
-    except Exception as e:
-        _save_issues(review_id, [{
-            'category': 'System', 'title': 'Checker error',
-            'description': f'An unexpected error occurred: {e}',
-            'suggestion': 'Check server logs.',
-            'severity': 'error', 'page_num': 1,
-            'x': 5, 'y': 5, 'width': 30, 'height': 8,
-        }], cur)
-        cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
-
-    conn.commit()
     cur.close()
     conn.close()
+
+    # Run check in background — user sees the review page immediately
+    threading.Thread(
+        target=_run_check_bg,
+        args=(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, parse_errors),
+        daemon=True,
+    ).start()
+
     return redirect(url_for('ed.review', review_id=review_id))

@@ -75,8 +75,9 @@
 </div>
 
 <script>
-  window.REVIEW_ID = '{{ review.id }}';
-  window.PDF_URL   = '/ed/pdf/{{ review.id }}';
+  window.REVIEW_ID     = '{{ review.id }}';
+  window.PDF_URL       = '/ed/pdf/{{ review.id }}';
+  window.REVIEW_STATUS = '{{ review.status }}';
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="/ed/static/js/review.js"></script>

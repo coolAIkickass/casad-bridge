@@ -133,6 +133,10 @@ def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, pars
         _save_issues(review_id, issues, cur)
         cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
         cur.execute("UPDATE drawings SET drawing_type=%s WHERE id=%s", (detected_type, drawing_id))
+        # Store compressed DXF now — background thread has no request timeout
+        if dxf_bytes:
+            cur.execute("UPDATE reviews SET dxf_content=%s WHERE id=%s",
+                        (psycopg2.Binary(_compress_dxf(dxf_bytes)), review_id))
         conn.commit()
         cur.close()
         conn.close()
@@ -219,11 +223,11 @@ def upload():
     cur  = conn.cursor()
     cur.execute('INSERT INTO drawings (id, name, drawing_type, created_at) VALUES (%s,%s,%s,%s)',
                 (drawing_id, name, dtype, now))
+    # dxf_content stored by background thread to keep this INSERT small (avoid SSL EOF on large DXF)
     cur.execute(
-        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data, dxf_content) '
-        'VALUES (%s,%s,1,%s,%s,%s,%s,%s)',
-        (review_id, drawing_id, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json,
-         psycopg2.Binary(_compress_dxf(dxf_bytes)) if dxf_bytes else None)
+        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data) '
+        'VALUES (%s,%s,1,%s,%s,%s,%s)',
+        (review_id, drawing_id, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json)
     )
     conn.commit()
     cur.close()
@@ -446,11 +450,11 @@ def reupload(drawing_id):
     new_ver   = (last['v'] or 0) + 1
     review_id = str(uuid.uuid4())
     now = datetime.now().isoformat()
+    # dxf_content stored by background thread to keep this INSERT small
     cur.execute(
-        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data, dxf_content) '
-        'VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
-        (review_id, drawing_id, new_ver, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json,
-         psycopg2.Binary(_compress_dxf(dxf_bytes)) if dxf_bytes else None)
+        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data) '
+        'VALUES (%s,%s,%s,%s,%s,%s,%s)',
+        (review_id, drawing_id, new_ver, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json)
     )
     conn.commit()
     cur.close()

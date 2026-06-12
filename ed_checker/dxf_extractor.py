@@ -107,19 +107,37 @@ def _build_comp_boundaries(data_rows: list) -> list:
     Scan data rows for component section header rows (PILECAP / PILE / PIER).
     Returns [(row_idx, comp), ...] sorted by row_idx.
 
-    These boundaries tell us which component each subsequent bar mark row belongs to,
-    without relying on hardcoded bar mark letters. Works for any letter convention
-    (x/y/z for pile OR l/m/n OR anything else) as long as the DXF schedule has
-    standard sub-headers between component sections.
+    A true component header looks like:
+        "PILECAP"  /  "PILE (SCHEDULE PER PILE)"  /  "PIER (CIRCULAR)"
+    False positives that must be excluded:
+        "PILE = 11460 KG ..."  — total weight summary row (COMP followed by = and digits)
+        "MAX. LOAD ON TOP OF PILE"  — note row (PILE buried mid-sentence)
+    Both are excluded by two guards:
+      1. Skip any row where COMP is followed by '=' and a digit.
+      2. Require the component keyword to appear in the first two tokens of the row.
+
+    Falls back to _BAR_MARK_COMP when no boundaries are found (drawings without
+    explicit sub-headers rely on bar mark letter conventions).
     """
+    _total_re = re.compile(r'\b(PILECAP|PILE|PIER)\s*=\s*\d', re.IGNORECASE)
     boundaries = []
     for idx, row in enumerate(data_rows):
         row_text = ' '.join(t['text'] for t in row)
+        # Guard 1: skip total weight rows like "PILE = 11460 KG"
+        if _total_re.search(row_text):
+            continue
+        tokens = row_text.split()
+        first_two = ' '.join(tokens[:2]).upper()
         for comp, pattern in _COMP_HEADER_KEYWORDS:
-            if pattern.search(row_text):
-                boundaries.append((idx, comp))
-                log.debug('Component boundary at row %d: %r → %s', idx, row_text[:60], comp)
-                break
+            if not pattern.search(row_text):
+                continue
+            # Guard 2: component keyword must be within the first two tokens
+            # (excludes "MAX. LOAD ON TOP OF PILE", "LOAD ON PILE CAP" etc.)
+            if not pattern.search(first_two):
+                continue
+            boundaries.append((idx, comp))
+            log.debug('Component boundary at row %d: %r → %s', idx, row_text[:60], comp)
+            break
     return boundaries
 
 

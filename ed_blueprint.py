@@ -165,6 +165,25 @@ def _decompress_dxf(b) -> bytes:
         return raw  # legacy row stored uncompressed
 
 
+def _read_dxf_upload(file_storage) -> bytes:
+    """Read an uploaded DXF file field. The browser gzips the DXF before upload
+    (upload.js, CompressionStream) and sends it as <name>.dxf.gz — gunzip it here.
+    Raw .dxf is still accepted (old browsers without CompressionStream)."""
+    if not file_storage or not file_storage.filename:
+        return None
+    name = file_storage.filename.lower()
+    if name.endswith('.dxf.gz'):
+        try:
+            return gzip.decompress(file_storage.read())
+        except OSError:
+            logging.getLogger('ed.upload').warning(
+                'DXF upload %s: gzip decompress failed — ignoring DXF', file_storage.filename)
+            return None
+    if name.endswith('.dxf'):
+        return file_storage.read()
+    return None
+
+
 @ed_bp.route('/')
 def index():
     per_page = 10
@@ -213,8 +232,7 @@ def upload():
     name  = request.form.get('drawing_name', '').strip() or f.filename
     dtype = request.form.get('drawing_type', 'General')
 
-    dxf_file  = request.files.get('dxf_file')
-    dxf_bytes = dxf_file.read() if (dxf_file and dxf_file.filename.lower().endswith('.dxf')) else None
+    dxf_bytes = _read_dxf_upload(request.files.get('dxf_file'))
     _ulog.info('STEP 2 DXF read — %.1fs, size=%d KB', time.time()-t0, len(dxf_bytes)//1024 if dxf_bytes else 0)
 
     design_files = [
@@ -459,9 +477,9 @@ def reupload(drawing_id):
         design_data, parse_errors = parse_design_inputs(new_design_files)
 
     # Allow overriding DXF if new one is uploaded
-    new_dxf = request.files.get('dxf_file')
-    if new_dxf and new_dxf.filename.lower().endswith('.dxf'):
-        dxf_bytes = new_dxf.read()
+    new_dxf_bytes = _read_dxf_upload(request.files.get('dxf_file'))
+    if new_dxf_bytes:
+        dxf_bytes = new_dxf_bytes
 
     design_data_json = json.dumps(design_data) if design_data else None
 

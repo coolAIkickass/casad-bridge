@@ -1,10 +1,14 @@
 // ── Slot 1: Drawing PDF ────────────────────────────────────────────────────
+// NOTE: this script is shared by upload.html AND reupload.html. The reupload
+// page has no design-input slot, no #selected-size, no #drawing_name and no
+// #review-wait-note — every reference to those must be null-guarded.
 const dropZone     = document.getElementById('drop-zone');
 const fileInput    = document.getElementById('file-input');
 const dropLabel    = document.getElementById('drop-label');
 const dropSelected = document.getElementById('drop-selected');
 const filenameTxt  = document.getElementById('selected-filename');
 const submitBtn    = document.getElementById('submit-btn');
+const submitBtnDefaultText = submitBtn.textContent.trim();
 
 function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
@@ -21,26 +25,31 @@ function setFile(file) {
   dt.items.add(file);
   fileInput.files = dt.files;
   filenameTxt.textContent = file.name;
-  document.getElementById('selected-size').textContent = formatSize(file.size);
+  const sizeTxt = document.getElementById('selected-size');
+  if (sizeTxt) sizeTxt.textContent = formatSize(file.size);
   dropLabel.style.display    = 'none';
   dropSelected.style.display = '';
   submitBtn.disabled = false;
-  submitBtn.textContent = 'Review drawing';
+  submitBtn.textContent = submitBtnDefaultText;
 
   // Auto-set hidden drawing name from filename — strip extension, clean separators, cap 60 chars
   const nameInput = document.getElementById('drawing_name');
-  const raw = file.name.replace(/\.pdf$/i, '').replace(/[_\-]+/g, ' ').trim();
-  nameInput.value = raw.length > 60 ? raw.slice(0, 57) + '…' : raw;
+  if (nameInput) {
+    const raw = file.name.replace(/\.pdf$/i, '').replace(/[_\-]+/g, ' ').trim();
+    nameInput.value = raw.length > 60 ? raw.slice(0, 57) + '…' : raw;
+  }
 
   // Draw attention to the DXF slot (next logical step after PDF)
   const nextZone = dxfDropZone || designDropZone;
-  nextZone.classList.remove('attention');
-  void nextZone.offsetWidth;  // force reflow to restart animation
-  nextZone.classList.add('attention');
-  nextZone.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  nextZone.addEventListener('animationend', () => {
+  if (nextZone) {
     nextZone.classList.remove('attention');
-  }, { once: true });
+    void nextZone.offsetWidth;  // force reflow to restart animation
+    nextZone.classList.add('attention');
+    nextZone.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    nextZone.addEventListener('animationend', () => {
+      nextZone.classList.remove('attention');
+    }, { once: true });
+  }
 }
 
 function clearFile() {
@@ -48,8 +57,9 @@ function clearFile() {
   dropLabel.style.display    = '';
   dropSelected.style.display = 'none';
   submitBtn.disabled = true;
-  submitBtn.textContent = 'Review drawing';
-  document.getElementById('drawing_name').value = '';
+  submitBtn.textContent = submitBtnDefaultText;
+  const nameInput = document.getElementById('drawing_name');
+  if (nameInput) nameInput.value = '';
 }
 
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
@@ -67,7 +77,8 @@ dropZone.addEventListener('drop', (e) => {
 const dxfInput    = document.getElementById('dxf-input');
 const dxfList     = document.getElementById('dxf-file-list');
 const dxfDropZone = document.getElementById('dxf-drop-zone');
-let dxfFile = null;
+let dxfFile  = null;
+let dxfReady = false;  // true once dxfInput.files holds the final (gzipped) file for submit
 
 function renderDxfFile() {
   dxfList.innerHTML = '';
@@ -82,6 +93,7 @@ function renderDxfFile() {
     </div>`;
   li.querySelector('.file-row-remove').addEventListener('click', () => {
     dxfFile = null;
+    dxfReady = false;
     dxfInput.value = '';
     renderDxfFile();
   });
@@ -90,7 +102,7 @@ function renderDxfFile() {
 
 if (dxfInput) {
   dxfInput.addEventListener('change', () => {
-    if (dxfInput.files[0]) { dxfFile = dxfInput.files[0]; renderDxfFile(); }
+    if (dxfInput.files[0]) { dxfFile = dxfInput.files[0]; dxfReady = false; renderDxfFile(); }
   });
   if (dxfDropZone) {
     dxfDropZone.addEventListener('click', (e) => { if (!e.target.closest('button, li')) dxfInput.click(); });
@@ -100,7 +112,7 @@ if (dxfInput) {
       e.preventDefault();
       dxfDropZone.classList.remove('dragover');
       const f = e.dataTransfer.files[0];
-      if (f && f.name.toLowerCase().endsWith('.dxf')) { dxfFile = f; renderDxfFile(); }
+      if (f && f.name.toLowerCase().endsWith('.dxf')) { dxfFile = f; dxfReady = false; renderDxfFile(); }
     });
   }
 }
@@ -143,28 +155,66 @@ function addDesignFiles(files) {
   renderDesignList();
 }
 
-designList.addEventListener('click', (e) => {
-  const btn = e.target.closest('.file-row-remove');
-  if (btn) {
-    designFiles.splice(parseInt(btn.dataset.idx), 1);
-    renderDesignList();
+if (designInput) {
+  designList.addEventListener('click', (e) => {
+    const btn = e.target.closest('.file-row-remove');
+    if (btn) {
+      designFiles.splice(parseInt(btn.dataset.idx), 1);
+      renderDesignList();
+    }
+  });
+
+  designInput.addEventListener('change', () => { addDesignFiles(designInput.files); });
+
+  designDropZone.addEventListener('click', (e) => { if (!e.target.closest('button, li')) designInput.click(); });
+  designDropZone.addEventListener('dragover',  (e) => { e.preventDefault(); designDropZone.classList.add('dragover'); });
+  designDropZone.addEventListener('dragleave', ()  => designDropZone.classList.remove('dragover'));
+  designDropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    designDropZone.classList.remove('dragover');
+    addDesignFiles(e.dataTransfer.files);
+  });
+}
+
+// ── DXF compression + submit ──────────────────────────────────────────────
+// DXF is ASCII text — gzip cuts a 25 MB file to ~6 MB, so the upload fits
+// inside Render's proxy window on slow office connections. The server
+// accepts ".dxf.gz" and gunzips (_read_dxf_upload in ed_blueprint.py).
+// This also fixes drag-and-drop: dxfFile is injected into dxfInput.files
+// at submit time, where previously dropped files were never synced at all.
+const uploadForm = document.getElementById('upload-form');
+
+function startSubmitUI() {
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Reviewing drawing...';
+  submitBtn.classList.add('reviewing');
+  const waitNote = document.getElementById('review-wait-note');
+  if (waitNote) waitNote.style.display = '';
+}
+
+async function prepareDxfAndSubmit() {
+  startSubmitUI();
+  let outFile = dxfFile;
+  try {
+    if (typeof CompressionStream !== 'undefined') {
+      submitBtn.textContent = 'Compressing DXF...';
+      const gzStream = dxfFile.stream().pipeThrough(new CompressionStream('gzip'));
+      const gzBlob   = await new Response(gzStream).blob();
+      outFile = new File([gzBlob], dxfFile.name + '.gz', { type: 'application/gzip' });
+    }
+  } catch (err) {
+    outFile = dxfFile;  // compression failed — upload the raw DXF
   }
-});
+  const dt = new DataTransfer();
+  dt.items.add(outFile);
+  dxfInput.files = dt.files;
+  dxfReady = true;
+  submitBtn.textContent = 'Reviewing drawing...';
+  uploadForm.submit();  // bypasses the submit handler — no recursion
+}
 
-designInput.addEventListener('change', () => { addDesignFiles(designInput.files); });
-
-designDropZone.addEventListener('click', (e) => { if (!e.target.closest('button, li')) designInput.click(); });
-designDropZone.addEventListener('dragover',  (e) => { e.preventDefault(); designDropZone.classList.add('dragover'); });
-designDropZone.addEventListener('dragleave', ()  => designDropZone.classList.remove('dragover'));
-designDropZone.addEventListener('drop', (e) => {
-  e.preventDefault();
-  designDropZone.classList.remove('dragover');
-  addDesignFiles(e.dataTransfer.files);
-});
-
-// ── Submit feedback ────────────────────────────────────────────────────────
-document.getElementById('upload-form').addEventListener('submit', (e) => {
-  if (designFiles.length === 0) {
+uploadForm.addEventListener('submit', (e) => {
+  if (designInput && designFiles.length === 0) {
     const ok = window.confirm(
       'No design input file added.\n\n' +
       'Without it, only title-block format and schedule arithmetic can be checked — ' +
@@ -180,8 +230,10 @@ document.getElementById('upload-form').addEventListener('submit', (e) => {
       return;
     }
   }
-  submitBtn.disabled = true;
-  submitBtn.textContent = 'Reviewing drawing...';
-  submitBtn.classList.add('reviewing');
-  document.getElementById('review-wait-note').style.display = '';
+  if (dxfFile && !dxfReady) {
+    e.preventDefault();
+    prepareDxfAndSubmit();
+    return;
+  }
+  startSubmitUI();
 });

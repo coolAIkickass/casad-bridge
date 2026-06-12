@@ -1,4 +1,5 @@
 # ed_blueprint.py — ED Checker (Drawing Review) app mounted at /ed
+import gc
 import os
 import gzip
 import time
@@ -83,6 +84,68 @@ def init_ed_db():
     cur.close()
     conn.close()
     print("ED Checker DB initialised", flush=True)
+    _recover_stuck_reviews()
+
+
+# Advisory lock key for the recovery sweep — arbitrary constant, must only be
+# unique within this database. Prevents both gunicorn workers (each imports
+# main.py and calls init_ed_db) from recovering the same reviews twice.
+_RECOVERY_LOCK_KEY = 874512369
+
+
+def _recover_stuck_reviews():
+    """Re-run checks orphaned by a mid-check restart (deploy/OOM kills the
+    daemon thread between the reviews INSERT and the status='complete' UPDATE,
+    leaving the row 'processing' forever and the review page polling forever).
+    Called at startup, when nothing else can legitimately be processing.
+    Everything needed to re-run is stored in the row: pdf_content, dxf_content,
+    design_data. Runs sequentially in one thread — parallel re-runs of large
+    DXFs would recreate the memory spike that causes these orphans."""
+    log = logging.getLogger('ed.recover')
+
+    def _sweep():
+        try:
+            # Dedicated connection holds the advisory lock for the whole sweep;
+            # the losing worker sees the lock taken and skips.
+            lock_conn = _get_db()
+            lock_cur  = lock_conn.cursor()
+            lock_cur.execute('SELECT pg_try_advisory_lock(%s) AS got', (_RECOVERY_LOCK_KEY,))
+            if not lock_cur.fetchone()['got']:
+                lock_conn.close()
+                return
+            try:
+                lock_cur.execute("SELECT id FROM reviews WHERE status='processing'")
+                stuck_ids = [r['id'] for r in lock_cur.fetchall()]
+                if not stuck_ids:
+                    return
+                log.info('Found %d stuck review(s): %s', len(stuck_ids), stuck_ids)
+                for rid in stuck_ids:
+                    # Fetch content per review so only one PDF+DXF is in memory at a time
+                    conn = _get_db()
+                    cur  = conn.cursor()
+                    cur.execute('SELECT drawing_id, pdf_content, dxf_content, design_data '
+                                'FROM reviews WHERE id=%s', (rid,))
+                    row = cur.fetchone()
+                    if not row:
+                        cur.close(); conn.close()
+                        continue
+                    # Drop any issues a partially-completed run managed to insert
+                    cur.execute('DELETE FROM issues WHERE review_id=%s', (rid,))
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                    log.info('Recovering stuck review %s — re-running check', rid)
+                    _run_check_bg(rid, row['drawing_id'], bytes(row['pdf_content']),
+                                  json.loads(row['design_data']) if row['design_data'] else {},
+                                  _decompress_dxf(row['dxf_content']), [])
+            finally:
+                lock_cur.execute('SELECT pg_advisory_unlock(%s)', (_RECOVERY_LOCK_KEY,))
+                lock_conn.commit()
+                lock_conn.close()
+        except Exception:
+            log.exception('stuck-review recovery failed')
+
+    threading.Thread(target=_sweep, daemon=True).start()
 
 
 def _save_issues(review_id, issues, cur):
@@ -131,6 +194,11 @@ def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, pars
             'x': 5, 'y': 5, 'width': 30, 'height': 8,
         }]
         detected_type = 'General'
+
+    # ezdxf inflates a 25 MB DXF into hundreds of MB of cyclic entity objects —
+    # reclaim them before the DB write allocates the compressed-DXF copies.
+    # Back-to-back checks without this tipped the 512 MB instance into OOM.
+    gc.collect()
 
     try:
         conn = _get_db()

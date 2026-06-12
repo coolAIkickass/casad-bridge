@@ -461,8 +461,17 @@ button { cursor: pointer; font: inherit; }
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 9px;
   color: var(--text-muted);
   font-size: 13px;
+}
+.pdf-loading::before {
+  content: '';
+  width: 16px; height: 16px;
+  border: 2px solid var(--border-dark);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
 }
 
 /* Highlights */
@@ -575,6 +584,77 @@ button { cursor: pointer; font: inherit; }
   color: var(--text-muted);
   font-size: 13px;
 }
+
+/* ── Analysing state (check still running) ─────────── */
+.analysing-state { padding: 20px 16px; }
+.analysing-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 4px 4px 20px;
+}
+.spinner {
+  flex-shrink: 0;
+  width: 18px; height: 18px;
+  margin-top: 1px;
+  border: 2px solid var(--border-dark);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.analysing-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+}
+.analysing-elapsed {
+  font-weight: 400;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  margin-left: 4px;
+}
+.analysing-sub {
+  margin-top: 4px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* Skeleton issue cards — shimmer while results are pending */
+.skeleton-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-dark);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.skeleton-line {
+  height: 10px;
+  border-radius: 5px;
+  margin-bottom: 9px;
+  background: linear-gradient(90deg, #EDF1F6 25%, #F8FAFC 45%, #EDF1F6 65%);
+  background-size: 220% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+.skeleton-line:last-child { margin-bottom: 0; }
+.skeleton-line.w40 { width: 40%; }
+.skeleton-line.w70 { width: 70%; }
+.skeleton-line.w90 { width: 90%; }
+@keyframes shimmer { from { background-position: 120% 0; } to { background-position: -100% 0; } }
+
+/* Results arriving — cards slide in once, staggered per category */
+.issue-list.reveal .issue-category {
+  animation: fadeUp .3s ease both;
+}
+.issue-list.reveal .issue-category:nth-child(2) { animation-delay: .06s; }
+.issue-list.reveal .issue-category:nth-child(3) { animation-delay: .12s; }
+.issue-list.reveal .issue-category:nth-child(n+4) { animation-delay: .18s; }
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
 .no-issues-msg {
   padding: 36px 24px;
   text-align: center;

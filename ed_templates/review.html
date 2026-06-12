@@ -18,7 +18,8 @@
     {% endif %}
   </div>
   <div class="toolbar-right">
-    <a href="/ed/reupload/{{ review.drawing_id }}" class="btn btn-primary btn-sm">↑ Upload Corrected Version</a>
+    <a href="/ed/reupload/{{ review.drawing_id }}" class="btn btn-primary btn-sm" id="btn-reupload-top"
+       {% if review.status == 'processing' %}style="display:none"{% endif %}>↑ Upload Corrected Version</a>
   </div>
 </div>
 
@@ -28,8 +29,9 @@
   <div class="pdf-panel">
     <div class="pdf-controls">
       <button id="btn-prev" class="ctrl-btn" disabled title="Previous page">&#9664;</button>
-      <span class="page-info">Page <strong id="current-page">1</strong> of <span id="total-pages">—</span></span>
-      <button id="btn-next" class="ctrl-btn" title="Next page">&#9654;</button>
+      <!-- hidden until the PDF loads — "Page 1 of —" reads as broken -->
+      <span class="page-info" id="page-info" style="visibility:hidden">Page <strong id="current-page">1</strong> of <span id="total-pages">—</span></span>
+      <button id="btn-next" class="ctrl-btn" disabled title="Next page">&#9654;</button>
       <span class="ctrl-sep"></span>
       <button id="btn-zoom-out" class="ctrl-btn" title="Zoom out">−</button>
       <span id="zoom-label" class="zoom-label">150%</span>
@@ -65,7 +67,8 @@
       <div class="panel-loading">Analysing drawing…</div>
     </div>
 
-    <div class="panel-footer">
+    <div class="panel-footer" id="panel-footer"
+         {% if review.status == 'processing' %}style="display:none"{% endif %}>
       <a href="/ed/reupload/{{ review.drawing_id }}" class="btn btn-primary btn-block">
         ↑ Upload Corrected Version
       </a>

@@ -48,6 +48,7 @@ scrollArea.addEventListener('scroll', () => {
 // ── PDF rendering ────────────────────────────────────
 
 async function renderPage(num) {
+  if (!pdfDoc) return;   // PDF still loading — controls are live before it arrives
   currentPage = num;
   document.getElementById('current-page').textContent = num;
   document.getElementById('btn-prev').disabled = num <= 1;
@@ -310,11 +311,59 @@ document.getElementById('btn-zoom-out').addEventListener('click', () => {
   renderPage(currentPage);
 });
 
+// ── Analysing state — spinner, elapsed timer, skeleton cards ──
+
+let analyseTimer = null;
+
+function showAnalysingState() {
+  const issueList = document.getElementById('issue-list');
+  const skeleton = `
+    <div class="skeleton-card">
+      <div class="skeleton-line w40"></div>
+      <div class="skeleton-line w90"></div>
+      <div class="skeleton-line w70"></div>
+    </div>`;
+  issueList.innerHTML = `
+    <div class="analysing-state">
+      <div class="analysing-header">
+        <span class="spinner"></span>
+        <div class="analysing-text">
+          <div class="analysing-title">Analysing drawing… <span class="analysing-elapsed" id="analyse-elapsed">0:00</span></div>
+          <div class="analysing-sub">Checking schedule, notes, levels and sections — usually takes 1–2 minutes.
+            Results are saved automatically, so you can come back to this page later.</div>
+        </div>
+      </div>
+      ${skeleton}${skeleton}${skeleton}
+    </div>`;
+  const t0 = Date.now();
+  analyseTimer = setInterval(() => {
+    const el = document.getElementById('analyse-elapsed');
+    if (!el) return;
+    const s = Math.floor((Date.now() - t0) / 1000);
+    el.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }, 1000);
+}
+
+function clearAnalysingState() {
+  if (analyseTimer) { clearInterval(analyseTimer); analyseTimer = null; }
+  // Reveal the "Upload Corrected Version" CTAs hidden while processing
+  const top    = document.getElementById('btn-reupload-top');
+  const footer = document.getElementById('panel-footer');
+  if (top)    top.style.display = '';
+  if (footer) footer.style.display = '';
+}
+
+// Tab title shows the outcome so an engineer who tabbed away sees it without
+// returning — "5 errors · <drawing> — CASAD ED Checker" / "✓ No errors · …"
+const baseTitle = document.title;
+function setResultTitle() {
+  const open = allIssues.filter(i => i.status !== 'resolved').length;
+  document.title = (open ? `${open} error${open === 1 ? '' : 's'}` : '✓ No errors') + ' · ' + baseTitle;
+}
+
 // ── Polling — wait for background check to complete ──
 
 async function waitForComplete() {
-  const issueList = document.getElementById('issue-list');
-  issueList.innerHTML = '<div class="panel-loading">AI is analysing the drawing — this takes 1–2 minutes. Results will appear automatically…</div>';
   while (true) {
     await new Promise(r => setTimeout(r, 4000));
     try {
@@ -327,26 +376,12 @@ async function waitForComplete() {
 
 // ── Init ──────────────────────────────────────────────
 
-async function init() {
-  // Reflect initial defaults in UI
-  document.getElementById('zoom-label').textContent = Math.round(scale * 100) + '%';
-  document.querySelector('.stat-open')?.classList.add('active');
-
-  // If the check is still running, wait for it before loading issues
-  if (window.REVIEW_STATUS === 'processing') {
-    await waitForComplete();
-  }
-
-  // Load issues first so highlights appear as soon as PDF renders
-  const resp = await fetch(`/ed/api/review/${window.REVIEW_ID}/issues`);
-  allIssues = await resp.json();
-  renderIssuePanel();
-  updateSummary();
-
-  // Load PDF
+async function loadPdf() {
   pdfDoc = await pdfjsLib.getDocument(window.PDF_URL).promise;
   totalPages = pdfDoc.numPages;
   document.getElementById('total-pages').textContent = totalPages;
+  document.getElementById('page-info').style.visibility = '';
+  document.getElementById('btn-next').disabled = totalPages <= 1;
   await renderPage(1);
 
   // Center the drawing horizontally so the user knows it scrolls both ways
@@ -360,7 +395,40 @@ async function init() {
   }
 }
 
+async function init() {
+  // Reflect initial defaults in UI
+  document.getElementById('zoom-label').textContent = Math.round(scale * 100) + '%';
+  document.querySelector('.stat-open')?.classList.add('active');
+
+  // Start the PDF load immediately — the engineer reviews the drawing while
+  // the AI check runs. (It previously waited behind the polling loop, leaving
+  // an empty grey viewer for the whole 1–2 minute analysis.)
+  const pdfReady = loadPdf().catch(err => {
+    console.error('ED Checker PDF load error:', err);
+    pdfLoader.textContent = 'Failed to load PDF.';
+  });
+
+  if (window.REVIEW_STATUS === 'processing') {
+    showAnalysingState();
+    await waitForComplete();
+    clearAnalysingState();
+  }
+
+  const resp = await fetch(`/ed/api/review/${window.REVIEW_ID}/issues`);
+  allIssues = await resp.json();
+  renderIssuePanel();
+  updateSummary();
+  setResultTitle();
+
+  // Animate the freshly arrived cards in (class is dropped so later
+  // re-renders from resolve/filter clicks don't re-animate)
+  const panel = document.getElementById('issue-list');
+  panel.classList.add('reveal');
+  setTimeout(() => panel.classList.remove('reveal'), 1200);
+
+  await pdfReady;
+}
+
 init().catch(err => {
   console.error('ED Checker init error:', err);
-  document.getElementById('pdf-loading').textContent = 'Failed to load PDF.';
 });

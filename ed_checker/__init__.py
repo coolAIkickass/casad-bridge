@@ -173,13 +173,27 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
         # Override schedule_section_positions — these must be PDF coordinates
         drawing_data['schedule_section_positions'] = text_data.get('schedule_section_positions', {})
 
-        # Prefer pdfplumber section_view_positions if available (PDF coords for markers)
-        if text_data.get('section_view_positions'):
-            drawing_data['section_view_positions'] = text_data['section_view_positions']
+        # Merge section_view_positions: start with DXF labels, overlay pdfplumber labels
+        # (pdfplumber uses PDF coordinates which are correct for marker placement).
+        dxf_sv = drawing_data.get('section_view_positions', {})
+        pdf_sv = text_data.get('section_view_positions', {})
+        merged_sv = {**dxf_sv, **pdf_sv}   # pdf takes precedence for shared keys
+        drawing_data['section_view_positions'] = merged_sv
 
-        # Prefer pdfplumber completeness checks (reads actual PDF text, may catch more)
+        # Prefer pdfplumber sections_from_text but patch any present=False entries
+        # using the combined section_view_positions — pdfplumber can miss sections
+        # that are text-underlined (%%U codes) or use non-standard PDF encoding.
         if text_data.get('sections_from_text'):
-            drawing_data['sections_from_text'] = text_data['sections_from_text']
+            sft = text_data['sections_from_text']
+            sv_upper = {k.upper() for k in merged_sv}
+            for entry in sft:
+                if not entry.get('present'):
+                    name_u = entry['name'].upper()
+                    # Check if any keyword from this section appears in merged sv keys
+                    if any(name_u in sv_key or sv_key in name_u for sv_key in sv_upper):
+                        entry['present'] = True
+                        log.info('sections_from_text: patched %r to present=True via DXF', entry['name'])
+            drawing_data['sections_from_text'] = sft
         if text_data.get('notes_completeness_from_text'):
             drawing_data['notes_completeness_from_text'] = text_data['notes_completeness_from_text']
 

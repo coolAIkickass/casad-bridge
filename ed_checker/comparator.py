@@ -492,6 +492,10 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
             ))
 
     d_total_len = design_bar.get('total_len_m')
+    if all_design_bars and len(all_design_bars) > 1:
+        vals = [b.get('total_len_m') for b in all_design_bars if b.get('total_len_m')]
+        if vals:
+            d_total_len = sum(vals)
     w_total_len = _norm_float(drawing_bar.get('total_length_m'))
     if d_total_len and w_total_len:
         diff = _pct_diff(d_total_len, w_total_len)
@@ -519,6 +523,10 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
 
     # Total weight: compare design input (Excel formula value, authoritative) vs drawing schedule
     d_total_wt = design_bar.get('total_wt_kg')
+    if all_design_bars and len(all_design_bars) > 1:
+        vals = [b.get('total_wt_kg') for b in all_design_bars if b.get('total_wt_kg')]
+        if vals:
+            d_total_wt = sum(vals)
     w_total_wt = _norm_float(drawing_bar.get('total_wt_kg'))
     if d_total_wt and w_total_wt:
         diff = _pct_diff(d_total_wt, w_total_wt)

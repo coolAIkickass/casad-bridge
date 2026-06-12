@@ -51,9 +51,6 @@ _BAR_MARK_COMP = {
     'i': 'pier', 'i1': 'pier',
     'j': 'pier', 'j1': 'pier',
     'k': 'pier', 'k1': 'pier',
-    'l': 'pier', 'l1': 'pier',
-    'm': 'pier', 'm1': 'pier',
-    'n': 'pier', 'n1': 'pier',
 }
 
 # Schedule column header keywords → internal field name.
@@ -133,9 +130,19 @@ def extract_from_dxf(dxf_bytes: bytes) -> dict:
     schedule            = _extract_schedule(msp, all_text, extents)
     title_block         = _extract_title_block(doc, msp, all_text, extents)
     notes               = _extract_notes(all_text, extents)
+    dim_data            = _extract_dimensions(msp, extents)
     table_1             = _extract_table1(all_text, extents)
     sv_pos, cut_letters = _extract_section_info(all_text, extents)
     xsec                = _count_cross_section_bars(msp, all_text, schedule, extents)
+
+    # Supplement notes with DIMENSION-derived values when text extraction missed them.
+    # DIMENSION entities give exact geometric measurements with no OCR error.
+    if dim_data.get('pile_length_mm') and notes.get('pile_length_m') is None:
+        notes['pile_length_m'] = round(dim_data['pile_length_mm'] / 1000.0, 3)
+        log.info('Notes: pile_length_m set from DIMENSION entity: %.3fm', notes['pile_length_m'])
+    if dim_data.get('pile_dia_mm') and notes.get('pile_dia_m') is None:
+        notes['pile_dia_m'] = round(dim_data['pile_dia_mm'] / 1000.0, 3)
+        log.info('Notes: pile_dia_m set from DIMENSION entity: %.3fm', notes['pile_dia_m'])
 
     log.info('DXF extraction done: comps=%s title_fields=%d sections=%d cuts=%s xsec=%d',
              list(schedule.keys()),
@@ -146,6 +153,7 @@ def extract_from_dxf(dxf_bytes: bytes) -> dict:
         'schedule':                     schedule,
         'title_block':                  title_block,
         'notes':                        notes,
+        'dim_data':                     dim_data,
         'table_1':                      table_1,
         'cross_section_checks':         xsec,
         'section_view_positions':       sv_pos,
@@ -224,7 +232,7 @@ def _collect_text(msp) -> list:
     result = []
     for e in msp.query('TEXT'):
         try:
-            text = (e.dxf.text or '').strip()
+            text = _strip_text_codes((e.dxf.text or '').strip())
             if text:
                 p = e.dxf.insert
                 result.append({'text': text, 'x': float(p.x), 'y': float(p.y)})
@@ -242,6 +250,19 @@ def _collect_text(msp) -> list:
         except Exception:
             pass
     return result
+
+
+def _strip_text_codes(text: str) -> str:
+    """Strip AutoCAD legacy %%-escape codes from TEXT entity strings.
+    %%U and %%O are underline/overline toggles — invisible formatting.
+    %%D/%%P/%%C are special characters — replace with readable equivalents.
+    """
+    text = re.sub(r'%%[uUoO]', '', text)        # underline / overline toggles
+    text = text.replace('%%d', '°').replace('%%D', '°')
+    text = text.replace('%%p', '±').replace('%%P', '±')
+    text = text.replace('%%c', 'Ø').replace('%%C', 'Ø')
+    text = re.sub(r'%%\d{3}', '', text)          # numeric char codes
+    return text.strip()
 
 
 def _strip_mtext_codes(text: str) -> str:
@@ -290,6 +311,175 @@ def _group_rows(text_list: list, tol_frac: float = 0.005, extents: tuple = None)
 
 # ── Schedule extraction ───────────────────────────────────────────────────────
 
+def _get_vertical_line_x_positions(msp, sched_x_min: float, x_max: float, dh: float) -> list:
+    """
+    Return sorted list of X positions of significant vertical LINE entities in the schedule area.
+    Vertical lines that span >10% of drawing height are likely table column dividers.
+    These are used as more reliable column anchors than keyword-matched header text X positions.
+    """
+    candidates = []
+    for e in msp.query('LINE'):
+        try:
+            sx, sy = float(e.dxf.start.x), float(e.dxf.start.y)
+            ex, ey = float(e.dxf.end.x), float(e.dxf.end.y)
+            # Vertical: X coords nearly equal, Y span significant (> 10% drawing height)
+            if abs(sx - ex) < 10 and abs(sy - ey) > dh * 0.10:
+                if sched_x_min <= sx <= x_max:
+                    candidates.append(round(sx, 0))
+        except Exception:
+            pass
+    # Deduplicate with small tolerance (±100 units)
+    if not candidates:
+        return []
+    candidates.sort()
+    deduped = [candidates[0]]
+    for x in candidates[1:]:
+        if x - deduped[-1] > 100:
+            deduped.append(x)
+    return deduped
+
+
+def _aggregate_bar_rows(bar_rows: list, col_map: dict, bm: str) -> dict | None:
+    """
+    Aggregate data from all rows in a bar's range into one bar dict.
+
+    CASAD confinement bars (y, y1, i, etc.) have multiple sub-rows — one per
+    confinement zone — each with its own NOS, TOTAL_LEN, TOTAL_WT values but
+    the same DIA, BAR_LEN, UNIT_WT. The bar mark label sits between the zones.
+
+    Count strategy: collect ALL cells assigned to the NOS column across all rows,
+    then sum only the '=N' cells (per-zone result column). If no '=N' cells, sum
+    formula/direct cells. '=N' cells are authoritative zone totals; their sum gives
+    the grand total across all zones. Collecting all NOS cells (not just one per
+    row) is critical — '=N' and formula cells often appear in the same Y-group.
+
+    For DIA, BAR_LEN, UNIT_WT: take first parseable value (same across zones).
+    For TOTAL_LEN, TOTAL_WT: sum all values across zone rows.
+    """
+    if not bar_rows or not col_map:
+        return None
+
+    # Only use real column keys (no scratch suffixes) for proximity test
+    real_col_map = {k: v for k, v in col_map.items() if not k.endswith('_assigned_x')}
+    if not real_col_map:
+        return None
+
+    # Detect x-offset between this bar's block and the primary column map.
+    # CASAD drawings sometimes have TWO schedule tables side-by-side (e.g. two
+    # pier groups) at different horizontal positions. The column map is built from
+    # the first table's header; a second table is shifted by a fixed offset.
+    # Find the bar mark cell in bar_rows and compute the shift.
+    x_offset = 0.0
+    bm_col_x = real_col_map.get('bar_mark')
+    if bm_col_x is not None:
+        for row in bar_rows:
+            for cell in row:
+                if cell['text'].strip().strip("'\"").lower() == bm:
+                    x_offset = cell['x'] - bm_col_x
+                    break
+            else:
+                continue
+            break
+    if abs(x_offset) > 1000:
+        log.debug('Bar %r: applying x_offset=%.0f to column map', bm, x_offset)
+        real_col_map = {k: v + x_offset for k, v in real_col_map.items()}
+
+    x_span = max(real_col_map.values()) - min(real_col_map.values()) if len(real_col_map) > 1 else 100.0
+    x_tol = x_span * 0.20
+
+    # Accumulate ALL cells by column across all rows
+    col_cells: dict[str, list[str]] = {}
+    for row in bar_rows:
+        for cell in row:
+            nearest = min(real_col_map.items(), key=lambda kv: abs(kv[1] - cell['x']))
+            field, fx = nearest
+            if abs(fx - cell['x']) < x_tol:
+                col_cells.setdefault(field, []).append(cell['text'])
+
+    # NOS column — three tiers of count cells:
+    #   nos_eq:      cells starting with '=' (e.g. '=84') — authoritative zone totals
+    #   nos_formula: cells with a multiplication expression (e.g. '21x4') — formula totals
+    #   nos_bare:    plain integers (e.g. '21') — per-zone counts
+    # Priority: nos_eq → nos_formula → sum(nos_bare).
+    # When a formula total exists alongside a per-zone bare count, the formula
+    # already captures the total; adding the bare count would double-sum.
+    nos_eq: list[int] = []
+    nos_formula: list[int] = []
+    nos_bare: list[int] = []
+    _mul_re = re.compile(r'[×xX*]')
+    for text in col_cells.get('count', []):
+        s = text.strip()
+        if s.startswith('='):
+            v = _safe_float(s[1:].strip())
+            if v is not None:
+                nos_eq.append(int(v))
+        elif _mul_re.search(s) and '=' not in s:
+            v = _parse_count(s)
+            if v is not None:
+                nos_formula.append(v)
+        else:
+            v = _parse_count(s)
+            if v is not None:
+                nos_bare.append(v)
+
+    count_val: int | None = None
+    if nos_eq:
+        count_val = sum(nos_eq)
+    elif nos_formula:
+        # One formula per zone — sum them (rare: usually a single formula covers all zones)
+        count_val = sum(nos_formula)
+    elif nos_bare:
+        count_val = sum(nos_bare)
+
+    # Scalar fields: first parseable value
+    dia = next((x for x in (_parse_dia(t) for t in col_cells.get('bar_dia_mm', [])) if x is not None), None)
+    length_m = next((x for x in (_safe_float(t) for t in col_cells.get('length_m', [])) if x is not None), None)
+    unit_wt = next((x for x in (_safe_float(t) for t in col_cells.get('unit_wt_kg_m', [])) if x is not None), None)
+    spacing = next((x for x in (_parse_spacing(t) for t in col_cells.get('spacing_mm', [])) if x is not None), None)
+
+    # Summable fields: sum all parseable values across zones
+    tot_len_vals = [x for x in (_safe_float(t) for t in col_cells.get('total_length_m', [])) if x is not None]
+    tot_wt_vals = [x for x in (_safe_float(t) for t in col_cells.get('total_wt_kg', [])) if x is not None]
+    total_length_m = sum(tot_len_vals) if tot_len_vals else None
+    total_wt_kg = sum(tot_wt_vals) if tot_wt_vals else None
+
+    # Consistency check: if count came from formula (NxM) but tot_len and bar_length
+    # imply a different count, the formula is cross-pier annotation — fall back to bare.
+    # Example: i1 shows bare 21 + formula '21x6=126', but tot_len=172.2 = 21×8.2,
+    # not 126×8.2=1033.2.  The formula annotates the grand total across 6 pier spans.
+    if (count_val is not None and nos_formula and nos_bare and
+            not nos_eq and length_m and total_length_m):
+        expected_from_formula = count_val * length_m
+        expected_from_bare = sum(nos_bare) * length_m
+        tol = total_length_m * 0.05
+        formula_ok = abs(expected_from_formula - total_length_m) <= tol
+        bare_ok    = abs(expected_from_bare    - total_length_m) <= tol
+        if not formula_ok and bare_ok:
+            log.debug(
+                'Bar %r: formula count %d inconsistent with tot_len %.2f; '
+                'using bare count %d', bm, count_val, total_length_m, sum(nos_bare))
+            count_val = sum(nos_bare)
+
+    if dia is None and length_m is None and count_val is None:
+        return None
+
+    return {
+        'bar_mark':        bm,
+        'component':       None,
+        'reinforcement_text': None,
+        'bar_dia_mm':      dia,
+        'spacing_mm':      spacing,
+        'count_text':      str(count_val) if count_val is not None else '',
+        'count':           count_val,
+        'length_m':        length_m,
+        'total_length_m':  total_length_m,
+        'unit_wt_kg_m':    unit_wt,
+        'total_wt_kg':     total_wt_kg,
+        'shape_dimensions': None,
+        'from_dxf':        True,
+    }
+
+
 def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
     """Extract reinforcement schedule from DXF text entities."""
     x_min, y_min, x_max, y_max = extents
@@ -314,7 +504,6 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
         return {}
 
     # Find the column header row: must contain at least 2 of DIA / NOS / LENGTH.
-    # These are the most reliably unique schedule-header keywords.
     header_idx = None
     for idx, row in enumerate(rows):
         row_text = ' '.join(t['text'] for t in row).upper()
@@ -326,11 +515,8 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
         log.warning('Schedule column header row not found')
         return {}
 
-    # CASAD schedule headers span multiple Y-lines (e.g. "TOTAL" on one row,
-    # "LENGTH IN" on the next, "METER" on the next). Collect all sub-rows
-    # within 1.2% of drawing height of the identified header row and combine them.
-    # 4% was too large — it pulled data rows into the header band, drowning
-    # 'TOTAL LENGTH' text with actual numeric values and breaking column detection.
+    # CASAD schedule headers span multiple Y-lines. Collect all sub-rows
+    # within 1.2% of drawing height of the identified header row.
     header_y = rows[header_idx][0]['y']
     header_sub_rows = [row for row in rows if abs(row[0]['y'] - header_y) < dh * 0.012]
 
@@ -341,36 +527,63 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
         log.warning('Column map empty — cannot parse schedule rows')
         return {}
 
-    # Parse data rows.
-    # Component is derived from the bar mark letter (CASAD naming convention)
-    # — no need to find component header rows ('PILECAP = 3077 KG' etc.) which
-    # vary in format across drawings.
-    schedule = {}
-    for row in rows[header_idx + 1:]:
-        bar_data = _parse_schedule_row(row, col_map)
-        if not bar_data:
-            continue
-        # Strip surrounding single/double quotes that AutoCAD adds to bar marks
-        # e.g. the DXF TEXT entity stores "'a'" (3 chars) not 'a' (1 char)
-        bm = bar_data.get('bar_mark', '').strip().strip("'\"").lower()
-        if not bm or bm not in _KNOWN_MARKS:
-            continue
+    data_rows = rows[header_idx + 1:]
+    if not data_rows:
+        return {}
 
+    # Pass 1 — locate bar mark rows.
+    # CASAD draws the bar mark label ('x', 'y', 'a'…) as a quoted TEXT entity
+    # that may appear before, after, or between the data rows for that bar.
+    bar_positions: list[tuple[int, str]] = []  # (row_index_in_data_rows, bm)
+    for idx, row in enumerate(data_rows):
+        for cell in row:
+            bm = cell['text'].strip().strip("'\"").lower()
+            if bm in _KNOWN_MARKS:
+                bar_positions.append((idx, bm))
+                break  # at most one bar mark per row
+
+    if not bar_positions:
+        log.warning('No known bar marks found in schedule')
+        return {}
+
+    # Pass 2 — for each bar mark, assign rows in its range (midpoint between
+    # adjacent bar marks) and aggregate all data found there.
+    schedule: dict = {}
+    n = len(data_rows)
+
+    for pos_i, (bm_row_idx, bm) in enumerate(bar_positions):
         comp = _BAR_MARK_COMP.get(bm)
         if comp is None:
             log.debug('Unknown bar mark %r — skipping', bm)
             continue
 
+        # Range start: midpoint between previous bar mark row and this one.
+        if pos_i == 0:
+            range_start = 0
+        else:
+            prev_idx = bar_positions[pos_i - 1][0]
+            range_start = (prev_idx + bm_row_idx) // 2 + 1
+
+        # Range end: midpoint between this bar mark row and the next.
+        if pos_i == len(bar_positions) - 1:
+            range_end = n
+        else:
+            next_idx = bar_positions[pos_i + 1][0]
+            range_end = (bm_row_idx + next_idx) // 2 + 1
+
+        bar_rows = data_rows[range_start:range_end]
+        bar_data = _aggregate_bar_rows(bar_rows, col_map, bm)
+        if bar_data is None:
+            continue
+
         bar_data['bar_mark'] = bm
         comp_dict = schedule.setdefault(comp, {})
         if bm in comp_dict:
-            # Duplicate bar mark — accumulate totals (e.g. two y rows for pile)
-            ex = comp_dict[bm]
-            for f in ('count', 'total_length_m', 'total_wt_kg'):
-                ov = _safe_float(ex.get(f))
-                nv = _safe_float(bar_data.get(f))
-                if ov is not None and nv is not None:
-                    ex[f] = ov + nv
+            # Bar mark seen again — second schedule block for a different pier variant.
+            # The anchor-based aggregation already captures multi-zone bars (y, y1, i…)
+            # within one occurrence, so any second appearance is a genuinely separate
+            # block and should not double-count into the primary schedule.
+            log.debug('Bar mark %r already recorded — skipping second-block occurrence', bm)
         else:
             comp_dict[bm] = bar_data
 
@@ -669,6 +882,149 @@ def _extract_notes(all_text: list, extents: tuple) -> dict:
     return notes
 
 
+# ── DIMENSION entity extraction ───────────────────────────────────────────────
+
+def _strip_dim_override(text: str) -> str:
+    """Strip AutoCAD MTEXT formatting codes from a DIMENSION override string."""
+    if not text:
+        return ''
+    text = re.sub(r'\{\\[^}]+\}', '', text)     # {\\W1;...} style blocks
+    text = re.sub(r'\\[Xx]', ' ', text)          # \X stacking separator
+    text = re.sub(r'\\[Pp]', ' ', text)          # \P paragraph break
+    text = re.sub(r'\\[A-Za-z][^;\\]*?;', '', text)  # \code; inline codes
+    text = text.replace('<>', '').strip()         # <> = "show measured value"
+    return re.sub(r'\s{2,}', ' ', text).strip()
+
+
+def _extract_dimensions(msp, extents: tuple) -> dict:
+    """
+    Extract DIMENSION entities from modelspace and classify them.
+
+    CASAD PPP drawings use DIMENSION entities to annotate:
+      - Cross-section bar counts: override text "NN -NN NOS" or "NN-NN NOS"
+      - Pile/pier diameter callouts: override "NNNN DIA"
+      - Pile confinement zone lengths: override "NNNN\\Xy" (bar y covers NNNN mm)
+      - Raw geometric measurements: pile length, bar spacings, member dimensions
+
+    Returns dict:
+      pile_length_mm: float or None  (largest linear dim in left drawing area)
+      pile_dia_mm:    float or None  (from "NNNN DIA" override)
+      bar_count_annotations: [{bar_dia_mm, count, zone_mm, x_pct, y_pct}]
+        — bar counts per cross-section zone as written by drafter
+      confinement_zones:     [{bar_mark, length_mm, is_remaining, x_pct, y_pct}]
+        — pile confinement zone heights for bars y/y1 etc.
+      geometric_dims:        [{val_mm, x_pct, y_pct}]
+        — uncategorised measurements (spacings, pilecap dims, etc.)
+    """
+    x_min, y_min, x_max, y_max = extents
+    dw = (x_max - x_min) or 1.0
+    dh = (y_max - y_min) or 1.0
+
+    result = {
+        'pile_length_mm':      None,
+        'pile_dia_mm':         None,
+        'bar_count_annotations': [],
+        'confinement_zones':   [],
+        'geometric_dims':      [],
+    }
+
+    for e in msp.query('DIMENSION'):
+        try:
+            val = float(e.get_measurement())
+            if val <= 0 or val > 1e6:
+                continue
+
+            try:
+                tm = e.dxf.text_midpoint
+                tx, ty = float(tm.x), float(tm.y)
+            except AttributeError:
+                try:
+                    dp = e.dxf.defpoint
+                    tx, ty = float(dp.x), float(dp.y)
+                except AttributeError:
+                    continue
+
+            x_pct = round((tx - x_min) / dw * 100, 1)
+            y_pct = round((y_max - ty) / dh * 100, 1)
+
+            raw = e.dxf.get('text', '') or ''
+            override = _strip_dim_override(raw)
+            override_u = override.upper()
+
+            if override:
+                # Pattern 1: cross-section bar count — "NN -NN NOS" (may appear multiple times)
+                matches = re.findall(r'(\d+)\s*[-–]\s*(\d+)\s*NOS', override_u)
+                if matches:
+                    for dia_s, cnt_s in matches:
+                        result['bar_count_annotations'].append({
+                            'bar_dia_mm': int(dia_s),
+                            'count':      int(cnt_s),
+                            'zone_mm':    round(val, 1),
+                            'x_pct': x_pct, 'y_pct': y_pct,
+                        })
+                    continue
+
+                # Pattern 2: diameter callout — "NNNN DIA"
+                m = re.search(r'(\d{3,5}(?:\.\d+)?)\s*DIA', override_u)
+                if m:
+                    dia = float(m.group(1))
+                    if 300 < dia < 5000:   # sanity: 300–5000mm
+                        if result['pile_dia_mm'] is None:
+                            result['pile_dia_mm'] = dia
+                    continue
+
+                # Pattern 3: confinement zone — "NNNN bar_mark" e.g. "3600 y", "1900 y1"
+                # Also: "REMAINING bar_mark" for the tail of a multi-zone bar
+                lo = override.strip().lower()
+                m = re.search(r'^(\d+)\s+([a-z]\d*)\s*$', lo)
+                if m:
+                    result['confinement_zones'].append({
+                        'bar_mark':    m.group(2),
+                        'length_mm':   int(m.group(1)),
+                        'is_remaining': False,
+                        'x_pct': x_pct, 'y_pct': y_pct,
+                    })
+                    continue
+                m = re.search(r'^remaining\s+([a-z]\d*)\s*$', lo)
+                if m:
+                    result['confinement_zones'].append({
+                        'bar_mark':    m.group(1),
+                        'length_mm':   0,
+                        'is_remaining': True,
+                        'x_pct': x_pct, 'y_pct': y_pct,
+                    })
+                    continue
+
+            # Check if override explicitly names pile length before using raw value
+            if override:
+                ov_u = override.upper()
+                if ('PILE LENGTH' in ov_u or 'LENGTH OF PILE' in ov_u) and '=' in ov_u:
+                    m = re.search(r'=\s*([\d.]+)', ov_u)
+                    if m:
+                        pl = float(m.group(1))
+                        if 1000 < pl < 50000:
+                            result['pile_length_mm'] = pl
+                            continue
+
+            # Raw geometric measurement with no parseable override — store for reference.
+            # Do NOT infer pile_length from raw unlabeled dimensions; too many false matches
+            # (pier height, span segments, foundation depth all fall in the pile-length range).
+            val_mm = round(val, 1)
+            result['geometric_dims'].append({'val_mm': val_mm, 'x_pct': x_pct, 'y_pct': y_pct})
+
+        except Exception as ex:
+            log.debug('DIMENSION parse error: %s', ex)
+
+    log.info(
+        'DXF dimensions: pile_len=%s pile_dia=%s bar_counts=%d zones=%d geom=%d',
+        result['pile_length_mm'], result['pile_dia_mm'],
+        len(result['bar_count_annotations']),
+        len(result['confinement_zones']),
+        len(result['geometric_dims']),
+    )
+    return result
+
+
 # ── TABLE-1 (pier levels) extraction ─────────────────────────────────────────
 
 def _extract_table1(all_text: list, extents: tuple) -> list:
@@ -701,8 +1057,8 @@ def _extract_table1(all_text: list, extents: tuple) -> list:
     table_rows = []
     for row in rows[1:]:  # skip the TABLE-1 label row
         row_text = [t['text'].strip() for t in row]
-        # Look for pier ID pattern
-        pier_ids = [s for s in row_text if re.match(r'^P\d+$', s, re.IGNORECASE)]
+        # Look for pier ID pattern: P3, I1, N2, A1, etc. (letter + digits)
+        pier_ids = [s for s in row_text if re.match(r'^[A-Z]\d+$', s, re.IGNORECASE)]
         level_vals = [_safe_float(s) for s in row_text if _safe_float(s) is not None]
 
         if not pier_ids and not level_vals:
@@ -710,8 +1066,10 @@ def _extract_table1(all_text: list, extents: tuple) -> list:
 
         for pier_id in pier_ids:
             entry = {'pier_id': pier_id, 'bbox': None}
-            # Assign level values by position: top_pier_cap, top_pier, top_pilecap, bottom_pilecap, ground_level
-            level_keys = ['top_pier_cap_m', 'top_pier_m', 'top_pilecap_m', 'bottom_pilecap_m', 'ground_level_m']
+            # CASAD TABLE-1 columns list elevations in ascending order (lowest first):
+            # col 0 = bottom of pilecap, col 1 = top of pilecap, col 2 = top of pier,
+            # col 3 = top of pier cap, col 4 = ground level (if present).
+            level_keys = ['bottom_pilecap_m', 'top_pilecap_m', 'top_pier_m', 'top_pier_cap_m', 'ground_level_m']
             for i, key in enumerate(level_keys):
                 entry[key] = level_vals[i] if i < len(level_vals) else None
             table_rows.append(entry)
@@ -731,17 +1089,17 @@ def _extract_section_info(all_text: list, extents: tuple) -> tuple:
     dw = x_max - x_min
     dh = y_max - y_min
 
-    # Left 55% = drawing views area (schedule is in right ~45%)
+    # Left 55% = drawing views area (schedule is in right ~45%).
+    # TRIGGER_WORDS like TABLE-1, SCHEDULE can appear in the right area too —
+    # scan all text for labels but only count cut letters from the left area.
     view_x_max = x_min + dw * 0.55
 
-    # Group text on the left side into lines
-    left_text = [t for t in all_text if t['x'] < view_x_max]
-    rows = _group_rows(left_text, tol_frac=0.005, extents=extents)
+    all_rows = _group_rows(all_text, tol_frac=0.005, extents=extents)
 
     section_view_positions = {}
     single_letter_counts = {}
 
-    for row in rows:
+    for row in all_rows:
         row_sorted = sorted(row, key=lambda t: t['x'])
         line = ' '.join(t['text'] for t in row_sorted).upper().strip()
         # Normalise non-ASCII hyphens
@@ -756,11 +1114,13 @@ def _extract_section_info(all_text: list, extents: tuple) -> tuple:
             bbox = _to_bbox(x0, y_c, x1 + dw * 0.01, y_c - view_h, extents)
             section_view_positions[line[:80]] = bbox
 
-        # Track isolated single uppercase letters for cut-mark detection
-        for t in row:
-            s = t['text'].strip()
-            if len(s) == 1 and s.isupper() and s.isalpha():
-                single_letter_counts[s] = single_letter_counts.get(s, 0) + 1
+        # Cut letter detection only in the left (view) area to avoid picking up
+        # schedule row annotations, bar marks, pier labels on the right side.
+        if all(t['x'] < view_x_max for t in row):
+            for t in row:
+                s = t['text'].strip()
+                if len(s) == 1 and s.isupper() and s.isalpha():
+                    single_letter_counts[s] = single_letter_counts.get(s, 0) + 1
 
     # Also scan ATTDEF/ATTRIB single letters — AutoCAD cut marks are often separate entities
     for t in all_text:

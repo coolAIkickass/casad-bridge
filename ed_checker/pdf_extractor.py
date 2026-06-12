@@ -11,36 +11,17 @@ import base64
 import logging
 import pdfplumber
 
+from .profiles import PPP_PROFILE, TRIGGER_WORDS
+from .schema import new_drawing_data
+
 log = logging.getLogger(__name__)
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 
 # ── Text-extraction constants ─────────────────────────────────────────────────
-
-# Required section/view names for a PPP drawing. Each tuple: (display_name, [match_keywords]).
-# Keywords are matched against the upper-cased join of all section_view_positions keys.
-_REQUIRED_PPP_SECTIONS = [
-    ('SECTION A-A FOR PILE',           ['A-A FOR PILE']),
-    ('SECTION Z-Z (PILE)',             ['Z-Z']),
-    ('SECTION A-A FOR PILECAP & PIER', ['A-A FOR PILECAP']),
-    ('SECTION B-B FOR PILECAP & PIER', ['B-B FOR PILECAP']),
-    ('PLAN OF PILECAP',                ['PLAN OF PILECAP']),
-    ('REINFORCEMENT PLAN OF PILECAP',  ['REINFORCEMENT PLAN']),
-    ('TABLE-1',                        ['TABLE-1', 'TABLE 1']),
-    ('LAP LENGTH TABLE',               ['LAP LENGTH']),
-    ('SCHEDULE OF REINFORCEMENT',      ['SCHEDULE OF REINFORCEMENT']),
-]
-
-# Keywords indicating a required notes item is present in the drawing's raw text.
-_NOTE_KEYWORDS: dict = {
-    'pile_length':     ['PILE LENGTH', 'LENGTH OF PILE'],
-    'pile_fixity':     ['FIXITY', 'FIX. LENGTH', 'FIX LENGTH', 'FIXATION'],
-    'pile_diameter':   ['PILE DIA', 'DIAMETER OF PILE', 'PILE DIAMETER'],
-    'concrete_pile':   ['M30', 'M35', 'M40', 'M45', 'M50'],
-    'concrete_pilecap':['M30', 'M35', 'M40', 'M45', 'M50'],  # same grades — any grade covers all
-    'concrete_pier':   ['M30', 'M35', 'M40', 'M45', 'M50'],
-    'steel_grade':     ['FE415', 'FE500', 'FE550', 'FE 415', 'FE 500', 'FE 550', 'HYSD', 'TMT'],
-    'irc_code_ref':    ['IRC:', 'IRC-', 'IRC '],
-}
+# Drawing-type knowledge lives in profiles.py and is shared with dxf_extractor —
+# these aliases keep the function bodies below unchanged.
+_REQUIRED_PPP_SECTIONS = PPP_PROFILE.required_sections
+_NOTE_KEYWORDS = PPP_PROFILE.note_keywords
 
 
 def _norm_float(v):
@@ -402,24 +383,17 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                  'ok' if title_data else 'failed',
                  'ok' if review_data else 'failed')
 
-    result = {
-        'title_block':                   {},
-        'schedule':                      {},
-        'schedule_section_bboxes':       {},
-        'notes':                         {},
-        'table_1':                       [],
-        'label_issues':                  [],
-        'dimension_issues':              [],
-        'cross_section_checks':          [],
-        'erroneous_boxes':               [],
-        'missing_referenced_sections':   text_missing,   # from pdfplumber text (authoritative)
-        'unlabeled_views':               [],
-        'sections_from_text':            text_data.get('sections_from_text', []),
-        'notes_completeness_from_text':  text_data.get('notes_completeness_from_text', []),
-        'raw_text':                      text_data.get('raw_lines', []),
-        'schedule_section_positions':    text_data.get('schedule_section_positions', {}),
-        'section_view_positions':        section_view_pos,
-    }
+    # Schema-conformant result; the PDF/vision path keeps the default capabilities
+    # (everything claimable — see schema.DEFAULT_CAPABILITIES).
+    result = new_drawing_data(
+        missing_referenced_sections=text_missing,   # from pdfplumber text (authoritative)
+        sections_from_text=text_data.get('sections_from_text', []),
+        notes_completeness_from_text=text_data.get('notes_completeness_from_text', []),
+        raw_text=text_data.get('raw_lines', []),
+        schedule_section_positions=text_data.get('schedule_section_positions', {}),
+        section_view_positions=section_view_pos,
+        cut_letters=cut_letters,
+    )
 
     if title_data:
         result['title_block'] = title_data.get('title_block') or {}
@@ -645,7 +619,8 @@ def _extract_positions(page) -> tuple:
     """
     pw, ph = page.width, page.height
     words = page.extract_words() or []
-    schedule_x_min = pw * 0.55   # schedule is always in the right ~38% of the drawing
+    # Views on the left, schedule on the right — same layout split as the DXF path
+    schedule_x_min = pw * PPP_PROFILE.layout.views_x_max_frac
 
     def to_pct(x0, top, x1, bottom):
         return {
@@ -698,7 +673,6 @@ def _extract_positions(page) -> tuple:
     cut_letters = {letter for letter, count in single_letter_counts.items() if count >= 2}
 
     section_view_positions = {}
-    TRIGGER_WORDS = {'SECTION', 'TABLE-1', 'LAP', 'NOTES', 'DETAIL', 'PLAN', 'REINFORCEMENT'}
     for line_y, lw in sorted(line_words.items()):
         lw_sorted = sorted(lw, key=lambda x: x['x0'])
         line_text = ' '.join(w['text'] for w in lw_sorted).upper().strip()

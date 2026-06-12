@@ -48,11 +48,12 @@ def parse_design_inputs(design_files: list) -> tuple:
 def detect_drawing_type(drawing_data: dict) -> str:
     """Infer drawing type from extracted drawing content."""
     schedule   = drawing_data.get('schedule', {})
-    sections   = drawing_data.get('sections', []) or []
-    section_names = ' '.join((s.get('name') or '') for s in sections).upper()
+    sections   = drawing_data.get('sections_from_text', []) or []
+    section_names = ' '.join((s.get('name') or '') for s in sections if s.get('present')).upper()
+    view_labels   = ' '.join(drawing_data.get('section_view_positions', {}) or {}).upper()
     title      = (drawing_data.get('title_block', {}).get('title') or '').upper()
 
-    all_text = section_names + ' ' + title
+    all_text = section_names + ' ' + view_labels + ' ' + title
 
     if 'pile' in schedule or 'pilecap' in schedule or 'PILE' in all_text:
         return 'Pile Pilecap Pier'
@@ -214,6 +215,15 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
 
     except Exception as e:
         log.warning('pdfplumber merge failed: %s', e)
+        drawing_data.setdefault('extraction_diagnostics', []).append({
+            'code': 'pdfplumber_merge_failed',
+            'message': (
+                f'PDF text positions could not be merged ({e}). Issue markers may be '
+                f'misplaced on the review viewer and some completeness checks may report '
+                f'false missing-view errors.'
+            ),
+            'severity': 'error',
+        })
 
     # Compute cut-mark cross-reference using merged cut_letters + section_view_positions
     cut_letters      = drawing_data.get('cut_letters', set())

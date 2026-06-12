@@ -179,12 +179,17 @@ def compare(design_data: dict, drawing_data: dict) -> list:
     schedule_section_positions = drawing_data.get('schedule_section_positions') or {}
     section_view_positions     = drawing_data.get('section_view_positions') or {}
     section_bboxes             = drawing_data.get('schedule_section_bboxes') or {}
+    # What the extraction path can vouch for (see schema.DEFAULT_CAPABILITIES).
+    # Missing key → assume capable, preserving behaviour for stored/legacy data.
+    capabilities               = drawing_data.get('capabilities') or {}
 
+    issues += _check_extraction_diagnostics(drawing_data.get('extraction_diagnostics') or [])
     issues += _check_title_block(drawing_data.get('title_block') or {}, design_data)
     issues += _check_notes(drawing_data.get('notes') or {}, design_data)
     issues += _check_schedule(
         drawing_data.get('schedule') or {}, design_data,
         section_bboxes, schedule_section_positions,
+        capabilities,
     )
     issues += _check_table1(drawing_data.get('table_1') or [], design_data)
     # Section presence and notes completeness are now text-extracted (authoritative)
@@ -199,6 +204,29 @@ def compare(design_data: dict, drawing_data: dict) -> list:
     issues += _check_cut_mark_references(drawing_data)
     issues += _check_unlabeled_views(drawing_data)
 
+    return issues
+
+
+# ── Extraction diagnostics ────────────────────────────────────────────────────
+
+def _check_extraction_diagnostics(diagnostics: list) -> list:
+    """
+    Convert 'error' extraction diagnostics into review issues so the engineer can see
+    what could NOT be checked. 'info' diagnostics stay in drawing_data for the debug
+    route only. A silent extraction gap must never look like a clean check result.
+    """
+    issues = []
+    for d in diagnostics:
+        if d.get('severity') != 'error':
+            continue
+        issues.append(_issue(
+            'Extraction',
+            d.get('message', 'Extraction degraded')[:120],
+            d.get('message', ''),
+            'This item was not verified automatically — check it manually, or fix the '
+            'input file and re-upload.',
+            'error', 'default'
+        ))
     return issues
 
 
@@ -325,9 +353,12 @@ RING_BAR_MARKS = {}  # deprecated — retained so imports don't break
 
 
 def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
-                    schedule_section_positions: dict = None) -> list:
+                    schedule_section_positions: dict = None,
+                    capabilities: dict = None) -> list:
     issues = []
     num_piles = int((design.get('geometry') or {}).get('pile_count') or 1)
+    # Spacing can only be flagged as missing if the extraction path reads a c/c column
+    spacing_capable = (capabilities or {}).get('spacing', True)
 
     component_map = {
         'pilecap': design.get('pilecap_bbs', {}),
@@ -399,13 +430,14 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
             # Longitudinal and distributed bars don't have a c/c pitch column.
             is_ring = bool(d_bar.get('spacing_mm'))
             issues += _compare_bar(bm, comp, d_bar, drawing_bar, zone, design_bars, bar_bbox,
-                                   is_ring=is_ring, num_piles=num_piles)
+                                   is_ring=is_ring, num_piles=num_piles,
+                                   spacing_capable=spacing_capable)
 
     return issues
 
 
 def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, bar_bbox=None,
-                 is_ring=False, num_piles=1):
+                 is_ring=False, num_piles=1, spacing_capable=True):
     issues = []
     prefix = f"Bar '{bm}' ({comp})"
 
@@ -433,9 +465,10 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 'error', zone, bar_bbox
             ))
     elif d_spacing and not w_spacing:
-        if not drawing_bar.get('from_dxf'):
-            # DXF schedule has no separate C/C column — spacing cannot be verified from DXF.
-            # Only flag missing spacing for PDF path where the column should be present.
+        if spacing_capable:
+            # Only flag missing spacing when the extraction path can actually read a
+            # c/c column (capability declared by the extractor — e.g. the DXF path sets
+            # it False when the schedule has no spacing column).
             issues.append(_issue(
                 'Bar Spacing', f"{prefix}: Spacing not found in drawing ({round(d_spacing, 2)}mm expected)",
                 f"Design input specifies spacing of {round(d_spacing, 2)}mm c/c for bar '{bm}' but drawing schedule does not show spacing.",

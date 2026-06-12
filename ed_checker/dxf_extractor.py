@@ -15,54 +15,18 @@ import math
 import logging
 import tempfile
 
+from .profiles import PPP_PROFILE, DrawingTypeProfile, TRIGGER_WORDS
+from .schema import new_drawing_data, diag
+
 log = logging.getLogger(__name__)
 
-# Mirror constants from pdf_extractor — kept in sync manually
-_REQUIRED_PPP_SECTIONS = [
-    ('SECTION A-A FOR PILE',           ['A-A FOR PILE']),
-    ('SECTION Z-Z (PILE)',             ['Z-Z']),
-    ('SECTION A-A FOR PILECAP & PIER', ['A-A FOR PILECAP']),
-    ('SECTION B-B FOR PILECAP & PIER', ['B-B FOR PILECAP']),
-    ('PLAN OF PILECAP',                ['PLAN OF PILECAP']),
-    ('REINFORCEMENT PLAN OF PILECAP',  ['REINFORCEMENT PLAN']),
-    ('TABLE-1',                        ['TABLE-1', 'TABLE 1']),
-    ('LAP LENGTH TABLE',               ['LAP LENGTH']),
-    ('SCHEDULE OF REINFORCEMENT',      ['SCHEDULE OF REINFORCEMENT']),
-]
+# DXF $INSUNITS code → millimetres per drawing unit.
+# Codes: 1=inches, 2=feet, 4=mm, 5=cm, 6=m, 7=km. 0=unitless (assume mm — CASAD standard).
+_INSUNITS_TO_MM = {1: 25.4, 2: 304.8, 4: 1.0, 5: 10.0, 6: 1000.0, 7: 1e6}
 
-_NOTE_KEYWORDS = {
-    'pile_length':      ['PILE LENGTH', 'LENGTH OF PILE'],
-    'pile_fixity':      ['FIXITY', 'FIX. LENGTH', 'FIX LENGTH', 'FIXATION'],
-    'pile_diameter':    ['PILE DIA', 'DIAMETER OF PILE', 'PILE DIAMETER'],
-    'concrete_pile':    ['M30', 'M35', 'M40', 'M45', 'M50'],
-    'concrete_pilecap': ['M30', 'M35', 'M40', 'M45', 'M50'],
-    'concrete_pier':    ['M30', 'M35', 'M40', 'M45', 'M50'],
-    'steel_grade':      ['FE415', 'FE500', 'FE550', 'FE 415', 'FE 500', 'FE 550', 'HYSD', 'TMT'],
-    'irc_code_ref':     ['IRC:', 'IRC-', 'IRC '],
-}
-
-# Bar mark → component mapping — FALLBACK ONLY.
-# Primary component assignment uses PILECAP/PILE/PIER header rows found in the schedule
-# (see _build_comp_boundaries). This dict is only consulted when no component header rows
-# are found in the DXF (e.g. the schedule has no sub-headers). Add entries here only if
-# a specific project uses a non-standard header that _build_comp_boundaries can't find.
-_BAR_MARK_COMP = {
-    'x': 'pile', 'y': 'pile', 'y1': 'pile', 'z': 'pile',
-    'a': 'pilecap', 'b': 'pilecap', 'c': 'pilecap', 'd': 'pilecap',
-    'e': 'pilecap', 'f': 'pilecap', 'f1': 'pilecap',
-    'g': 'pier', 'h': 'pier', 'h1': 'pier', 'h2': 'pier',
-    'i': 'pier', 'i1': 'pier',
-    'j': 'pier', 'j1': 'pier',
-    'k': 'pier', 'k1': 'pier',
-}
-
-# Component header row detection keywords.
-# PILECAP must be checked before PILE since "PILECAP" contains "PILE".
-_COMP_HEADER_KEYWORDS = [
-    ('pilecap', re.compile(r'\bPILECAP\b', re.IGNORECASE)),
-    ('pile',    re.compile(r'\bPILE\b(?!CAP)', re.IGNORECASE)),
-    ('pier',    re.compile(r'\bPIER\b', re.IGNORECASE)),
-]
+# Block-reference text traversal limits (B1): recursion depth and total text entity cap.
+_MAX_BLOCK_DEPTH = 3
+_MAX_TEXT_ENTITIES = 20000
 
 # Schedule column header keywords → internal field name.
 # CASAD schedule column headers span multiple Y-rows (e.g. "TOTAL" on one line,
@@ -82,8 +46,6 @@ _COL_KEYWORDS = {
 # Known valid bar diameters in mm
 _VALID_DIA = {8, 10, 12, 16, 20, 25, 32}
 
-TRIGGER_WORDS = {'SECTION', 'TABLE-1', 'TABLE 1', 'LAP', 'NOTES', 'DETAIL', 'PLAN', 'REINFORCEMENT'}
-
 # Words that look like bar marks but are definitely not (column header / schedule keyword tokens).
 _BAR_MARK_SKIP = {
     'dia', 'nos', 'no', 'mk', 'wt', 'kg', 'm', 'mm', 'cm',
@@ -102,9 +64,9 @@ def _is_bar_mark_token(text: str) -> bool:
     return bool(re.match(r'^[a-z]\d{0,2}$', t)) and t not in _BAR_MARK_SKIP
 
 
-def _build_comp_boundaries(data_rows: list) -> list:
+def _build_comp_boundaries(data_rows: list, profile: DrawingTypeProfile) -> list:
     """
-    Scan data rows for component section header rows (PILECAP / PILE / PIER).
+    Scan data rows for component section header rows (e.g. PILECAP / PILE / PIER).
     Returns [(row_idx, comp), ...] sorted by row_idx.
 
     A true component header looks like:
@@ -116,10 +78,10 @@ def _build_comp_boundaries(data_rows: list) -> list:
       1. Skip any row where COMP is followed by '=' and a digit.
       2. Require the component keyword to appear in the first two tokens of the row.
 
-    Falls back to _BAR_MARK_COMP when no boundaries are found (drawings without
-    explicit sub-headers rely on bar mark letter conventions).
+    Falls back to profile.bar_mark_comp_fallback when no boundaries are found
+    (drawings without explicit sub-headers rely on bar mark letter conventions).
     """
-    _total_re = re.compile(r'\b(PILECAP|PILE|PIER)\s*=\s*\d', re.IGNORECASE)
+    _total_re = profile.total_row_guard_re()
     boundaries = []
     for idx, row in enumerate(data_rows):
         row_text = ' '.join(t['text'] for t in row)
@@ -128,7 +90,7 @@ def _build_comp_boundaries(data_rows: list) -> list:
             continue
         tokens = row_text.split()
         first_two = ' '.join(tokens[:2]).upper()
-        for comp, pattern in _COMP_HEADER_KEYWORDS:
+        for comp, pattern in profile.comp_header_patterns:
             if not pattern.search(row_text):
                 continue
             # Guard 2: component keyword must be within the first two tokens
@@ -157,29 +119,56 @@ def _comp_for_row(row_idx: int, boundaries: list) -> str | None:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-def extract_from_dxf(dxf_bytes: bytes) -> dict:
+def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE) -> dict:
     """
     Parse an AutoCAD DXF file and return drawing_data compatible with comparator.compare().
     Produces exact values — no OCR, no vision API required.
+
+    Every way extraction can degrade is recorded in drawing_data['extraction_diagnostics']
+    ({code, message, severity}) — 'error' diagnostics become review issues so the engineer
+    knows what could NOT be checked; 'info' diagnostics are visible via the debug route.
     """
+    diags: list = []
+
     try:
         import ezdxf
     except ImportError:
         log.error('ezdxf not installed. Run: pip install ezdxf>=1.3.0')
-        return _empty()
+        diags.append(diag('ezdxf_missing',
+                          'The DXF could not be processed: ezdxf is not installed on the server. '
+                          'All DXF-based checks were skipped.'))
+        return new_drawing_data(extraction_diagnostics=diags)
 
     # ezdxf.read(BytesIO) fails on AutoCAD DXF files that contain binary data
     # (embedded images, binary chunks in MTEXT). ezdxf.readfile() handles encoding
     # detection correctly. Write to a temp file and use readfile() instead.
     tmp_path = None
+    doc = None
     try:
         with tempfile.NamedTemporaryFile(suffix='.dxf', delete=False) as tmp:
             tmp.write(dxf_bytes)
             tmp_path = tmp.name
-        doc = ezdxf.readfile(tmp_path)
+        try:
+            doc = ezdxf.readfile(tmp_path)
+        except Exception as strict_err:
+            # Real-world DXFs are frequently malformed in recoverable ways —
+            # try the recover module before giving up.
+            from ezdxf import recover
+            doc, auditor = recover.readfile(tmp_path)
+            log.warning('DXF strict parse failed (%s) — recovered with ezdxf.recover '
+                        '(%d errors audited)', strict_err, len(auditor.errors))
+            diags.append(diag(
+                'dxf_recovered',
+                f'The DXF file was malformed and was repaired automatically '
+                f'({len(auditor.errors)} structural errors fixed). Extracted values are '
+                f'usually still exact, but verify results if anything looks off.',
+                severity='info'))
     except Exception as e:
         log.error('DXF parse failed: %s', e, exc_info=True)
-        return _empty()
+        diags.append(diag('dxf_parse_failed',
+                          f'The DXF file could not be parsed ({e}). All DXF-based checks '
+                          f'were skipped. Re-export via File > Save As > AutoCAD DXF.'))
+        return new_drawing_data(extraction_diagnostics=diags)
     finally:
         if tmp_path and os.path.exists(tmp_path):
             try:
@@ -188,19 +177,40 @@ def extract_from_dxf(dxf_bytes: bytes) -> dict:
                 pass
 
     msp     = doc.modelspace()
-    extents = _get_extents(doc)
-    all_text = _collect_text(msp)
+    u2mm    = _units_to_mm(doc, diags)
+    all_text, text_stats = _collect_text(msp)
+    ps_text = _collect_paperspace_text(doc)
+    extents = _get_extents(doc, all_text, diags)
 
-    log.info('DXF: %d text entities, extents=(%.1f,%.1f)–(%.1f,%.1f)',
-             len(all_text), *extents)
+    if not all_text and not ps_text:
+        diags.append(diag('no_text_entities',
+                          'The DXF contains no readable text entities — text may have been '
+                          'exploded to outlines on export. All text-based DXF checks were '
+                          'skipped. Re-export with text preserved (File > Save As > AutoCAD DXF).'))
+    if text_stats['in_blocks']:
+        diags.append(diag('block_text_found',
+                          f"{text_stats['in_blocks']} text entities were read from inside "
+                          f"block references.", severity='info'))
+    if text_stats['errors']:
+        diags.append(diag('text_entity_errors',
+                          f"{text_stats['errors']} text entities could not be read and were "
+                          f"skipped.", severity='info'))
+    if ps_text:
+        diags.append(diag('paperspace_text_found',
+                          f'{len(ps_text)} text entities found in paperspace layouts '
+                          f'(used for title block extraction).', severity='info'))
 
-    schedule            = _extract_schedule(msp, all_text, extents)
-    title_block         = _extract_title_block(doc, msp, all_text, extents)
-    notes               = _extract_notes(all_text, extents)
-    dim_data            = _extract_dimensions(msp, extents)
-    table_1             = _extract_table1(all_text, extents)
-    sv_pos, cut_letters = _extract_section_info(all_text, extents)
-    xsec                = _count_cross_section_bars(msp, all_text, schedule, extents)
+    log.info('DXF: %d text entities (%d from blocks, %d paperspace), units→mm=%.3f, '
+             'extents=(%.1f,%.1f)–(%.1f,%.1f)',
+             len(all_text), text_stats['in_blocks'], len(ps_text), u2mm, *extents)
+
+    schedule, sched_info = _extract_schedule(msp, all_text, extents, profile, u2mm, diags)
+    title_block         = _extract_title_block(doc, msp, all_text, extents, profile, ps_text)
+    notes               = _extract_notes(all_text, extents, profile)
+    dim_data            = _extract_dimensions(msp, extents, u2mm)
+    table_1             = _extract_table1(all_text, extents, profile.layout)
+    sv_pos, cut_letters = _extract_section_info(all_text, extents, profile.layout)
+    xsec                = _count_cross_section_bars(msp, all_text, schedule, extents, profile, diags)
 
     # Supplement notes with DIMENSION-derived values when text extraction missed them.
     # DIMENSION entities give exact geometric measurements with no OCR error.
@@ -211,58 +221,111 @@ def extract_from_dxf(dxf_bytes: bytes) -> dict:
         notes['pile_dia_m'] = round(dim_data['pile_dia_mm'] / 1000.0, 3)
         log.info('Notes: pile_dia_m set from DIMENSION entity: %.3fm', notes['pile_dia_m'])
 
-    log.info('DXF extraction done: comps=%s title_fields=%d sections=%d cuts=%s xsec=%d',
+    # What this extraction can vouch for (consumed by the comparator instead of
+    # source flags). Spacing is only checkable if the schedule has a C/C column.
+    capabilities = {
+        'spacing':          sched_info.get('has_spacing_col', False),
+        'shape_dims':       False,   # Phase 2 — shape sketch dims not read from DXF yet
+        'visual_bar_count': True,
+        'label_review':     False,   # vision-only check, not run in DXF path
+        'dimension_review': False,   # vision-only check, not run in DXF path
+    }
+
+    log.info('DXF extraction done: comps=%s title_fields=%d sections=%d cuts=%s xsec=%d diags=%d',
              list(schedule.keys()),
              sum(1 for v in title_block.values() if v),
-             len(sv_pos), sorted(cut_letters), len(xsec))
+             len(sv_pos), sorted(cut_letters), len(xsec), len(diags))
 
-    return {
-        'schedule':                     schedule,
-        'title_block':                  title_block,
-        'notes':                        notes,
-        'dim_data':                     dim_data,
-        'table_1':                      table_1,
-        'cross_section_checks':         xsec,
-        'section_view_positions':       sv_pos,
-        'cut_letters':                  cut_letters,
-        # Filled in by pdfplumber merge in __init__.py (PDF coords for marker placement):
-        'schedule_section_positions':   {},
-        'schedule_section_bboxes':      {},
-        # Not available from DXF text alone (Phase 2):
-        'label_issues':                 [],
-        'dimension_issues':             [],
-        'unlabeled_views':              [],
-        'erroneous_boxes':              [],
-        # Computed in __init__.py after pdfplumber merge:
-        'missing_referenced_sections':  [],
-        # Completeness checks — derived from DXF text:
-        'sections_from_text':           _check_required_sections(sv_pos),
-        'notes_completeness_from_text': _check_notes_completeness(all_text),
-        'raw_text':                     [t['text'] for t in all_text],
-    }
-
-
-def _empty() -> dict:
-    return {
-        'schedule': {}, 'title_block': {}, 'notes': {}, 'table_1': [],
-        'cross_section_checks': [], 'section_view_positions': {}, 'cut_letters': set(),
-        'schedule_section_positions': {}, 'schedule_section_bboxes': {},
-        'label_issues': [], 'dimension_issues': [], 'unlabeled_views': [],
-        'erroneous_boxes': [], 'missing_referenced_sections': [],
-        'sections_from_text': [], 'notes_completeness_from_text': [], 'raw_text': [],
-    }
+    return new_drawing_data(
+        schedule=schedule,
+        title_block=title_block,
+        notes=notes,
+        dim_data=dim_data,
+        table_1=table_1,
+        cross_section_checks=xsec,
+        section_view_positions=sv_pos,
+        cut_letters=cut_letters,
+        # schedule_section_positions / schedule_section_bboxes stay empty here —
+        # filled by the pdfplumber merge in __init__.py (PDF coords for markers).
+        # missing_referenced_sections also computed in __init__.py after the merge.
+        sections_from_text=_check_required_sections(sv_pos, profile),
+        notes_completeness_from_text=_check_notes_completeness(all_text, profile),
+        capabilities=capabilities,
+        extraction_diagnostics=diags,
+        raw_text=[t['text'] for t in all_text],
+    )
 
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
 
-def _get_extents(doc) -> tuple:
-    """Return (x_min, y_min, x_max, y_max) from DXF header."""
+def _get_extents(doc, all_text: list = None, diags: list = None) -> tuple:
+    """
+    Return (x_min, y_min, x_max, y_max) for the drawing.
+
+    $EXTMIN/$EXTMAX from the header are used when sane, but they cannot be trusted
+    blindly: files saved without a recompute carry sentinel values (+1e20/-1e20,
+    inverted), and stale extents are common in real AutoCAD exports. In those cases
+    the bounding box is computed from the text-entity cloud instead — wrong extents
+    silently break every region filter and marker bbox downstream.
+    """
+    ext = None
     try:
         mn = doc.header.get('$EXTMIN', (0, 0, 0))
         mx = doc.header.get('$EXTMAX', (1000, 700, 0))
-        return float(mn[0]), float(mn[1]), float(mx[0]), float(mx[1])
+        ext = (float(mn[0]), float(mn[1]), float(mx[0]), float(mx[1]))
     except Exception:
-        return 0.0, 0.0, 1000.0, 700.0
+        pass
+
+    if ext and ext[0] < ext[2] and ext[1] < ext[3] and all(abs(v) < 1e15 for v in ext):
+        return ext
+
+    if all_text:
+        xs = [t['x'] for t in all_text]
+        ys = [t['y'] for t in all_text]
+        mx_x, mn_x = max(xs), min(xs)
+        mx_y, mn_y = max(ys), min(ys)
+        pad_x = (mx_x - mn_x) * 0.02 or 10.0
+        pad_y = (mx_y - mn_y) * 0.02 or 10.0
+        computed = (mn_x - pad_x, mn_y - pad_y, mx_x + pad_x, mx_y + pad_y)
+        log.warning('Header extents invalid (%s) — computed from text cloud: %s', ext, computed)
+        if diags is not None:
+            diags.append(diag('extents_computed',
+                              'The DXF header drawing extents were missing or invalid; '
+                              'the sheet area was derived from text positions instead. '
+                              'Region-based extraction should still work, but verify results.',
+                              severity='info'))
+        return computed
+
+    return 0.0, 0.0, 1000.0, 700.0
+
+
+def _units_to_mm(doc, diags: list) -> float:
+    """
+    Return the factor that converts drawing units to millimetres, from $INSUNITS.
+    All absolute-distance thresholds in this module are defined in mm and must be
+    divided by this factor before comparison against raw coordinates (or measured
+    values multiplied by it). Unitless/unknown drawings are assumed to be mm
+    (the CASAD standard) with an info diagnostic so the assumption is visible.
+    """
+    try:
+        code = int(doc.header.get('$INSUNITS', 0))
+    except Exception:
+        code = 0
+    factor = _INSUNITS_TO_MM.get(code)
+    if factor is None:
+        if code != 0:
+            diags.append(diag('units_unsupported',
+                              f'DXF declares unit code {code}, which is not supported — '
+                              f'assuming millimetres. Distance-based checks may be wrong '
+                              f'if the drawing is not in mm.', severity='info'))
+        else:
+            diags.append(diag('units_assumed_mm',
+                              'DXF does not declare drawing units ($INSUNITS) — assuming '
+                              'millimetres (CASAD standard).', severity='info'))
+        return 1.0
+    if factor != 1.0:
+        log.info('DXF units: $INSUNITS=%d → %.3f mm per drawing unit', code, factor)
+    return factor
 
 
 def _to_bbox(x0, y0, x1, y1, extents: tuple) -> dict:
@@ -294,28 +357,115 @@ def _pos_to_pct(x, y, extents: tuple) -> tuple:
 
 # ── Text collection ───────────────────────────────────────────────────────────
 
-def _collect_text(msp) -> list:
-    """Return [{text, x, y}] for all TEXT and MTEXT entities in model space."""
+def _text_entity_to_dict(e) -> dict | None:
+    """Convert one TEXT/MTEXT entity to {text, x, y}, or None if empty/unreadable."""
+    etype = e.dxftype()
+    if etype == 'TEXT':
+        text = _strip_text_codes((e.dxf.text or '').strip())
+    elif etype == 'MTEXT':
+        try:
+            text = e.plain_mtext().strip()
+        except AttributeError:
+            text = _strip_mtext_codes(e.dxf.text or '')
+    elif etype == 'ATTRIB':
+        text = _strip_text_codes((e.dxf.text or '').strip())
+    else:
+        return None
+    if not text:
+        return None
+    p = e.dxf.insert
+    return {'text': text, 'x': float(p.x), 'y': float(p.y)}
+
+
+def _collect_layout_text(layout, stats: dict) -> list:
+    """
+    Collect [{text, x, y}] from one layout (modelspace or a paperspace layout):
+    top-level TEXT/MTEXT entities plus text nested inside block references.
+
+    Block traversal (B1): INSERT entities are flattened via virtual_entities(),
+    which yields block content already transformed to layout coordinates. Nested
+    INSERTs are recursed into up to _MAX_BLOCK_DEPTH. Title blocks, standard-notes
+    blocks, and schedule cells inserted as blocks are invisible without this.
+    """
     result = []
-    for e in msp.query('TEXT'):
+    for e in layout.query('TEXT MTEXT'):
         try:
-            text = _strip_text_codes((e.dxf.text or '').strip())
-            if text:
-                p = e.dxf.insert
-                result.append({'text': text, 'x': float(p.x), 'y': float(p.y)})
+            item = _text_entity_to_dict(e)
+            if item:
+                result.append(item)
         except Exception:
-            pass
-    for e in msp.query('MTEXT'):
+            stats['errors'] += 1
+    for ins in layout.query('INSERT'):
+        _collect_insert_text(ins, result, depth=0, stats=stats)
+        # ATTRIBs are attached to the INSERT itself, not the block definition
         try:
+            for attrib in ins.attribs:
+                item = _text_entity_to_dict(attrib)
+                if item:
+                    item['from_block'] = True
+                    result.append(item)
+                    stats['in_blocks'] += 1
+        except Exception:
+            stats['errors'] += 1
+    return result
+
+
+def _collect_insert_text(insert, out: list, depth: int, stats: dict):
+    """
+    Recursively collect TEXT/MTEXT from inside a block reference (WCS coordinates).
+    Items are tagged 'from_block': True — block text is used for labels, title block
+    and notes, but excluded where author-typed top-level text is authoritative
+    (schedule cells, cut-letter detection), because symbol blocks render glyphs
+    (e.g. the 'O' diameter symbol) and annotation fragments that corrupt those passes.
+    """
+    if depth > _MAX_BLOCK_DEPTH or len(out) > _MAX_TEXT_ENTITIES:
+        return
+    try:
+        for ve in insert.virtual_entities():
+            etype = ve.dxftype()
+            if etype in ('TEXT', 'MTEXT'):
+                try:
+                    item = _text_entity_to_dict(ve)
+                    if item:
+                        item['from_block'] = True
+                        out.append(item)
+                        stats['in_blocks'] += 1
+                except Exception:
+                    stats['errors'] += 1
+            elif etype == 'INSERT':
+                _collect_insert_text(ve, out, depth + 1, stats)
+    except Exception:
+        stats['errors'] += 1
+
+
+def _collect_text(msp) -> tuple:
+    """
+    Return ([{text, x, y}], stats) for all text in model space — top-level TEXT/MTEXT
+    plus text inside block references. stats = {'in_blocks': N, 'errors': N}.
+    """
+    stats = {'in_blocks': 0, 'errors': 0}
+    result = _collect_layout_text(msp, stats)
+    return result, stats
+
+
+def _collect_paperspace_text(doc) -> list:
+    """
+    Collect text from all paperspace layouts (title blocks often live there).
+    Coordinates are in each layout's paper space — usable for pattern matching
+    and per-layout quadrant filtering, NOT comparable to modelspace extents.
+    """
+    stats = {'in_blocks': 0, 'errors': 0}
+    result = []
+    try:
+        for name in doc.layout_names():
+            if name.lower() == 'model':
+                continue
             try:
-                text = e.plain_mtext().strip()
-            except AttributeError:
-                text = _strip_mtext_codes(e.dxf.text or '')
-            if text:
-                p = e.dxf.insert
-                result.append({'text': text, 'x': float(p.x), 'y': float(p.y)})
-        except Exception:
-            pass
+                result.extend(_collect_layout_text(doc.layout(name), stats))
+            except Exception as e:
+                log.debug('Paperspace layout %r scan failed: %s', name, e)
+    except Exception as e:
+        log.debug('Paperspace scan failed: %s', e)
     return result
 
 
@@ -406,7 +556,8 @@ def _get_vertical_line_x_positions(msp, sched_x_min: float, x_max: float, dh: fl
     return deduped
 
 
-def _aggregate_bar_rows(bar_rows: list, col_map: dict, bm: str) -> dict | None:
+def _aggregate_bar_rows(bar_rows: list, col_map: dict, bm: str,
+                        x_offset_min: float = 1000.0) -> dict | None:
     """
     Aggregate data from all rows in a bar's range into one bar dict.
 
@@ -447,7 +598,7 @@ def _aggregate_bar_rows(bar_rows: list, col_map: dict, bm: str) -> dict | None:
             else:
                 continue
             break
-    if abs(x_offset) > 1000:
+    if abs(x_offset) > x_offset_min:
         log.debug('Bar %r: applying x_offset=%.0f to column map', bm, x_offset)
         real_col_map = {k: v + x_offset for k, v in real_col_map.items()}
 
@@ -543,12 +694,18 @@ def _aggregate_bar_rows(bar_rows: list, col_map: dict, bm: str) -> dict | None:
         'unit_wt_kg_m':    unit_wt,
         'total_wt_kg':     total_wt_kg,
         'shape_dimensions': None,
-        'from_dxf':        True,
     }
 
 
-def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
-    """Extract reinforcement schedule from DXF text entities."""
+def _extract_schedule(msp, all_text: list, extents: tuple,
+                      profile: DrawingTypeProfile, u2mm: float, diags: list) -> tuple:
+    """
+    Extract reinforcement schedule from DXF text entities.
+    Returns (schedule dict, info dict). info = {'has_spacing_col': bool}.
+    Every degradation path appends a diagnostic so failures are visible, not silent.
+    """
+    layout = profile.layout
+    info = {'has_spacing_col': False}
     x_min, y_min, x_max, y_max = extents
     dw = x_max - x_min
     dh = y_max - y_min
@@ -556,19 +713,35 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
     # The schedule sits in roughly the middle third of CASAD drawings.
     # Previous threshold of 50% cut through the column headers (DIA/NOS/LENGTH
     # at 45-49%, bar marks at 38%). Use 30% to capture the full schedule.
-    sched_x_min = x_min + dw * 0.30
-    sched_text = [t for t in all_text if t['x'] >= sched_x_min]
+    sched_x_min = x_min + dw * layout.schedule_x_min_frac
+    # Schedule cells are author-typed top-level TEXT. Block-derived text in this region
+    # is symbol glyphs and annotation fragments (Ø symbols, attribute numbers) that land
+    # in bar row ranges and corrupt column assignment — exclude it.
+    in_region = [t for t in all_text if t['x'] >= sched_x_min]
+    sched_text = [t for t in in_region if not t.get('from_block')]
+    n_block_excluded = len(in_region) - len(sched_text)
+    if n_block_excluded > 20 and len(sched_text) < n_block_excluded:
+        # Mostly-block schedule region — a block-based schedule table would be invisible
+        diags.append(diag('schedule_text_mostly_blocks',
+                          f'{n_block_excluded} block-derived text entities in the schedule '
+                          f'region were excluded vs {len(sched_text)} top-level entities kept. '
+                          f'If this schedule is drawn as a block, extraction will be '
+                          f'incomplete.', severity='info'))
 
     if not sched_text:
         log.warning('No text found in schedule area (x >= %.1f)', sched_x_min)
-        return {}
+        diags.append(diag('schedule_area_empty',
+                          'No text found in the schedule area (right portion of the sheet). '
+                          'Schedule checks were skipped. If the schedule is positioned '
+                          'elsewhere on this sheet, the layout assumption needs adjusting.'))
+        return {}, info
 
     log.info('Schedule area: %d text entities at x >= %.1f (%.0f%% from left)',
              len(sched_text), sched_x_min, (sched_x_min - x_min) / dw * 100)
 
-    rows = _group_rows(sched_text, tol_frac=0.004, extents=extents)
+    rows = _group_rows(sched_text, tol_frac=layout.sched_row_tol_frac, extents=extents)
     if not rows:
-        return {}
+        return {}, info
 
     # Find the column header row: must contain at least 2 of DIA / NOS / LENGTH.
     header_idx = None
@@ -580,31 +753,42 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
 
     if header_idx is None:
         log.warning('Schedule column header row not found')
-        return {}
+        diags.append(diag('schedule_header_not_found',
+                          'The schedule column header row (DIA / NOS / LENGTH) was not found '
+                          'in the DXF. Schedule checks were skipped.'))
+        return {}, info
 
     # CASAD schedule headers span multiple Y-lines. Collect all sub-rows
-    # within 1.2% of drawing height of the identified header row.
+    # within the header band of the identified header row.
     header_y = rows[header_idx][0]['y']
-    header_sub_rows = [row for row in rows if abs(row[0]['y'] - header_y) < dh * 0.012]
+    header_sub_rows = [row for row in rows if abs(row[0]['y'] - header_y) < dh * layout.header_band_frac]
 
     col_map = _build_col_map(header_sub_rows)
     log.info('Schedule column map: %s', {k: f'x≈{v:.0f}' for k, v in col_map.items()})
 
     if not col_map:
         log.warning('Column map empty — cannot parse schedule rows')
-        return {}
+        diags.append(diag('schedule_colmap_empty',
+                          'Schedule column headers were found but none matched known column '
+                          'keywords. Schedule checks were skipped.'))
+        return {}, info
+
+    info['has_spacing_col'] = 'spacing_mm' in col_map
 
     data_rows = rows[header_idx + 1:]
     if not data_rows:
-        return {}
+        return {}, info
 
     # Detect component section boundaries (PILECAP / PILE / PIER header rows).
     # Primary method: structural headers in the schedule itself — works regardless
     # of what letters are used for bar marks.
-    comp_boundaries = _build_comp_boundaries(data_rows)
+    comp_boundaries = _build_comp_boundaries(data_rows, profile)
     use_boundaries = bool(comp_boundaries)
     if not use_boundaries:
-        log.info('No component header rows found — falling back to _BAR_MARK_COMP lookup')
+        log.info('No component header rows found — falling back to bar-mark letter lookup')
+        diags.append(diag('bar_mark_fallback_used',
+                          'The schedule has no component sub-header rows; components were '
+                          'assigned from bar mark letter conventions.', severity='info'))
 
     # Pass 1 — locate bar mark rows.
     # A bar mark is: any cell near the bar_mark column whose text is a single letter
@@ -631,14 +815,21 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
 
     if not bar_positions:
         log.warning('No bar marks found in schedule')
-        return {}
+        diags.append(diag('no_bar_marks',
+                          'A schedule header was found but no bar mark rows could be '
+                          'identified. Schedule checks were skipped.'))
+        return {}, info
 
     log.info('Pass 1: found %d bar marks: %s', len(bar_positions),
              [bm for _, bm in bar_positions])
 
+    # Side-by-side schedule block detection threshold, converted from mm to drawing units.
+    x_offset_min = layout.table_offset_min_mm / u2mm
+
     # Pass 2 — for each bar mark, assign rows in its range (midpoint between
     # adjacent bar marks) and aggregate all data found there.
     schedule: dict = {}
+    dropped: list = []   # (bar mark, reason) — surfaced as a diagnostic, not just a log line
     n = len(data_rows)
 
     for pos_i, (bm_row_idx, bm) in enumerate(bar_positions):
@@ -647,11 +838,13 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
             comp = _comp_for_row(bm_row_idx, comp_boundaries)
             if comp is None:
                 log.debug('Bar %r at row %d precedes all component headers — skipping', bm, bm_row_idx)
+                dropped.append((bm, 'appears above the first component header'))
                 continue
         else:
-            comp = _BAR_MARK_COMP.get(bm)
+            comp = profile.bar_mark_comp_fallback.get(bm)
             if comp is None:
-                log.debug('Bar mark %r not in _BAR_MARK_COMP fallback — skipping', bm)
+                log.debug('Bar mark %r not in letter-convention fallback — skipping', bm)
+                dropped.append((bm, 'not in the bar-mark letter conventions for this drawing type'))
                 continue
 
         # Range start: midpoint between previous bar mark row and this one.
@@ -669,7 +862,7 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
             range_end = (bm_row_idx + next_idx) // 2 + 1
 
         bar_rows = data_rows[range_start:range_end]
-        bar_data = _aggregate_bar_rows(bar_rows, col_map, bm)
+        bar_data = _aggregate_bar_rows(bar_rows, col_map, bm, x_offset_min)
         if bar_data is None:
             continue
 
@@ -681,11 +874,18 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
             # within one occurrence, so any second appearance is a genuinely separate
             # block and should not double-count into the primary schedule.
             log.debug('Bar mark %r already recorded — skipping second-block occurrence', bm)
+            dropped.append((bm, 'duplicate occurrence (second schedule block) not aggregated'))
         else:
             comp_dict[bm] = bar_data
 
+    if dropped:
+        detail = '; '.join(f"'{bm}' ({reason})" for bm, reason in dropped)
+        diags.append(diag('schedule_bars_dropped',
+                          f'{len(dropped)} schedule row(s) were skipped during extraction and '
+                          f'were NOT checked: {detail}.', severity='info'))
+
     log.info('Schedule parsed: %s', {c: list(b.keys()) for c, b in schedule.items()})
-    return schedule
+    return schedule, info
 
 
 def _build_col_map(header_rows: list) -> dict:
@@ -803,8 +1003,14 @@ def _parse_schedule_row(row: list, col_map: dict) -> dict | None:
 
 # ── Title block extraction ────────────────────────────────────────────────────
 
-def _extract_title_block(doc, msp, all_text: list, extents: tuple) -> dict:
-    """Extract title block fields. Tries ATTRIB entities first, then text patterns."""
+def _extract_title_block(doc, msp, all_text: list, extents: tuple,
+                         profile: DrawingTypeProfile = PPP_PROFILE,
+                         ps_text: list = None) -> dict:
+    """
+    Extract title block fields. Tries ATTRIB entities first, then text patterns in the
+    bottom-right quadrant of modelspace, then the same patterns over paperspace text
+    (title blocks often live in a paperspace layout, not modelspace).
+    """
     result = {}
 
     # Pass 1: INSERT blocks with ATTRIB entities (standard CASAD template)
@@ -840,13 +1046,42 @@ def _extract_title_block(doc, msp, all_text: list, extents: tuple) -> dict:
         log.debug('ATTRIB scan failed: %s', e)
 
     # Pass 2: Text pattern matching in bottom-right quadrant of the drawing
+    layout = profile.layout
     x_min, y_min, x_max, y_max = extents
-    # Title block is in bottom-right ~35% horizontally and bottom 25% vertically
-    tb_x_min = x_min + (x_max - x_min) * 0.60
-    tb_y_max = y_min + (y_max - y_min) * 0.30
+    tb_x_min = x_min + (x_max - x_min) * layout.title_x_min_frac
+    tb_y_max = y_min + (y_max - y_min) * layout.title_y_max_frac
 
     tb_text = [t for t in all_text if t['x'] >= tb_x_min and t['y'] <= tb_y_max]
+    _title_block_pattern_pass(tb_text, result)
 
+    # Pass 3: paperspace fallback — when modelspace yielded little, run the same
+    # patterns over paperspace text (quadrant-filtered against the paperspace's own
+    # text-cloud extents, since paperspace coordinates are unrelated to modelspace).
+    if ps_text and sum(1 for v in result.values() if v) < 3:
+        xs = [t['x'] for t in ps_text]
+        ys = [t['y'] for t in ps_text]
+        ps_x_min = min(xs) + (max(xs) - min(xs)) * layout.title_x_min_frac
+        ps_y_max = min(ys) + (max(ys) - min(ys)) * layout.title_y_max_frac
+        ps_tb = [t for t in ps_text if t['x'] >= ps_x_min and t['y'] <= ps_y_max] or ps_text
+        before = sum(1 for v in result.values() if v)
+        _title_block_pattern_pass(ps_tb, result)
+        added = sum(1 for v in result.values() if v) - before
+        if added:
+            log.info('Title block: %d field(s) filled from paperspace text', added)
+
+    # Drawing title: search modelspace then paperspace for the profile's title patterns
+    for t in list(all_text) + list(ps_text or []):
+        if result.get('title'):
+            break
+        if any(p in t['text'].upper() for p in profile.title_patterns):
+            result['title'] = t['text'].strip()
+
+    result['bbox'] = None  # position data comes from pdfplumber merge
+    return result
+
+
+def _title_block_pattern_pass(tb_text: list, result: dict):
+    """Run the title-block field regexes over a text list, filling unset fields in place."""
     for t in tb_text:
         s = t['text'].strip()
         su = s.upper()
@@ -890,20 +1125,17 @@ def _extract_title_block(doc, msp, all_text: list, extents: tuple) -> dict:
             elif not result.get('approved_by'):
                 result['approved_by'] = s
 
-    # Drawing title: typically appears as "DETAILS OF PILE, PILECAP AND PIER" somewhere
-    for t in all_text:
-        if not result.get('title') and 'DETAILS OF PILE' in t['text'].upper():
-            result['title'] = t['text'].strip()
-            break
-
-    result['bbox'] = None  # position data comes from pdfplumber merge
-    return result
-
 
 # ── Notes extraction ──────────────────────────────────────────────────────────
 
-def _extract_notes(all_text: list, extents: tuple) -> dict:
-    """Extract engineering notes: pile length, fixity, concrete grades, steel grade."""
+def _extract_notes(all_text: list, extents: tuple,
+                   profile: DrawingTypeProfile = PPP_PROFILE) -> dict:
+    """
+    Extract engineering note values. Which values, and how to find them, is defined
+    by the profile (note_float_patterns / note_string_patterns / components) — this
+    function carries no drawing-type knowledge of its own.
+    """
+    layout = profile.layout
     notes = {}
 
     # Find the NOTES section label
@@ -916,64 +1148,50 @@ def _extract_notes(all_text: list, extents: tuple) -> dict:
     # Scan all text (full drawing) or just near NOTES anchor
     x_min, y_min, x_max, y_max = extents
     if notes_anchor:
-        # Notes are typically within 40% of drawing height below the label
-        dy = (y_max - y_min) * 0.40
+        dy = (y_max - y_min) * layout.notes_h_frac
         scan = [t for t in all_text
-                if abs(t['x'] - notes_anchor['x']) < (x_max - x_min) * 0.40
+                if abs(t['x'] - notes_anchor['x']) < (x_max - x_min) * layout.notes_w_frac
                 and (notes_anchor['y'] - dy) <= t['y'] <= notes_anchor['y'] + 5]
     else:
-        # Fall back: scan the left 55% of the drawing
-        scan = [t for t in all_text if t['x'] < x_min + (x_max - x_min) * 0.55]
+        # Fall back: scan the views (left) portion of the drawing
+        scan = [t for t in all_text if t['x'] < x_min + (x_max - x_min) * layout.views_x_max_frac]
 
     full_text = ' '.join(t['text'] for t in scan)
     full_upper = full_text.upper()
 
-    # Pile length
-    m = re.search(r'PILE\s+LENGTH\s*[=:]\s*([\d.]+)\s*M?', full_upper)
-    if m:
-        notes['pile_length_m'] = _safe_float(m.group(1))
+    # Numeric note values (pile length, fixity, dia, …) — first non-None capture group
+    for key, pattern in profile.note_float_patterns.items():
+        m = re.search(pattern, full_upper)
+        if m:
+            val = next((g for g in m.groups() if g is not None), None)
+            if val is not None:
+                notes[key] = _safe_float(val)
 
-    # Pile fixity
-    m = re.search(r'FIXITY\s*[=:]\s*([\d.]+)\s*M?|FIX\.?\s*LENGTH\s*[=:]\s*([\d.]+)', full_upper)
-    if m:
-        notes['pile_fixity_m'] = _safe_float(m.group(1) or m.group(2))
+    # String note values (steel grade, lap-length concrete grade, …)
+    for key, pattern in profile.note_string_patterns.items():
+        m = re.search(pattern, full_upper)
+        if m:
+            notes[key] = re.sub(r'\s+', '', m.group(1))
 
-    # Pile dia
-    m = re.search(r'PILE\s+DIA\.?\s*[=:]\s*([\d.]+)\s*M?', full_upper)
-    if m:
-        notes['pile_dia_m'] = _safe_float(m.group(1))
-
-    # Concrete grades — find "M40 PILE", "M35 PILECAP" etc.
+    # Concrete grades — "M35 PILECAP" assigns to that component; a grade with no
+    # component qualifier (or whose component is already set) applies to all unset ones.
+    # Only the profile's known grades match — a bare \bM\d+\b would pick up grid
+    # labels like "M1" from annotation text.
+    grade_re = re.compile(r'\b(' + '|'.join(profile.concrete_grade_keywords) + r')\b')
+    comps_desc = profile.comps_longest_first()   # longest first: PILECAP before PILE
     for line in full_text.split('\n'):
         lu = line.upper()
-        m = re.search(r'\b(M\d+)\b', lu)
-        if m:
-            grade = m.group(1)
-            if 'PILE' in lu and 'PILECAP' not in lu and 'concrete_pile' not in notes:
-                notes['concrete_pile'] = grade
-            elif 'PILECAP' in lu and 'concrete_pilecap' not in notes:
-                notes['concrete_pilecap'] = grade
-            elif 'PIER' in lu and 'concrete_pier' not in notes:
-                notes['concrete_pier'] = grade
-            else:
-                # Generic grade — apply to any unset component
-                for comp_key in ('concrete_pile', 'concrete_pilecap', 'concrete_pier'):
-                    notes.setdefault(comp_key, grade)
-
-    # Steel grade
-    m = re.search(r'\b(Fe\s*\d+|FE\s*\d+|HYSD|TMT)\b', full_upper)
-    if m:
-        notes['steel_grade'] = re.sub(r'\s+', '', m.group(1))
-
-    # Lap length concrete grade
-    m = re.search(r'LAP\s+LENGTH\s+FOR\s+BAR\s+FOR\s+(M\d+)', full_upper)
-    if m:
-        notes['lap_length_concrete_grade'] = m.group(1)
-
-    # Max pile load
-    m = re.search(r'MAX\.?\s+(?:SAFE\s+)?PILE\s+LOAD\s*[=:]\s*([\d.]+)\s*T', full_upper)
-    if m:
-        notes['max_pile_load_t'] = _safe_float(m.group(1))
+        m = grade_re.search(lu)
+        if not m:
+            continue
+        grade = m.group(1)
+        target = next((c for c in comps_desc if c.upper() in lu), None)
+        key = f'concrete_{target}' if target else None
+        if key and key not in notes:
+            notes[key] = grade
+        else:
+            for comp in profile.components:
+                notes.setdefault(f'concrete_{comp}', grade)
 
     notes['bbox'] = None
     return notes
@@ -993,9 +1211,10 @@ def _strip_dim_override(text: str) -> str:
     return re.sub(r'\s{2,}', ' ', text).strip()
 
 
-def _extract_dimensions(msp, extents: tuple) -> dict:
+def _extract_dimensions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
     """
     Extract DIMENSION entities from modelspace and classify them.
+    Measured values are converted from drawing units to mm via u2mm.
 
     CASAD PPP drawings use DIMENSION entities to annotate:
       - Cross-section bar counts: override text "NN -NN NOS" or "NN-NN NOS"
@@ -1027,7 +1246,8 @@ def _extract_dimensions(msp, extents: tuple) -> dict:
 
     for e in msp.query('DIMENSION'):
         try:
-            val = float(e.get_measurement())
+            # get_measurement() returns drawing units — convert to mm via $INSUNITS factor
+            val = float(e.get_measurement()) * u2mm
             if val <= 0 or val > 1e6:
                 continue
 
@@ -1124,8 +1344,9 @@ def _extract_dimensions(msp, extents: tuple) -> dict:
 
 # ── TABLE-1 (pier levels) extraction ─────────────────────────────────────────
 
-def _extract_table1(all_text: list, extents: tuple) -> list:
+def _extract_table1(all_text: list, extents: tuple, layout=None) -> list:
     """Extract TABLE-1 pier elevation data."""
+    layout = layout or PPP_PROFILE.layout
     # Find TABLE-1 label
     table1_anchor = None
     for t in all_text:
@@ -1140,12 +1361,12 @@ def _extract_table1(all_text: list, extents: tuple) -> list:
     dw = x_max - x_min
     dh = y_max - y_min
 
-    # Collect text near TABLE-1: within 25% drawing width, below the label
+    # Collect text near TABLE-1: within the scan window around/below the label
     nearby = [t for t in all_text
-              if abs(t['x'] - table1_anchor['x']) < dw * 0.30
-              and (table1_anchor['y'] - dh * 0.30) <= t['y'] <= table1_anchor['y'] + 5]
+              if abs(t['x'] - table1_anchor['x']) < dw * layout.table1_w_frac
+              and (table1_anchor['y'] - dh * layout.table1_h_frac) <= t['y'] <= table1_anchor['y'] + 5]
 
-    rows = _group_rows(nearby, tol_frac=0.004, extents=extents)
+    rows = _group_rows(nearby, tol_frac=layout.sched_row_tol_frac, extents=extents)
     if len(rows) < 2:
         return []
 
@@ -1176,22 +1397,23 @@ def _extract_table1(all_text: list, extents: tuple) -> list:
 
 # ── Section info extraction ───────────────────────────────────────────────────
 
-def _extract_section_info(all_text: list, extents: tuple) -> tuple:
+def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
     """
     Return (section_view_positions, cut_letters).
     section_view_positions: {label_text: {x,y,w,h}} in PDF-style percentages.
     cut_letters: set of single uppercase letters appearing ≥2 times in left portion.
     """
+    layout = layout or PPP_PROFILE.layout
     x_min, y_min, x_max, y_max = extents
     dw = x_max - x_min
     dh = y_max - y_min
 
-    # Left 55% = drawing views area (schedule is in right ~45%).
+    # Views area on the left (schedule occupies the right).
     # TRIGGER_WORDS like TABLE-1, SCHEDULE can appear in the right area too —
     # scan all text for labels but only count cut letters from the left area.
-    view_x_max = x_min + dw * 0.55
+    view_x_max = x_min + dw * layout.views_x_max_frac
 
-    all_rows = _group_rows(all_text, tol_frac=0.005, extents=extents)
+    all_rows = _group_rows(all_text, tol_frac=layout.row_tol_frac, extents=extents)
 
     section_view_positions = {}
     single_letter_counts = {}
@@ -1206,22 +1428,27 @@ def _extract_section_info(all_text: list, extents: tuple) -> tuple:
             x0  = min(t['x'] for t in row)
             x1  = max(t['x'] for t in row)
             y_c = row[0]['y']
-            # Estimate view height as 18% of drawing height (matches pdfplumber heuristic)
-            view_h = dh * 0.18
+            # Estimated view height below the label (matches pdfplumber heuristic)
+            view_h = dh * layout.view_h_frac
             bbox = _to_bbox(x0, y_c, x1 + dw * 0.01, y_c - view_h, extents)
             section_view_positions[line[:80]] = bbox
 
         # Cut letter detection only in the left (view) area to avoid picking up
         # schedule row annotations, bar marks, pier labels on the right side.
+        # Block-derived text is excluded — symbol blocks render single glyphs
+        # (e.g. 'O' for Ø) that would register as fake cut letters.
         if all(t['x'] < view_x_max for t in row):
             for t in row:
+                if t.get('from_block'):
+                    continue
                 s = t['text'].strip()
                 if len(s) == 1 and s.isupper() and s.isalpha():
                     single_letter_counts[s] = single_letter_counts.get(s, 0) + 1
 
-    # Also scan ATTDEF/ATTRIB single letters — AutoCAD cut marks are often separate entities
+    # Second pass over raw entities — cut marks are often separate entities that the
+    # row grouping merges into mixed rows (same block-text exclusion applies)
     for t in all_text:
-        if t['x'] < view_x_max:
+        if t['x'] < view_x_max and not t.get('from_block'):
             s = t['text'].strip()
             if len(s) == 1 and s.isupper() and s.isalpha():
                 single_letter_counts[s] = single_letter_counts.get(s, 0) + 1
@@ -1234,33 +1461,68 @@ def _extract_section_info(all_text: list, extents: tuple) -> tuple:
 
 # ── Cross-section bar counting ────────────────────────────────────────────────
 
-def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tuple) -> list:
+def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tuple,
+                              profile: DrawingTypeProfile = PPP_PROFILE,
+                              diags: list = None) -> list:
     """
-    Count CIRCLE entities within each section view to get exact bar counts.
+    Count bar-dot symbols within each section view to get exact bar counts.
     Returns list of cross_section_check dicts matching pdf_extractor format.
+
+    Dot candidates, in priority order:
+      1. CIRCLE entities (radius-filtered), preferring rebar-layer entities when the
+         drawing's layers match profile.dot_layer_patterns
+      2. Repeated block INSERTs — rebar dots are often a small block inserted per bar
+    A section label with NO countable candidates produces an 'error' diagnostic
+    instead of being skipped silently: "verified nothing" must never look like
+    "verified correct".
     """
+    if diags is None:
+        diags = []
+    layout = profile.layout
     x_min, y_min, x_max, y_max = extents
     dw = x_max - x_min
     dh = y_max - y_min
 
-    # Collect all CIRCLE entities
+    # Collect all CIRCLE entities (with layer for rebar-layer preference)
     circles = []
     try:
         for e in msp.query('CIRCLE'):
             c = e.dxf.center
-            r = e.dxf.radius
-            circles.append({'x': float(c.x), 'y': float(c.y), 'r': float(r)})
+            circles.append({'x': float(c.x), 'y': float(c.y),
+                            'r': float(e.dxf.radius),
+                            'layer': str(e.dxf.layer or '')})
     except Exception as e:
         log.warning('CIRCLE query failed: %s', e)
 
-    if not circles:
-        log.info('No CIRCLE entities found — cross-section bar counting skipped')
-        return []
+    # Layer preference: when any circles sit on layers matching the profile's rebar
+    # patterns, those are authoritative — restrict to them. Layer names are the
+    # strongest semantic signal a DXF carries.
+    layer_res = [re.compile(p, re.IGNORECASE) for p in profile.dot_layer_patterns]
+    on_rebar_layer = [c for c in circles
+                      if any(rx.search(c['layer']) for rx in layer_res)]
+    if on_rebar_layer:
+        log.info('Rebar-layer filter: %d of %d circles on matching layers (%s)',
+                 len(on_rebar_layer), len(circles),
+                 sorted({c['layer'] for c in on_rebar_layer}))
+        circles = on_rebar_layer
 
-    log.info('Found %d CIRCLE entities total', len(circles))
+    # Collect block INSERT points — rebar dots are usually a small named block
+    # (e.g. CASAD's REIN.DOT) inserted once per bar, sometimes nested inside
+    # anonymous *U group/array containers.
+    insert_points = _collect_dot_insert_points(msp)
+    # Blocks whose names match the profile's dot patterns are authoritative;
+    # otherwise fall back to any block inserted often enough to be a per-bar symbol.
+    name_res = [re.compile(p, re.IGNORECASE) for p in profile.dot_block_patterns]
+    named_dots = {n: pts for n, pts in insert_points.items()
+                  if any(rx.search(n) for rx in name_res)}
+    dot_blocks = named_dots or {n: pts for n, pts in insert_points.items() if len(pts) >= 8}
 
-    # Find section labels in the left 55% of drawing
-    view_x_max = x_min + dw * 0.55
+    log.info('Dot candidates: %d circles, %d dot block(s) (%s)',
+             len(circles), len(dot_blocks),
+             {n: len(p) for n, p in dot_blocks.items()} or '-')
+
+    # Find section labels in the views (left) area of the drawing
+    view_x_max = x_min + dw * layout.views_x_max_frac
     results = []
 
     for t in all_text:
@@ -1275,40 +1537,78 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
         label_text = t['text'].upper().strip()
         lx, ly = t['x'], t['y']
 
-        comp = _infer_component_from_label(label_text)
+        comp = _infer_component_from_label(label_text, profile)
         if comp == 'unknown':
             log.debug('Section %r: cannot determine component from label — skipping count', label_text)
+            diags.append(diag('xsec_component_unknown',
+                              f'Section "{label_text}": component could not be determined '
+                              f'from the label text — bar count not verified.', severity='info'))
             continue
         bar_mark = _find_bar_mark_for_section(comp, schedule)
 
-        # Search for bar circles in a region around the section label
-        # Typical section view is below and/or beside the label
-        # Search in a box: ±25% dw horizontally, from +5% to -40% dh vertically from label
-        search_x0 = lx - dw * 0.25
-        search_x1 = lx + dw * 0.25
-        search_y0 = ly - dh * 0.40   # below label (DXF y decreases downward)
-        search_y1 = ly + dh * 0.05   # slightly above label
+        # Search for bar dots in a region around the section label
+        # (the section view is typically below and/or beside the label)
+        search_x0 = lx - dw * layout.xsec_dx_frac
+        search_x1 = lx + dw * layout.xsec_dx_frac
+        search_y0 = ly - dh * layout.xsec_below_frac   # below label (DXF y decreases downward)
+        search_y1 = ly + dh * layout.xsec_above_frac   # slightly above label
 
-        # Bar circles have small radius (< 5% drawing height) — filters out section boundary circles
-        max_bar_r = dh * 0.05
-        nearby = [c for c in circles
-                  if search_x0 <= c['x'] <= search_x1
-                  and search_y0 <= c['y'] <= search_y1
-                  and c['r'] <= max_bar_r]
+        def _in_box(c):
+            return search_x0 <= c['x'] <= search_x1 and search_y0 <= c['y'] <= search_y1
+
+        # Candidate source 1: dot-block insert points — drafter-placed bar symbols,
+        # the strongest evidence when present. Hits are merged across all dot blocks
+        # (CASAD drawings use both 'REIN.DOT' and 'REIN. DOT' for the same symbol).
+        nearby = []
+        if dot_blocks:
+            block_hits = [p for pts in dot_blocks.values() for p in pts if _in_box(p)]
+            if len(block_hits) >= 4:
+                log.info('Section %s-%s: using %d dot-block insert points as bar dots',
+                         letter, letter, len(block_hits))
+                nearby = block_hits
+
+        # Candidate source 2: circles, radius-filtered (excludes section boundary
+        # circles) — for drawings that draw bar dots as plain CIRCLE entities.
+        if not nearby:
+            max_bar_r = dh * layout.dot_max_r_frac
+            nearby = [c for c in circles if _in_box(c) and c['r'] <= max_bar_r]
 
         if not nearby:
+            # 'info', not 'error': elevation sections (e.g. SECTION A-A FOR PILE)
+            # legitimately contain no bar dots — an error here would falsely flag
+            # every correct drawing. The record stays visible via the debug route.
+            diags.append(diag('xsec_no_symbols',
+                              f'Section {letter}-{letter} ({comp}): no bar symbols were '
+                              f'recognised in the DXF near this view — the drawn bar count '
+                              f'was not verified (expected for elevation views).',
+                              severity='info'))
             continue
 
-        # Cluster nearby circles: group circles that are close together into one section view
-        cluster = _largest_cluster(nearby, max_gap=dw * 0.15)
+        # Cluster nearby dots: group dots that are close together into one section view
+        cluster = _largest_cluster(nearby, max_gap=dw * layout.cluster_gap_frac)
         if not cluster:
             continue
 
-        bar_count = len(cluster)
-        spacing_issues = _compute_spacing_issues(cluster) if bar_count >= 3 else []
-
-        # Detect bundle bars: pairs of circles very close together
+        # Detect bundle bars (closely-spaced dot pairs) and collapse each pair into one
+        # unit — the schedule bundle factor counts pairs, so visual_count must be in
+        # pair-units, matching what the vision path counts.
         is_bundle = _detect_bundles(cluster)
+        units = _collapse_bundle_pairs(cluster) if is_bundle else cluster
+
+        bar_count = len(units)
+        spacing_issues = _compute_spacing_issues(units) if bar_count >= 3 else []
+
+        # Reliability guard: a single ring of exact DXF positions should be near-uniform.
+        # Heavy irregularity means the cluster is not one bar group (e.g. a plan view
+        # mixing several bar marks' dots) — report as unverifiable instead of flooding
+        # the review with false count/spacing errors.
+        if bar_count >= 8 and len(spacing_issues) > bar_count * 0.25:
+            diags.append(diag('xsec_count_unreliable',
+                              f'Section {letter}-{letter} ({comp}): {bar_count} bar symbols '
+                              f'found but their arrangement is not a single uniform group — '
+                              f'automatic count skipped. Verify this section manually.',
+                              severity='info'))
+            continue
 
         # BBox of the cluster
         cx0 = min(c['x'] for c in cluster) - dw * 0.01
@@ -1331,6 +1631,40 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
                  letter, letter, comp, bar_count, is_bundle, len(spacing_issues))
 
     return results
+
+
+def _collect_dot_insert_points(msp) -> dict:
+    """
+    Return {block_name: [{x, y, r, layer}]} for named block INSERTs, descending into
+    anonymous '*' container blocks (groups/arrays) whose nested INSERTs are the actual
+    placed symbols. Rebar dots are typically a named block (REIN.DOT) inserted per bar,
+    sometimes wrapped in *U containers by ARRAY or GROUP operations.
+    """
+    points: dict = {}
+
+    def walk(ins, depth: int):
+        try:
+            name = str(ins.dxf.name or '')
+            if name.startswith('*'):
+                # Anonymous container — recurse to find the real symbol inserts
+                if depth < _MAX_BLOCK_DEPTH:
+                    for ve in ins.virtual_entities():
+                        if ve.dxftype() == 'INSERT':
+                            walk(ve, depth + 1)
+                return
+            p = ins.dxf.insert
+            points.setdefault(name, []).append(
+                {'x': float(p.x), 'y': float(p.y), 'r': 0.0,
+                 'layer': str(ins.dxf.layer or '')})
+        except Exception:
+            pass
+
+    try:
+        for ins in msp.query('INSERT'):
+            walk(ins, 0)
+    except Exception as e:
+        log.debug('INSERT dot scan failed: %s', e)
+    return points
 
 
 def _largest_cluster(circles: list, max_gap: float) -> list:
@@ -1396,6 +1730,41 @@ def _compute_spacing_issues(cluster: list) -> list:
     return issues
 
 
+def _collapse_bundle_pairs(cluster: list) -> list:
+    """
+    Merge closely-spaced dot pairs (bundle bars) into single units at the pair
+    midpoint. The pair gap is taken as the smallest pairwise distance in the
+    cluster; anything within 2.5× of it is treated as a pair. Unpaired dots
+    pass through unchanged.
+    """
+    n = len(cluster)
+    if n < 4:
+        return cluster
+    dists = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            d = math.hypot(cluster[i]['x'] - cluster[j]['x'],
+                           cluster[i]['y'] - cluster[j]['y'])
+            dists.append((d, i, j))
+    dists.sort(key=lambda t: t[0])
+    thresh = dists[0][0] * 2.5
+    used: set = set()
+    units = []
+    for d, i, j in dists:
+        if d > thresh:
+            break
+        if i in used or j in used:
+            continue
+        used.update((i, j))
+        units.append({'x': (cluster[i]['x'] + cluster[j]['x']) / 2,
+                      'y': (cluster[i]['y'] + cluster[j]['y']) / 2,
+                      'r': max(cluster[i].get('r', 0), cluster[j].get('r', 0))})
+    for k in range(n):
+        if k not in used:
+            units.append(cluster[k])
+    return units
+
+
 def _detect_bundles(cluster: list) -> bool:
     """Return True if bars appear to be bundle bars (closely-spaced pairs)."""
     if len(cluster) < 2:
@@ -1420,20 +1789,17 @@ def _angle_to_clock(angle_rad: float) -> str:
     return f"{hour}:{minute:02d} o'clock"
 
 
-def _infer_component_from_label(label: str) -> str:
+def _infer_component_from_label(label: str, profile: DrawingTypeProfile = PPP_PROFILE) -> str:
     """
-    Infer pile/pilecap/pier component from section label text.
-    Returns 'unknown' if no component keyword is present — caller should skip counting
-    rather than guess based on section letter conventions.
+    Infer the component from section label text using the profile's component names
+    (longest first, so PILECAP matches before PILE). Returns 'unknown' if no component
+    keyword is present — caller should skip counting rather than guess from section
+    letter conventions.
     """
     u = label.upper()
-    # Check pilecap before pile (pilecap contains the word pile)
-    if 'PILECAP' in u:
-        return 'pilecap'
-    if 'PILE' in u:
-        return 'pile'
-    if 'PIER' in u:
-        return 'pier'
+    for comp in profile.comps_longest_first():
+        if comp.upper() in u:
+            return comp
     return 'unknown'
 
 
@@ -1456,11 +1822,12 @@ def _find_bar_mark_for_section(comp: str, schedule: dict) -> str | None:
 
 # ── Completeness checks ───────────────────────────────────────────────────────
 
-def _check_required_sections(section_view_positions: dict) -> list:
-    """Return presence status for each required PPP section, mirroring pdf_extractor logic."""
+def _check_required_sections(section_view_positions: dict,
+                             profile: DrawingTypeProfile = PPP_PROFILE) -> list:
+    """Return presence status for each profile-required section view."""
     all_labels = ' '.join(section_view_positions.keys()).upper()
     result = []
-    for name, keywords in _REQUIRED_PPP_SECTIONS:
+    for name, keywords in profile.required_sections:
         present = any(kw.upper() in all_labels for kw in keywords)
         bbox = None
         if present:
@@ -1472,13 +1839,14 @@ def _check_required_sections(section_view_positions: dict) -> list:
     return result
 
 
-def _check_notes_completeness(all_text: list) -> list:
+def _check_notes_completeness(all_text: list,
+                              profile: DrawingTypeProfile = PPP_PROFILE) -> list:
     """Return presence status for each required note item via keyword scan of DXF text."""
     full_upper = ' '.join(t['text'] for t in all_text).upper()
-    concrete_keys = ('concrete_pile', 'concrete_pilecap', 'concrete_pier')
-    concrete_found = any(kw in full_upper for kw in ('M30', 'M35', 'M40', 'M45', 'M50'))
+    concrete_keys = tuple(f'concrete_{c}' for c in profile.components)
+    concrete_found = any(kw in full_upper for kw in profile.concrete_grade_keywords)
     result = []
-    for item_key, keywords in _NOTE_KEYWORDS.items():
+    for item_key, keywords in profile.note_keywords.items():
         if item_key in concrete_keys:
             present = concrete_found
         else:

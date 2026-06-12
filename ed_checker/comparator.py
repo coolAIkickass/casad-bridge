@@ -317,21 +317,11 @@ COMPONENT_ZONE = {
     'pier':    'pier_schedule',
 }
 
-# Ring/confinement bars where a ±2-per-pile count variation is acceptable
-# (bar count is derived from geometric spacing and can vary by 1–2 due to rounding).
-RING_BAR_MARKS = {
-    'pile':    {'y', 'y1', 'z'},
-    'pier':    {'i', 'i1'},
-    'pilecap': {'e'},
-}
-
-# Expected top-to-bottom order of bar marks in each component's schedule.
-# Used to distribute row highlight boxes correctly when Claude provides no per-row bboxes.
-CANONICAL_BAR_ORDER = {
-    'pilecap': ['a', 'b', 'c', 'd', 'e', 'f', 'f1'],
-    'pile':    ['x', 'y', 'y1', 'z'],
-    'pier':    ['g', 'i', 'i1', 'j', 'j1', 'k', 'k1'],
-}
+# Ring/confinement bar detection is now property-based: a bar with spacing_mm set in
+# the design (c/c pitch column) is a confinement/ring bar and gets ±2 count tolerance.
+# RING_BAR_MARKS is kept for reference only — it is NOT used in comparator logic.
+# Do not add bar mark letters here as a workaround; fix the design Excel instead.
+RING_BAR_MARKS = {}  # deprecated — retained so imports don't break
 
 
 def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
@@ -364,12 +354,11 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
         claude_sect  = _get_section_bbox(zone, section_bboxes)
         sect = plumber_sect if plumber_sect else claude_sect
 
-        # Stable canonical ordering so row-index distribution matches the actual schedule
-        _order = {bm: i for i, bm in enumerate(CANONICAL_BAR_ORDER.get(comp, []))}
-        sorted_bms = sorted(
-            drawing_comp.keys(),
-            key=lambda bm: (_order.get(bm, 999), bm)
-        )
+        # Use actual schedule insertion order (top-to-bottom in the drawing).
+        # DXF path: bars are inserted in Pass 2 in row-index order — already correct.
+        # PDF path: Claude returns bars in schedule order — also correct.
+        # No hardcoded ordering needed; any project's bar mark convention works.
+        sorted_bms = list(drawing_comp.keys())
         total = max(len(sorted_bms), 1)
 
         for bm, design_bar in design_bbs.items():
@@ -406,7 +395,9 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
                 'h': row_h,
             }
 
-            is_ring = bm in RING_BAR_MARKS.get(comp, set())
+            # A bar is a confinement/ring bar if the design specifies a c/c spacing.
+            # Longitudinal and distributed bars don't have a c/c pitch column.
+            is_ring = bool(d_bar.get('spacing_mm'))
             issues += _compare_bar(bm, comp, d_bar, drawing_bar, zone, design_bars, bar_bbox,
                                    is_ring=is_ring, num_piles=num_piles)
 

@@ -41,8 +41,11 @@ _NOTE_KEYWORDS = {
     'irc_code_ref':     ['IRC:', 'IRC-', 'IRC '],
 }
 
-# Bar mark → component mapping (replaces header-based component detection)
-# Based on CASAD PPP drawing convention — works without finding component header rows.
+# Bar mark → component mapping — FALLBACK ONLY.
+# Primary component assignment uses PILECAP/PILE/PIER header rows found in the schedule
+# (see _build_comp_boundaries). This dict is only consulted when no component header rows
+# are found in the DXF (e.g. the schedule has no sub-headers). Add entries here only if
+# a specific project uses a non-standard header that _build_comp_boundaries can't find.
 _BAR_MARK_COMP = {
     'x': 'pile', 'y': 'pile', 'y1': 'pile', 'z': 'pile',
     'a': 'pilecap', 'b': 'pilecap', 'c': 'pilecap', 'd': 'pilecap',
@@ -52,6 +55,14 @@ _BAR_MARK_COMP = {
     'j': 'pier', 'j1': 'pier',
     'k': 'pier', 'k1': 'pier',
 }
+
+# Component header row detection keywords.
+# PILECAP must be checked before PILE since "PILECAP" contains "PILE".
+_COMP_HEADER_KEYWORDS = [
+    ('pilecap', re.compile(r'\bPILECAP\b', re.IGNORECASE)),
+    ('pile',    re.compile(r'\bPILE\b(?!CAP)', re.IGNORECASE)),
+    ('pier',    re.compile(r'\bPIER\b', re.IGNORECASE)),
+]
 
 # Schedule column header keywords → internal field name.
 # CASAD schedule column headers span multiple Y-rows (e.g. "TOTAL" on one line,
@@ -71,21 +82,59 @@ _COL_KEYWORDS = {
 # Known valid bar diameters in mm
 _VALID_DIA = {8, 10, 12, 16, 20, 25, 32}
 
-# Single-letter bar marks used in CASAD PPP drawings
-_KNOWN_MARKS = set('abcdefghijklmnopqrstuvwxyz') | {
-    'a1', 'b1', 'c1', 'd1', 'e1', 'f1', 'g1', 'i1', 'j1', 'k1', 'x1', 'y1', 'z1',
-}
-
-# Section letter → likely component
-_SECTION_LETTER_COMP = {
-    'Z': 'pile',
-    'A': 'pile',   # SECTION A-A FOR PILE or FOR PILECAP (resolved by label text)
-    'B': 'pilecap',
-    'C': 'pier',
-    'D': 'pier',
-}
-
 TRIGGER_WORDS = {'SECTION', 'TABLE-1', 'TABLE 1', 'LAP', 'NOTES', 'DETAIL', 'PLAN', 'REINFORCEMENT'}
+
+# Words that look like bar marks but are definitely not (column header / schedule keyword tokens).
+_BAR_MARK_SKIP = {
+    'dia', 'nos', 'no', 'mk', 'wt', 'kg', 'm', 'mm', 'cm',
+    'pile', 'pier', 'pilecap', 'bar', 'mark', 'total', 'unit',
+    'length', 'weight', 'spacing', 'count', 'number', 'shape',
+}
+
+
+def _is_bar_mark_token(text: str) -> bool:
+    """
+    True if text looks like a bar mark label: single letter + optional 1-2 digits.
+    Matches: a, b, x, y1, f1, h2, i1, l, m, n, z99 — any project's convention.
+    Does NOT require the mark to be in a hardcoded list.
+    """
+    t = text.strip().strip("'\"").lower()
+    return bool(re.match(r'^[a-z]\d{0,2}$', t)) and t not in _BAR_MARK_SKIP
+
+
+def _build_comp_boundaries(data_rows: list) -> list:
+    """
+    Scan data rows for component section header rows (PILECAP / PILE / PIER).
+    Returns [(row_idx, comp), ...] sorted by row_idx.
+
+    These boundaries tell us which component each subsequent bar mark row belongs to,
+    without relying on hardcoded bar mark letters. Works for any letter convention
+    (x/y/z for pile OR l/m/n OR anything else) as long as the DXF schedule has
+    standard sub-headers between component sections.
+    """
+    boundaries = []
+    for idx, row in enumerate(data_rows):
+        row_text = ' '.join(t['text'] for t in row)
+        for comp, pattern in _COMP_HEADER_KEYWORDS:
+            if pattern.search(row_text):
+                boundaries.append((idx, comp))
+                log.debug('Component boundary at row %d: %r → %s', idx, row_text[:60], comp)
+                break
+    return boundaries
+
+
+def _comp_for_row(row_idx: int, boundaries: list) -> str | None:
+    """
+    Return the component for a given data row index using the nearest preceding boundary.
+    Returns None if row_idx precedes all boundaries (no header found yet).
+    """
+    comp = None
+    for boundary_idx, boundary_comp in boundaries:
+        if boundary_idx <= row_idx:
+            comp = boundary_comp
+        else:
+            break
+    return comp
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -531,20 +580,43 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
     if not data_rows:
         return {}
 
+    # Detect component section boundaries (PILECAP / PILE / PIER header rows).
+    # Primary method: structural headers in the schedule itself — works regardless
+    # of what letters are used for bar marks.
+    comp_boundaries = _build_comp_boundaries(data_rows)
+    use_boundaries = bool(comp_boundaries)
+    if not use_boundaries:
+        log.info('No component header rows found — falling back to _BAR_MARK_COMP lookup')
+
     # Pass 1 — locate bar mark rows.
-    # CASAD draws the bar mark label ('x', 'y', 'a'…) as a quoted TEXT entity
-    # that may appear before, after, or between the data rows for that bar.
+    # A bar mark is: any cell near the bar_mark column whose text is a single letter
+    # optionally followed by 1-2 digits. No hardcoded list required — _is_bar_mark_token()
+    # matches any letter convention (x/y/z, l/m/n, or anything else the project uses).
+    bm_col_x = col_map.get('bar_mark')
+    x_span = (max(col_map.values()) - min(col_map.values())) if len(col_map) > 1 else dw * 0.4
+    bm_x_tol = x_span * 0.20  # bar mark column tolerance
+
     bar_positions: list[tuple[int, str]] = []  # (row_index_in_data_rows, bm)
+    comp_header_rows: set[int] = {idx for idx, _ in comp_boundaries}
+
     for idx, row in enumerate(data_rows):
+        if idx in comp_header_rows:
+            continue  # skip component header rows — they're not bar data rows
         for cell in row:
             bm = cell['text'].strip().strip("'\"").lower()
-            if bm in _KNOWN_MARKS:
+            if not _is_bar_mark_token(bm):
+                continue
+            # If we have a bar_mark column, prefer cells near it; otherwise accept any
+            if bm_col_x is None or abs(cell['x'] - bm_col_x) < bm_x_tol:
                 bar_positions.append((idx, bm))
                 break  # at most one bar mark per row
 
     if not bar_positions:
-        log.warning('No known bar marks found in schedule')
+        log.warning('No bar marks found in schedule')
         return {}
+
+    log.info('Pass 1: found %d bar marks: %s', len(bar_positions),
+             [bm for _, bm in bar_positions])
 
     # Pass 2 — for each bar mark, assign rows in its range (midpoint between
     # adjacent bar marks) and aggregate all data found there.
@@ -552,10 +624,17 @@ def _extract_schedule(msp, all_text: list, extents: tuple) -> dict:
     n = len(data_rows)
 
     for pos_i, (bm_row_idx, bm) in enumerate(bar_positions):
-        comp = _BAR_MARK_COMP.get(bm)
-        if comp is None:
-            log.debug('Unknown bar mark %r — skipping', bm)
-            continue
+        # Component: from structural boundary (preferred) or letter lookup (fallback)
+        if use_boundaries:
+            comp = _comp_for_row(bm_row_idx, comp_boundaries)
+            if comp is None:
+                log.debug('Bar %r at row %d precedes all component headers — skipping', bm, bm_row_idx)
+                continue
+        else:
+            comp = _BAR_MARK_COMP.get(bm)
+            if comp is None:
+                log.debug('Bar mark %r not in _BAR_MARK_COMP fallback — skipping', bm)
+                continue
 
         # Range start: midpoint between previous bar mark row and this one.
         if pos_i == 0:
@@ -1178,8 +1257,11 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
         label_text = t['text'].upper().strip()
         lx, ly = t['x'], t['y']
 
-        comp = _infer_component_from_label(label_text, letter)
-        bar_mark = _find_bar_mark_for_section(letter, comp, schedule)
+        comp = _infer_component_from_label(label_text)
+        if comp == 'unknown':
+            log.debug('Section %r: cannot determine component from label — skipping count', label_text)
+            continue
+        bar_mark = _find_bar_mark_for_section(comp, schedule)
 
         # Search for bar circles in a region around the section label
         # Typical section view is below and/or beside the label
@@ -1320,34 +1402,38 @@ def _angle_to_clock(angle_rad: float) -> str:
     return f"{hour}:{minute:02d} o'clock"
 
 
-def _infer_component_from_label(label: str, letter: str) -> str:
-    """Infer pile/pilecap/pier component from section label text."""
+def _infer_component_from_label(label: str) -> str:
+    """
+    Infer pile/pilecap/pier component from section label text.
+    Returns 'unknown' if no component keyword is present — caller should skip counting
+    rather than guess based on section letter conventions.
+    """
     u = label.upper()
-    if 'PILE' in u and 'PILECAP' not in u:
-        return 'pile'
+    # Check pilecap before pile (pilecap contains the word pile)
     if 'PILECAP' in u:
         return 'pilecap'
+    if 'PILE' in u:
+        return 'pile'
     if 'PIER' in u:
         return 'pier'
-    return _SECTION_LETTER_COMP.get(letter, 'unknown')
+    return 'unknown'
 
 
-def _find_bar_mark_for_section(letter: str, comp: str, schedule: dict) -> str | None:
-    """Best-guess bar mark for a given section letter and component."""
-    # Conventional: Z-Z = pile longitudinal (x), A-A pile = x, A-A pilecap = a or b
-    letter_to_mark = {
-        'pile':    {'Z': 'x', 'A': 'x'},
-        'pilecap': {'A': 'a', 'B': 'a', 'C': 'a'},
-        'pier':    {'C': 'g', 'D': 'g'},
-    }
-    if comp in letter_to_mark:
-        mark = letter_to_mark[comp].get(letter)
-        if mark and comp in schedule and mark in schedule[comp]:
-            return mark
-    # If not found by convention, return the first bar mark in the component
-    if comp in schedule and schedule[comp]:
-        return next(iter(schedule[comp]))
-    return None
+def _find_bar_mark_for_section(comp: str, schedule: dict) -> str | None:
+    """
+    Return the primary bar mark to compare against circle count for a section view.
+    Uses the first non-confinement bar in the component's extracted schedule.
+    Confinement/ring bars have spacing_mm set; longitudinal/distributed bars don't.
+    This works for any letter convention — no hardcoded names needed.
+    """
+    if comp not in schedule or not schedule[comp]:
+        return None
+    # First non-ring bar (no c/c spacing) is the longitudinal/distributed bar shown in section
+    for bm, bar_data in schedule[comp].items():
+        if not bar_data.get('spacing_mm'):
+            return bm
+    # All bars have spacing (unusual) — fall back to first bar
+    return next(iter(schedule[comp]))
 
 
 # ── Completeness checks ───────────────────────────────────────────────────────

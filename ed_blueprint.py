@@ -456,6 +456,141 @@ def api_extract_debug(review_id):
     return jsonify(data)
 
 
+@ed_bp.route('/api/review/<review_id>/dxf-schedule-debug')
+def api_dxf_schedule_debug(review_id):
+    """
+    Re-run DXF schedule extraction on the stored DXF and return a detailed breakdown
+    per bar mark: every raw text cell the extractor saw for each column, plus the
+    parsed final values.  URL param ?bars=y,y1 limits output to specific marks.
+    No Claude API call needed — pure DXF parsing.
+    """
+    conn = _get_db()
+    cur  = conn.cursor()
+    cur.execute('SELECT dxf_content FROM reviews WHERE id=%s', (review_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row or not row['dxf_content']:
+        return jsonify({'error': 'No DXF stored for this review'}), 404
+
+    dxf_bytes = _decompress_dxf(row['dxf_content'])
+    filter_marks = {m.strip() for m in request.args.get('bars', '').split(',') if m.strip()}
+
+    import ezdxf, ezdxf.recover as _dxf_recover
+    from ed_checker.dxf_extractor import (
+        _collect_text, _get_extents, _units_to_mm,
+        _group_rows, _build_col_map, _build_comp_boundaries,
+        _is_bar_mark_token, PPP_PROFILE,
+    )
+    from ed_checker.profiles import PPP_PROFILE as _P
+    from ed_checker.schema import diag as _diag
+    import io
+
+    profile = PPP_PROFILE
+    layout  = profile.layout
+    diags   = []
+
+    try:
+        doc = ezdxf.read(io.BytesIO(dxf_bytes))
+    except Exception:
+        doc, _ = _dxf_recover.readfile(io.BytesIO(dxf_bytes))
+
+    msp = doc.modelspace()
+    all_text, stats = _collect_text(msp)
+    extents = _get_extents(doc, all_text, diags)
+    u2mm    = _units_to_mm(doc, diags)
+
+    x_min, y_min, x_max, y_max = extents
+    dw = x_max - x_min
+    sched_x_min = x_min + dw * layout.schedule_x_min_frac
+    sched_text  = [t for t in all_text if t['x'] >= sched_x_min and not t.get('from_block')]
+
+    all_rows   = _group_rows(sched_text, tol_frac=layout.row_tol_frac, extents=extents)
+    col_map    = _build_col_map(all_rows, extents, profile, diags)
+    comp_bounds = _build_comp_boundaries(all_rows, profile)
+    comp_by_idx = {}
+    for idx, comp in comp_bounds:
+        comp_by_idx[idx] = comp
+
+    # Build a simple idx→comp lookup covering all rows
+    current_comp = 'unknown'
+    row_comp = {}
+    for i, row in enumerate(all_rows):
+        if i in comp_by_idx:
+            current_comp = comp_by_idx[i]
+        row_comp[i] = current_comp
+
+    # Identify bar mark rows and their row ranges (same logic as _extract_schedule Pass 1)
+    bm_row_idxs = {}  # bar_mark → list of row indices where that mark appears
+    for i, row in enumerate(all_rows):
+        for cell in row:
+            s = cell['text'].strip().strip("'\"").lower()
+            if _is_bar_mark_token(s):
+                bm_row_idxs.setdefault(s, []).append(i)
+
+    # For each bar mark, collect all rows in its range and dump raw cells per column
+    # real col_map positions (no scratch keys)
+    real_col_map = {k: v for k, v in col_map.items() if not k.endswith('_assigned_x')}
+    x_span = (max(real_col_map.values()) - min(real_col_map.values())) if len(real_col_map) > 1 else 100.0
+    x_tol  = x_span * 0.20
+
+    col_keys_ordered = ['bar_mark', 'reinforcement', 'bar_dia_mm', 'spacing_mm',
+                        'count', 'length_m', 'total_length_m', 'unit_wt_kg_m', 'total_wt_kg']
+
+    result = {}
+    bm_row_list = sorted(bm_row_idxs.items())
+    for idx_in_list, (bm, mark_rows) in enumerate(bm_row_list):
+        if filter_marks and bm not in filter_marks:
+            continue
+
+        # Determine row range: from first mark row to just before next mark
+        first_row  = min(mark_rows)
+        next_marks = [r for (_, rs) in bm_row_list[idx_in_list+1:] for r in rs]
+        last_row   = (min(next_marks) - 1) if next_marks else len(all_rows) - 1
+
+        bar_rows = all_rows[first_row:last_row + 1]
+        comp     = row_comp.get(first_row, 'unknown')
+
+        # Gather all text items in range and assign to nearest column
+        raw_by_col = {k: [] for k in col_keys_ordered}
+        raw_by_col['_unassigned'] = []
+        for row in bar_rows:
+            for cell in row:
+                nearest = min(real_col_map.items(), key=lambda kv: abs(kv[1] - cell['x']))
+                field, fx = nearest
+                entry = {'text': cell['text'], 'x': round(cell['x'], 1),
+                         'y': round(cell['y'], 1)}
+                if abs(fx - cell['x']) < x_tol:
+                    raw_by_col.setdefault(field, []).append(entry)
+                else:
+                    raw_by_col['_unassigned'].append(entry)
+
+        # Get final parsed values (re-run _aggregate_bar_rows)
+        from ed_checker.dxf_extractor import _aggregate_bar_rows
+        parsed = _aggregate_bar_rows(bar_rows, col_map, bm,
+                                     x_offset_min=1000.0 / u2mm)
+        result[bm] = {
+            'component':   comp,
+            'row_range':   [first_row, last_row],
+            'raw_rows_text': [
+                ' | '.join(c['text'] for c in sorted(row, key=lambda t: t['x']))
+                for row in bar_rows
+            ],
+            'cells_by_col': {k: v for k, v in raw_by_col.items() if v},
+            'col_map':     {k: round(v, 1) for k, v in real_col_map.items()},
+            'parsed':      parsed,
+        }
+
+    return jsonify({
+        'review_id':       review_id,
+        'extents':         list(extents),
+        'sched_x_min':     round(sched_x_min, 1),
+        'col_map':         {k: round(v, 1) for k, v in real_col_map.items()},
+        'comp_boundaries': [[i, c] for i, c in comp_bounds],
+        'bars':            result,
+    })
+
+
 @ed_bp.route('/api/issues/<issue_id>/status', methods=['POST'])
 def update_status(issue_id):
     data = request.get_json()

@@ -1486,6 +1486,7 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
 
     section_view_positions = {}
     single_letter_counts = {}
+    single_letter_ys     = {}  # letter → list of y-values, for axis-label filter
 
     for row in all_rows:
         row_sorted = sorted(row, key=lambda t: t['x'])
@@ -1513,6 +1514,7 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
                 s = t['text'].strip()
                 if len(s) == 1 and s.isupper() and s.isalpha():
                     single_letter_counts[s] = single_letter_counts.get(s, 0) + 1
+                    single_letter_ys.setdefault(s, []).append(t['y'])
 
     # Second pass over raw entities — cut marks are often separate entities that the
     # row grouping merges into mixed rows (same block-text exclusion applies)
@@ -1521,8 +1523,20 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
             s = t['text'].strip()
             if len(s) == 1 and s.isupper() and s.isalpha():
                 single_letter_counts[s] = single_letter_counts.get(s, 0) + 1
+                single_letter_ys.setdefault(s, []).append(t['y'])
 
-    cut_letters = {letter for letter, count in single_letter_counts.items() if count >= 2}
+    # Cut-mark letters appear in PAIRS. Filter: if a letter appears ≥ 3 times all
+    # within the same 5%-height horizontal band, it is a plan-view axis/grid label
+    # (e.g., pier-column labels "C"/"D" repeated at each pier), not a cut mark pair.
+    _y_band = dh * 0.05
+    cut_letters = set()
+    for letter, count in single_letter_counts.items():
+        if count < 2:
+            continue
+        ys = single_letter_ys.get(letter, [])
+        if count >= 3 and (max(ys) - min(ys)) <= _y_band:
+            continue  # axis label, not a cut mark
+        cut_letters.add(letter)
 
     log.info('Section info: %d labels, cut_letters=%s', len(section_view_positions), sorted(cut_letters))
     return section_view_positions, cut_letters

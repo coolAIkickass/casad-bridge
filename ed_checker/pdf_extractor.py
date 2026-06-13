@@ -659,6 +659,7 @@ def _extract_positions(page) -> tuple:
     # ── 2. Find section view labels on the left side ─────────────────────────
     line_words: dict = {}
     single_letter_counts: dict = {}
+    single_letter_tops:   dict = {}  # letter → list of 'top' y-values (for axis-label filter)
     for w in words:
         if w['x0'] >= schedule_x_min:
             continue
@@ -668,9 +669,23 @@ def _extract_positions(page) -> tuple:
         t = w['text'].strip()
         if len(t) == 1 and t.isupper() and t.isalpha():
             single_letter_counts[t] = single_letter_counts.get(t, 0) + 1
+            single_letter_tops.setdefault(t, []).append(w['top'])
 
-    # Cut-mark letters appear in PAIRS (at both ends of a cut line)
-    cut_letters = {letter for letter, count in single_letter_counts.items() if count >= 2}
+    # Cut-mark letters appear in PAIRS (at both ends of a cut line).
+    # Extra filter: if a letter appears ≥ 3 times all within a 5%-height horizontal
+    # band, it is a plan-view axis/grid label (e.g., pier-position labels "C", "D"
+    # repeated at each pier column across the plan) — NOT a section cut mark pair.
+    # Cut marks must span the sectioned component and therefore appear at meaningfully
+    # different y positions (or occur at most twice on the same horizontal cut line).
+    _y_band = ph * 0.05
+    cut_letters = set()
+    for letter, count in single_letter_counts.items():
+        if count < 2:
+            continue
+        tops = single_letter_tops[letter]
+        if count >= 3 and (max(tops) - min(tops)) <= _y_band:
+            continue  # axis label, not a cut mark
+        cut_letters.add(letter)
 
     section_view_positions = {}
     for line_y, lw in sorted(line_words.items()):

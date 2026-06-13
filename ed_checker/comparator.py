@@ -192,8 +192,25 @@ def compare(design_data: dict, drawing_data: dict) -> list:
         capabilities,
     )
     issues += _check_table1(drawing_data.get('table_1') or [], design_data)
-    # Section presence and notes completeness are now text-extracted (authoritative)
-    issues += _check_sections(drawing_data.get('sections_from_text') or [])
+    # Section presence and notes completeness are now text-extracted (authoritative).
+    # Supplement with inferences from extracted data: pdfplumber only scans the left 55%
+    # of the page, so labels in the right/schedule area ('SCHEDULE OF REINFORCEMENT',
+    # 'TABLE-1') are invisible to it. If we successfully extracted the content, the label
+    # must exist in the drawing — don't flag it as missing.
+    _sft_raw = drawing_data.get('sections_from_text') or []
+    _schedule = drawing_data.get('schedule') or {}
+    _table_1  = drawing_data.get('table_1') or []
+    _sft = []
+    for _e in _sft_raw:
+        _e2 = dict(_e)
+        if not _e2.get('present'):
+            _n = _e2.get('name', '')
+            if _n == 'SCHEDULE OF REINFORCEMENT' and _schedule:
+                _e2['present'] = True
+            elif _n == 'TABLE-1' and _table_1:
+                _e2['present'] = True
+        _sft.append(_e2)
+    issues += _check_sections(_sft)
     issues += _check_notes_completeness(
         drawing_data.get('notes_completeness_from_text') or [], section_view_positions)
     issues += _check_label_issues(

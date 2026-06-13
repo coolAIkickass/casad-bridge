@@ -206,12 +206,17 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
             if not drawing_data['notes'].get(key):
                 drawing_data['notes'][key] = val
 
-        # Use pdfplumber cut_letters if DXF found none (DXF cut marks can be harder to detect)
+        # DXF path: trust DXF cut_letters exclusively when non-empty.
+        # pdfplumber is unreliable for AutoCAD PDFs — AutoCAD sometimes stores text
+        # with per-character positioning, causing pdfplumber to return individual
+        # characters (e.g. 'C' from 'PILECAP', 'D' from 'CHECKED') as separate
+        # "words", each counted as a single-letter occurrence. This inflates cut_letter
+        # counts, producing false-positive SECTION C-C / SECTION D-D missing-view errors.
+        # DXF TEXT entities are whole strings, so DXF cut_letters are reliable.
+        # Only fall back to pdfplumber when DXF found zero cut letters.
         if not drawing_data.get('cut_letters') and text_data.get('cut_letters'):
             drawing_data['cut_letters'] = text_data['cut_letters']
-        elif text_data.get('cut_letters'):
-            # Union: letters found by either method
-            drawing_data['cut_letters'] = drawing_data['cut_letters'] | text_data['cut_letters']
+        # Do NOT union: pdfplumber false letters must not pollute DXF-detected cut_letters.
 
     except Exception as e:
         log.warning('pdfplumber merge failed: %s', e)

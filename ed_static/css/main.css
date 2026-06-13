@@ -557,7 +557,7 @@ button { cursor: pointer; font: inherit; }
 .summary-stat:last-child { border-right: none; }
 .stat-num   { font-size: 22px; font-weight: 800; line-height: 1; }
 .stat-label { font-size: 11px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
-.stat-open     .stat-num { color: var(--blue); }
+.stat-open     .stat-num { color: var(--error); }
 .stat-resolved .stat-num { color: var(--success); }
 
 /* Active filter state */
@@ -568,8 +568,8 @@ button { cursor: pointer; font: inherit; }
   height: 3px;
   border-radius: 2px 2px 0 0;
 }
-.stat-open.active     { background: var(--blue-light); }
-.stat-open.active::after { background: var(--blue); }
+.stat-open.active     { background: var(--error-bg); }
+.stat-open.active::after { background: var(--error); }
 .stat-resolved.active { background: rgba(22,163,74,.07); }
 .stat-resolved.active::after { background: var(--success); }
 

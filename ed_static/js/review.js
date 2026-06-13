@@ -93,6 +93,12 @@ function visibleIssues() {
   return allIssues.filter(i => i.status !== 'resolved');  // 'open' = all non-resolved
 }
 
+// Tracks which category groups the user has manually expanded.
+// Persists across re-renders so resolving a card doesn't collapse the group.
+// On first render, every group starts collapsed except the first (default).
+// Once a group has been seen, its state is remembered.
+const expandedCategories = new Set();
+
 function renderIssuePanel() {
   const panel = document.getElementById('issue-list');
   const filtered = visibleIssues();
@@ -143,19 +149,23 @@ function renderIssuePanel() {
       body.appendChild(buildCard(issue, globalNum));
     });
 
-    const startCollapsed = groupIndex > 0;
-    if (startCollapsed) body.style.display = 'none';
+    // First time this category appears: default first group open, rest closed.
+    // After that, honour whatever state the user left it in.
+    if (!expandedCategories.has(cat) && groupIndex === 0) expandedCategories.add(cat);
+    const isExpanded = expandedCategories.has(cat);
+    if (!isExpanded) body.style.display = 'none';
 
     const hdr = document.createElement('div');
     hdr.className = 'category-header';
     hdr.innerHTML = `
       <span class="category-name">${cat}</span>
       <span class="category-count">${catOpen}</span>
-      <span class="caret">${startCollapsed ? '▶' : '▼'}</span>`;
+      <span class="caret">${isExpanded ? '▼' : '▶'}</span>`;
     hdr.addEventListener('click', () => {
       const hidden = body.style.display === 'none';
       body.style.display = hidden ? '' : 'none';
       hdr.querySelector('.caret').textContent = hidden ? '▼' : '▶';
+      if (hidden) expandedCategories.add(cat); else expandedCategories.delete(cat);
     });
 
     sec.appendChild(hdr);

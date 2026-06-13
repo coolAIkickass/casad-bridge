@@ -219,14 +219,21 @@ def _check_extraction_diagnostics(diagnostics: list) -> list:
     for d in diagnostics:
         if d.get('severity') != 'error':
             continue
-        issues.append(_issue(
-            'Extraction',
-            d.get('message', 'Extraction degraded')[:120],
-            d.get('message', ''),
-            'This item was not verified automatically — check it manually, or fix the '
-            'input file and re-upload.',
-            'error', 'default'
-        ))
+        code = d.get('code', '')
+        msg  = d.get('message', 'Extraction degraded')
+        if code == 'section_grade_mismatch':
+            issues.append(_issue(
+                'Notes', msg[:120], msg,
+                'Correct the concrete grade annotation in the section view to match the notes.',
+                'error', 'notes'
+            ))
+        else:
+            issues.append(_issue(
+                'Extraction', msg[:120], msg,
+                'This item was not verified automatically — check it manually, or fix the '
+                'input file and re-upload.',
+                'error', 'default'
+            ))
     return issues
 
 

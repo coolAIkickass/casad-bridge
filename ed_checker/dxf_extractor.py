@@ -207,6 +207,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     schedule, sched_info = _extract_schedule(msp, all_text, extents, profile, u2mm, diags)
     title_block         = _extract_title_block(doc, msp, all_text, extents, profile, ps_text)
     notes               = _extract_notes(all_text, extents, profile)
+    _append_section_grade_diagnostics(all_text, extents, profile, notes, diags)
     dim_data            = _extract_dimensions(msp, extents, u2mm)
     table_1             = _extract_table1(all_text, extents, profile.layout)
     sv_pos, cut_letters = _extract_section_info(all_text, extents, profile.layout)
@@ -1003,6 +1004,17 @@ def _parse_schedule_row(row: list, col_map: dict) -> dict | None:
 
 # ── Title block extraction ────────────────────────────────────────────────────
 
+# ATTRIB default/placeholder values that the CASAD title block template ships with.
+# When an engineer leaves a field blank, the block retains its default prompt text
+# (e.g. "DRAWN BY") as the ATTRIB value.  Treat these as absent.
+_TITLE_PLACEHOLDER_VALS = frozenset({
+    'DRAWN BY', 'DRAWN', 'APPROVED BY', 'APPROVED', 'DESIGN BY',
+    'DESIGNED BY', 'CHECKED BY', 'CHECKED', 'NAME', 'INITIALS',
+    'SIGNATURE', 'DATE', 'SCALE', 'REVISION', 'REV', 'TITLE',
+    'DRAWING NO', 'DRAWING NUMBER', 'DRG NO', 'SPAN', 'SPANS',
+})
+
+
 def _extract_title_block(doc, msp, all_text: list, extents: tuple,
                          profile: DrawingTypeProfile = PPP_PROFILE,
                          ps_text: list = None) -> dict:
@@ -1019,7 +1031,7 @@ def _extract_title_block(doc, msp, all_text: list, extents: tuple,
             for attrib in insert.attribs:
                 tag = (attrib.dxf.tag or '').upper().strip()
                 val = (attrib.dxf.text or '').strip()
-                if not val:
+                if not val or val.upper() in _TITLE_PLACEHOLDER_VALS:
                     continue
                 # Map common AutoCAD title block ATTRIB tags
                 if tag in ('DWG_NO', 'DRG_NO', 'DRAWING_NO', 'DRAWING_NUMBER', 'DWG_NUMBER'):
@@ -1195,6 +1207,63 @@ def _extract_notes(all_text: list, extents: tuple,
 
     notes['bbox'] = None
     return notes
+
+
+def _append_section_grade_diagnostics(all_text: list, extents: tuple,
+                                       profile: DrawingTypeProfile,
+                                       notes: dict, diags: list):
+    """
+    For each section view whose label unambiguously names ONE component, search for
+    a concrete grade annotation (M30–M50) within the estimated view height below the
+    label.  If the found grade differs from the notes grade for that component, append
+    an error diagnostic.
+
+    Conservative: only fires for single-component sections to avoid false positives on
+    mixed labels like "SECTION A-A FOR PILE PILECAP AND PIER".
+    """
+    x_min, y_min, x_max, y_max = extents
+    dh = y_max - y_min
+    view_h = dh * profile.layout.view_h_frac
+
+    grade_re = re.compile(r'\b(' + '|'.join(profile.concrete_grade_keywords) + r')\b')
+    all_rows = _group_rows(all_text, tol_frac=profile.layout.row_tol_frac, extents=extents)
+    comps_longest = profile.comps_longest_first()  # PILECAP before PILE so substring match works
+
+    seen = set()   # avoid duplicate diagnostics for the same section
+    for row in all_rows:
+        line = ' '.join(t['text'] for t in sorted(row, key=lambda t: t['x'])).upper().strip()
+        if 'SECTION' not in line:
+            continue
+        comps_in = [c for c in comps_longest if c.upper() in line]
+        if len(comps_in) != 1:
+            continue  # mixed or unknown component — skip
+        comp = comps_in[0]
+        expected = (notes.get(f'concrete_{comp}') or '').upper()
+        if not expected:
+            continue
+
+        y_label = row[0]['y']         # DXF Y (bottom-up)
+        y_low   = y_label - view_h    # lower bound of view region
+
+        for t in all_text:
+            if t.get('from_block') or not (y_low <= t['y'] <= y_label):
+                continue
+            m = grade_re.search(t['text'].upper())
+            if not m:
+                continue
+            found = m.group(1)
+            if found == expected:
+                break   # correct grade — no issue
+            key = (line[:60], found)
+            if key not in seen:
+                seen.add(key)
+                diags.append(diag(
+                    'section_grade_mismatch',
+                    f'Section "{line[:60]}" shows {found} concrete but notes specify '
+                    f'{expected} for {comp}.',
+                    severity='error'
+                ))
+            break
 
 
 # ── DIMENSION entity extraction ───────────────────────────────────────────────

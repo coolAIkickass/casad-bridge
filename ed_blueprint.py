@@ -135,9 +135,24 @@ def _recover_stuck_reviews():
                     cur.close()
                     conn.close()
                     log.info('Recovering stuck review %s — re-running check', rid)
+                    recovery_errors = []
+                    if not row['dxf_content']:
+                        recovery_errors.append({
+                            'category': 'System',
+                            'title': 'DXF unavailable — PDF-only re-check',
+                            'description': (
+                                'The service restarted before the DXF could be saved. '
+                                'This review was re-run in PDF-only mode. '
+                                'Section presence checks (TABLE-1, SECTION C-C, etc.) '
+                                'may show false positives.'
+                            ),
+                            'suggestion': 'Re-upload the drawing with the DXF to get accurate results.',
+                            'severity': 'error', 'page_num': 1,
+                            'x': 5, 'y': 5, 'width': 30, 'height': 8,
+                        })
                     _run_check_bg(rid, row['drawing_id'], bytes(row['pdf_content']),
                                   json.loads(row['design_data']) if row['design_data'] else {},
-                                  _decompress_dxf(row['dxf_content']), [])
+                                  _decompress_dxf(row['dxf_content']), recovery_errors)
             finally:
                 lock_cur.execute('SELECT pg_advisory_unlock(%s)', (_RECOVERY_LOCK_KEY,))
                 lock_conn.commit()
@@ -173,6 +188,23 @@ def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, pars
     t0 = time.time()
     log.info('BG START review=%s pdf=%dKB dxf=%dKB', review_id,
              len(pdf_bytes)//1024, len(dxf_bytes)//1024 if dxf_bytes else 0)
+
+    # Store DXF first so that if the service restarts mid-check, recovery
+    # can re-run with the DXF instead of falling back to PDF-only mode.
+    if dxf_bytes:
+        try:
+            _dxf_conn = _get_db()
+            _dxf_cur  = _dxf_conn.cursor()
+            log.info('BG DXF pre-store — %.1fs', time.time()-t0)
+            _dxf_cur.execute("UPDATE reviews SET dxf_content=%s WHERE id=%s",
+                             (psycopg2.Binary(_compress_dxf(dxf_bytes)), review_id))
+            _dxf_conn.commit()
+            _dxf_cur.close()
+            _dxf_conn.close()
+            log.info('BG DXF pre-store done — %.1fs', time.time()-t0)
+        except Exception:
+            log.warning('BG DXF pre-store failed — continuing anyway')
+
     try:
         issues, detected_type = run_check(pdf_bytes, design_data, dxf_bytes=dxf_bytes)
         log.info('BG run_check done — %.1fs, %d issues, type=%s', time.time()-t0, len(issues), detected_type)
@@ -206,10 +238,6 @@ def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, pars
         _save_issues(review_id, issues, cur)
         cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (review_id,))
         cur.execute("UPDATE drawings SET drawing_type=%s WHERE id=%s", (detected_type, drawing_id))
-        if dxf_bytes:
-            log.info('BG storing compressed DXF — %.1fs', time.time()-t0)
-            cur.execute("UPDATE reviews SET dxf_content=%s WHERE id=%s",
-                        (psycopg2.Binary(_compress_dxf(dxf_bytes)), review_id))
         conn.commit()
         cur.close()
         conn.close()

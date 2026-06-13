@@ -34,8 +34,11 @@ scrollArea.addEventListener('scroll', () => {
 });
 
 // Prevent horizontal trackpad/wheel scroll from triggering browser back/forward.
-// overscroll-behavior-x handles most cases in CSS; this catches the rest.
-[scrollArea, hscrollTop].forEach(el => {
+// overscroll-behavior-x: none on .pdf-scroll-area handles most cases; this
+// catches events that bubble up to the parent .pdf-panel container first.
+const pdfPanel = document.querySelector('.pdf-panel');
+[scrollArea, hscrollTop, pdfPanel].forEach(el => {
+  if (!el) return;
   el.addEventListener('wheel', (e) => {
     if (e.deltaX !== 0) {
       e.preventDefault();

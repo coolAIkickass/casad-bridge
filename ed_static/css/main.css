@@ -439,7 +439,7 @@ button { cursor: pointer; font: inherit; }
   padding: 20px;
   gap: 16px;
   position: relative;
-  overscroll-behavior-x: contain;
+  overscroll-behavior-x: none;
 }
 
 .pdf-wrapper {

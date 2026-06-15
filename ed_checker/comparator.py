@@ -247,7 +247,14 @@ def compare(design_data: dict, drawing_data: dict) -> list:
     issues += _compare_geometry_dims(drawing_data, design_data)
     issues += _check_bar_mark_callouts(drawing_data, design_data)
 
-    return issues
+    seen_keys: set = set()
+    deduped: list = []
+    for iss in issues:
+        key = (iss.get('category'), iss.get('title'))
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduped.append(iss)
+    return deduped
 
 
 # ── Extraction diagnostics ────────────────────────────────────────────────────

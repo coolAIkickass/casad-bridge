@@ -425,6 +425,7 @@ def _collect_layout_text(layout, stats: dict) -> list:
                 item = _text_entity_to_dict(attrib)
                 if item:
                     item['from_block'] = True
+                    item['is_attrib'] = True   # user-typed tag value; safe for cut-letter detection
                     result.append(item)
                     stats['in_blocks'] += 1
         except Exception:
@@ -1416,12 +1417,14 @@ def _detect_component_regions(msp, extents: tuple) -> dict:
 def _group_pile_groups(piles: dict, draw_w: float) -> list:
     """
     Cluster pile circles by x-position — bundle piles share approximately the same x.
+    Uses 5% of drawing width so that bundle piles (spaced ~600mm in a ~17m section)
+    collapse to one group while distinct pile lines (~2400mm apart) stay separate.
     Returns sorted list of group centre x-values.
     """
     if not piles:
         return []
     xs = sorted(v['center'][0] for v in piles.values())
-    tol = draw_w * 0.015
+    tol = draw_w * 0.05
     groups: list = []
     current = [xs[0]]
     for x in xs[1:]:
@@ -1821,11 +1824,12 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
 
         # Cut letter detection only in the left (view) area to avoid picking up
         # schedule row annotations, bar marks, pier labels on the right side.
-        # Block-derived text is excluded — symbol blocks render single glyphs
-        # (e.g. 'O' for Ø) that would register as fake cut letters.
+        # Block-derived text is excluded EXCEPT ATTRIBs — ATTRIBs are user-typed
+        # tag values on INSERT blocks (e.g. the "C"/"D" letter on a cut-mark arrow
+        # block), not glyph substitutions from symbol block geometry.
         if all(t['x'] < view_x_max for t in row):
             for t in row:
-                if t.get('from_block'):
+                if t.get('from_block') and not t.get('is_attrib'):
                     continue
                 s = t['text'].strip()
                 if len(s) == 1 and s.isupper() and s.isalpha():
@@ -1835,7 +1839,7 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
     # Second pass over raw entities — cut marks are often separate entities that the
     # row grouping merges into mixed rows (same block-text exclusion applies)
     for t in all_text:
-        if t['x'] < view_x_max and not t.get('from_block'):
+        if t['x'] < view_x_max and (not t.get('from_block') or t.get('is_attrib')):
             s = t['text'].strip()
             if len(s) == 1 and s.isupper() and s.isalpha():
                 single_letter_counts[s] = single_letter_counts.get(s, 0) + 1

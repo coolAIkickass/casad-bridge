@@ -4,6 +4,29 @@ Returns a list of issue dicts matching the DB schema.
 """
 import re
 
+_REINF_RE_DIA     = re.compile(r'(\d+)\s*[φΦ]', re.IGNORECASE)
+_REINF_RE_SPACING = re.compile(r'@\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*c/c', re.IGNORECASE)
+_REINF_RE_COUNT   = re.compile(
+    r'[*×]\s*(\d+)|(?:–|-)\s*(\d+)\s*NOS|(\d+)\s*NOS', re.IGNORECASE)
+
+
+def _parse_reinf_text(text: str) -> dict:
+    """Parse reinforcement column text like '16φ@150 c/c' or '25φ – 42 NOS.'.
+    Returns dict with keys: dia (int|None), secondary_type ('spacing'|'count'|None),
+    secondary_val (float|int|None)."""
+    s = str(text or '').strip()
+    dia_m = _REINF_RE_DIA.search(s)
+    dia = int(dia_m.group(1)) if dia_m else None
+    sp_m = _REINF_RE_SPACING.search(s)
+    if sp_m:
+        val = float(sp_m.group(1) or sp_m.group(2))
+        return {'dia': dia, 'secondary_type': 'spacing', 'secondary_val': val}
+    cnt_m = _REINF_RE_COUNT.search(s)
+    if cnt_m:
+        val = int(cnt_m.group(1) or cnt_m.group(2) or cnt_m.group(3))
+        return {'dia': dia, 'secondary_type': 'count', 'secondary_val': val}
+    return {'dia': dia, 'secondary_type': None, 'secondary_val': None}
+
 # Fallback section bboxes for each schedule component and other zones.
 # Used when Claude doesn't return section bboxes.
 # Right side of PPP drawing layout: left ~62% = views, right ~38% = schedule + title block.
@@ -586,6 +609,50 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 f"Recheck total weight for bar '{bm}' — likely a consequence of a count or length error.",
                 'error', zone, bar_bbox
             ))
+
+    # Reinforcement column check — verify the formatted text matches design intent.
+    # reinf_secondary (from Excel font color) tells us which type is expected: spacing or count.
+    reinf_secondary = design_bar.get('reinf_secondary')
+    w_reinf_text    = drawing_bar.get('reinforcement_text') or ''
+    if reinf_secondary and w_reinf_text:
+        w_parsed = _parse_reinf_text(w_reinf_text)
+        w_type   = w_parsed.get('secondary_type')
+        w_val    = w_parsed.get('secondary_val')
+        if w_type and w_type != reinf_secondary:
+            exp_fmt  = 'φdia@spacing c/c' if reinf_secondary == 'spacing' else 'φdia × count NOS'
+            draw_fmt = 'φdia@spacing c/c' if w_type == 'spacing' else 'φdia × count NOS'
+            issues.append(_issue(
+                'Reinforcement',
+                f"{prefix}: Reinforcement column format wrong — shows {draw_fmt}, expected {exp_fmt}",
+                f"Bar '{bm}' ({comp}): Excel colour indicates '{reinf_secondary}' as the secondary value "
+                f"but the drawing reinforcement column uses '{w_type}' format ({w_reinf_text!r}).",
+                f"Change the reinforcement entry for '{bm}' to use "
+                f"{'@spacing c/c' if reinf_secondary == 'spacing' else '× count NOS'} format.",
+                'error', zone, bar_bbox
+            ))
+        elif w_val is not None:
+            if reinf_secondary == 'spacing' and d_spacing:
+                diff = _pct_diff(d_spacing, w_val)
+                if diff and diff > 5:
+                    issues.append(_issue(
+                        'Reinforcement',
+                        f"{prefix}: Reinforcement column spacing mismatch — "
+                        f"design {round(d_spacing)}mm, drawing text {round(w_val)}mm",
+                        f"Bar '{bm}' ({comp}): reinforcement column shows {round(w_val)}mm c/c "
+                        f"but design expects {round(d_spacing)}mm c/c ({w_reinf_text!r}).",
+                        f"Update the reinforcement column spacing for '{bm}' to {round(d_spacing)}mm c/c.",
+                        'error', zone, bar_bbox
+                    ))
+            elif reinf_secondary == 'count' and d_count and int(w_val) != d_count:
+                issues.append(_issue(
+                    'Reinforcement',
+                    f"{prefix}: Reinforcement column count mismatch — "
+                    f"design {d_count} NOS, drawing text {int(w_val)} NOS",
+                    f"Bar '{bm}' ({comp}): reinforcement column shows {int(w_val)} NOS "
+                    f"but design expects {d_count} NOS ({w_reinf_text!r}).",
+                    f"Update the reinforcement column for '{bm}' to {d_count} NOS.",
+                    'error', zone, bar_bbox
+                ))
 
     # Bar shape dimension check.
     # Excel stores shape dims in metres; drawing schedule shows them in mm → convert × 1000.

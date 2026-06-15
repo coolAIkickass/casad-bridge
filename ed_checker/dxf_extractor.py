@@ -34,6 +34,7 @@ _MAX_TEXT_ENTITIES = 20000
 # and concatenates text per X-band before matching.
 _COL_KEYWORDS = {
     'bar_mark':       ['BAR MARK', 'BAR\nMARK', 'MARK', 'MK.', 'MK'],
+    'reinforcement':  ['REINFORCEMENT', 'REINF.', 'REINF', 'TYPE OF REINF'],
     'bar_dia_mm':     ['DIA', 'Ø', 'φ', 'PHI', 'DIAMETER'],
     'spacing_mm':     ['SPACING', 'C/C', 'PITCH', 'SPC'],
     'count':          ['NOS', 'NO.', 'NUMBER', 'COUNT', 'NOS.'],
@@ -226,7 +227,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     # source flags). Spacing is only checkable if the schedule has a C/C column.
     capabilities = {
         'spacing':          sched_info.get('has_spacing_col', False),
-        'shape_dims':       False,   # Phase 2 — shape sketch dims not read from DXF yet
+        'shape_dims':       True,    # extracted from schedule table column band (bar_mark→reinforcement x range)
         'visual_bar_count': True,
         'label_review':     False,   # vision-only check, not run in DXF path
         'dimension_review': False,   # vision-only check, not run in DXF path
@@ -682,10 +683,36 @@ def _aggregate_bar_rows(bar_rows: list, col_map: dict, bm: str,
     if dia is None and length_m is None and count_val is None:
         return None
 
+    # Reinforcement column text (e.g. "16φ@150 c/c" or "25φ – 42 NOS.")
+    reinf_texts = [t for t in col_cells.get('reinforcement', []) if t.strip()]
+    reinforcement_text = reinf_texts[0] if reinf_texts else None
+
+    # Shape dims: collect numeric values from cells in the x band between bar_mark and
+    # reinforcement columns.  Handles both pilecap (unlabeled merged header) and pile/pier
+    # (sub-headers "L1 m" / "L2 m").  Values deduplicated by rounded integer to avoid
+    # repeating the same dim across multi-zone bar rows.
+    bm_col_x    = real_col_map.get('bar_mark')
+    reinf_col_x = real_col_map.get('reinforcement')
+    shape_dimensions = None
+    if bm_col_x is not None and reinf_col_x is not None:
+        seen: set = set()
+        vals: list = []
+        for row in bar_rows:
+            for cell in row:
+                if bm_col_x < cell['x'] < reinf_col_x:
+                    v = _safe_float(cell['text'])
+                    if v is not None and v > 0:
+                        key = round(v)
+                        if key not in seen:
+                            seen.add(key)
+                            vals.append(v)
+        if vals:
+            shape_dimensions = sorted(vals)
+
     return {
         'bar_mark':        bm,
         'component':       None,
-        'reinforcement_text': None,
+        'reinforcement_text': reinforcement_text,
         'bar_dia_mm':      dia,
         'spacing_mm':      spacing,
         'count_text':      str(count_val) if count_val is not None else '',
@@ -694,7 +721,7 @@ def _aggregate_bar_rows(bar_rows: list, col_map: dict, bm: str,
         'total_length_m':  total_length_m,
         'unit_wt_kg_m':    unit_wt,
         'total_wt_kg':     total_wt_kg,
-        'shape_dimensions': None,
+        'shape_dimensions': shape_dimensions,
     }
 
 

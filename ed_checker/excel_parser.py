@@ -41,6 +41,41 @@ def _safe_float(v):
         return None
 
 
+def _is_nonblack_font(cell) -> bool:
+    """True if the cell has a non-black font color (e.g. red)."""
+    try:
+        c = cell.font.color
+        if c is None:
+            return False
+        if c.type == 'rgb':
+            rgb = (c.rgb or '').upper().lstrip('0')
+            return rgb not in ('', '0', '000000', '000')
+        if c.type == 'theme':
+            return c.theme not in (0, 1)  # 0=background, 1=dark/black in standard themes
+        return False  # 'auto' = black
+    except Exception:
+        return False
+
+
+def _pick_reinf_secondary(ws, ri: int, spacing_val, count_val):
+    """Return 'spacing' or 'count' based on which Excel cell has a non-black font.
+    A colored cell whose value is None/hyphen (empty placeholder) is treated as uncolored."""
+    sp_cell  = ws.cell(row=ri + 1, column=SPACING_COL + 1)
+    cnt_cell = ws.cell(row=ri + 1, column=COUNT_COL + 1)
+    sp_colored  = _is_nonblack_font(sp_cell)  and spacing_val is not None
+    cnt_colored = _is_nonblack_font(cnt_cell) and count_val   is not None
+    if sp_colored and not cnt_colored:
+        return 'spacing'
+    if cnt_colored and not sp_colored:
+        return 'count'
+    # Both or neither colored — fallback by which value is present
+    if spacing_val is not None:
+        return 'spacing'
+    if count_val is not None:
+        return 'count'
+    return None
+
+
 def _parse_spacing(v):
     if v is None:
         return None
@@ -97,7 +132,7 @@ def parse_e2e_excel(file_bytes: bytes) -> dict:
     formula_rows = [list(r) for r in ws_formula.iter_rows(values_only=True)]
 
     geometry = _parse_geometry(rows)
-    pilecap_bbs, pile_bbs, pier_bbs = _parse_bbs_sections(rows, formula_rows, geometry)
+    pilecap_bbs, pile_bbs, pier_bbs = _parse_bbs_sections(rows, formula_rows, geometry, ws=ws_formula)
 
     return {
         'source': 'e2e_excel',
@@ -183,7 +218,7 @@ def _find_shape_cols(rows) -> list:
     return []
 
 
-def _parse_bbs_sections(rows, formula_rows=None, geometry=None):
+def _parse_bbs_sections(rows, formula_rows=None, geometry=None, ws=None):
     pilecap_bbs = {}
     pile_bbs    = {}
     # Collect both pier types separately, then pick the right one
@@ -246,6 +281,12 @@ def _parse_bbs_sections(rows, formula_rows=None, geometry=None):
             # Attach stirrup longitudinal spacing for 'e'
             if bar['spacing_mm'] is None and stirrup_spacing and bar['bar_mark'] == 'e':
                 bar['spacing_mm'] = stirrup_spacing
+
+            # Determine which secondary value (spacing or count) appears in the REINFORCEMENT
+            # column for this bar, based on which Excel cell has a non-black font color.
+            if ws is not None:
+                bar['reinf_secondary'] = _pick_reinf_secondary(
+                    ws, ri, bar.get('spacing_mm'), bar.get('count'))
 
             # For PILE bars: normalise count to total (across all piles).
             # The Excel section is "per pile". Check whether the count cell formula

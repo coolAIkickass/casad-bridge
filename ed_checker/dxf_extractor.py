@@ -894,6 +894,22 @@ def _extract_schedule(msp, all_text: list, extents: tuple,
         if bar_data is None:
             continue
 
+        # Attach exact DXF bbox for this bar's rows so the review UI can highlight
+        # the precise schedule row(s) instead of distributing evenly within a section.
+        # bar_rows spans the bar mark label row plus any sub-rows (confinement zones).
+        if bar_rows:
+            all_ys = [cell['y'] for row in bar_rows for cell in row]
+            all_xs = [cell['x'] for row in bar_rows for cell in row]
+            if all_ys and all_xs:
+                row_pad = dh * layout.sched_row_tol_frac
+                bar_data['row_bbox'] = _to_bbox(
+                    min(all_xs) - x_span * 0.05,
+                    min(all_ys) - row_pad,
+                    max(all_xs) + x_span * 0.05,
+                    max(all_ys) + row_pad,
+                    extents,
+                )
+
         bar_data['bar_mark'] = bm
         comp_dict = schedule.setdefault(comp, {})
         if bm in comp_dict:

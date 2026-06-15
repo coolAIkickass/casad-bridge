@@ -460,18 +460,23 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
 
             d_bar = design_bars[0]
 
-            # Distribute bars evenly within the section bbox using canonical row ordering
-            try:
-                row_idx = sorted_bms.index(bm)
-            except ValueError:
-                row_idx = total - 1
-            row_h = max(sect['h'] / total, 2.0)
-            bar_bbox = {
-                'x': sect['x'],
-                'y': sect['y'] + row_idx * row_h,
-                'w': sect['w'],
-                'h': row_h,
-            }
+            # DXF path: use exact per-row bbox stored during extraction.
+            # PDF path fallback: distribute bars evenly within the section bbox.
+            dxf_bbox = drawing_bar.get('row_bbox')
+            if dxf_bbox:
+                bar_bbox = dxf_bbox
+            else:
+                try:
+                    row_idx = sorted_bms.index(bm)
+                except ValueError:
+                    row_idx = total - 1
+                row_h = max(sect['h'] / total, 2.0)
+                bar_bbox = {
+                    'x': sect['x'],
+                    'y': sect['y'] + row_idx * row_h,
+                    'w': sect['w'],
+                    'h': row_h,
+                }
 
             # A bar is a confinement/ring bar if the design specifies a c/c spacing.
             # Longitudinal and distributed bars don't have a c/c pitch column.

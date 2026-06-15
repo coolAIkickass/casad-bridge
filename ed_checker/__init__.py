@@ -5,6 +5,7 @@ Public API:
   parse_design_inputs(design_files)                        -> (design_data dict, parse_errors list)
   run_check(drawing_pdf_bytes, design_data, dxf_bytes)     -> (issues list, detected_type str)
 """
+import gc
 import os
 import re
 import logging
@@ -234,6 +235,11 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
     cut_letters      = drawing_data.get('cut_letters', set())
     sv_pos           = drawing_data.get('section_view_positions', {})
     drawing_data['missing_referenced_sections'] = _text_missing_sections(cut_letters, sv_pos)
+
+    # Free ezdxf objects before rendering PDF — ezdxf has cyclic refs that refcounting
+    # won't reclaim, so the parsed DXF (~100-200 MB) stays alive until gc.collect().
+    # Running gc here prevents OOM when the 2.0× PyMuPDF render follows immediately.
+    gc.collect()
 
     # Run the visual review pass (CHECK 3–6) even in DXF path.
     # DXF text extraction cannot detect unlabeled views, stray boxes,

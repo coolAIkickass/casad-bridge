@@ -768,7 +768,10 @@ def _pdf_to_image_b64(pdf_bytes: bytes, scale: float = 1.0,
                 pix = page.get_pixmap(matrix=mat)
                 log.info('Page %d full: %dx%d px', i+1, pix.width, pix.height)
 
-            b64 = base64.standard_b64encode(pix.tobytes('png')).decode()
+            png_bytes = pix.tobytes('png')
+            pix = None  # release pixmap before base64 expansion
+            b64 = base64.standard_b64encode(png_bytes).decode()
+            png_bytes = None  # release PNG bytes after encoding
             log.info('Page %d b64 len=%d', i+1, len(b64))
             images.append(b64)
         doc.close()

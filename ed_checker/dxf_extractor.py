@@ -227,7 +227,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     # source flags). Spacing is only checkable if the schedule has a C/C column.
     capabilities = {
         'spacing':          sched_info.get('has_spacing_col', False),
-        'shape_dims':       True,    # extracted from schedule table column band (bar_mark→reinforcement x range)
+        'shape_dims':       sched_info.get('has_shape_dims_col', False),
         'visual_bar_count': True,
         'label_review':     False,   # vision-only check, not run in DXF path
         'dimension_review': False,   # vision-only check, not run in DXF path
@@ -689,8 +689,11 @@ def _aggregate_bar_rows(bar_rows: list, col_map: dict, bm: str,
 
     # Shape dims: collect numeric values from cells in the x band between bar_mark and
     # reinforcement columns.  Handles both pilecap (unlabeled merged header) and pile/pier
-    # (sub-headers "L1 m" / "L2 m").  Values deduplicated by rounded integer to avoid
-    # repeating the same dim across multi-zone bar rows.
+    # (sub-headers "L1 m" / "L2 m").
+    # Dedup key includes x position: same value at different x positions = different segments
+    # (e.g. both 825mm hooks on bar 'a') → keep both.  Same value at the same x across
+    # multi-zone rows = repeated annotation → deduplicate.
+    # 50mm minimum excludes zone-number labels (1, 2) and other sub-column stray numerics.
     bm_col_x    = real_col_map.get('bar_mark')
     reinf_col_x = real_col_map.get('reinforcement')
     shape_dimensions = None
@@ -701,8 +704,8 @@ def _aggregate_bar_rows(bar_rows: list, col_map: dict, bm: str,
             for cell in row:
                 if bm_col_x < cell['x'] < reinf_col_x:
                     v = _safe_float(cell['text'])
-                    if v is not None and v > 0:
-                        key = round(v)
+                    if v is not None and v >= 50:
+                        key = (round(cell['x']), round(v))
                         if key not in seen:
                             seen.add(key)
                             vals.append(v)
@@ -801,7 +804,8 @@ def _extract_schedule(msp, all_text: list, extents: tuple,
                           'keywords. Schedule checks were skipped.'))
         return {}, info
 
-    info['has_spacing_col'] = 'spacing_mm' in col_map
+    info['has_spacing_col']    = 'spacing_mm' in col_map
+    info['has_shape_dims_col'] = ('bar_mark' in col_map and 'reinforcement' in col_map)
 
     data_rows = rows[header_idx + 1:]
     if not data_rows:

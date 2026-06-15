@@ -236,18 +236,19 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
     sv_pos           = drawing_data.get('section_view_positions', {})
     drawing_data['missing_referenced_sections'] = _text_missing_sections(cut_letters, sv_pos)
 
-    # Free ezdxf objects before rendering PDF — ezdxf has cyclic refs that refcounting
-    # won't reclaim, so the parsed DXF (~100-200 MB) stays alive until gc.collect().
-    # Running gc here prevents OOM when the 2.0× PyMuPDF render follows immediately.
-    gc.collect()
+    # Free DXF bytes — no longer needed after extraction; saves 25 MB before vision render.
+    dxf_bytes = None
+    gc.collect()  # belt-and-suspenders: extract_from_dxf already gc'd, but catch any stragglers
 
     # Run the visual review pass (CHECK 3–6) even in DXF path.
     # DXF text extraction cannot detect unlabeled views, stray boxes,
     # missing dimensions, or label/annotation quality issues.
+    # Use 1.5× render (vs 2.0× in PDF path) — DXF path skips schedule/title extraction
+    # from the image so lower resolution is sufficient; saves ~40% peak memory.
     try:
         _section_labels = sorted(drawing_data.get('section_view_positions', {}).keys())
         _missing_secs   = drawing_data.get('missing_referenced_sections', [])
-        review_data = run_review_vision(pdf_bytes, _section_labels, _missing_secs)
+        review_data = run_review_vision(pdf_bytes, _section_labels, _missing_secs, scale=1.5)
         if review_data:
             drawing_data['label_issues']         = review_data.get('label_issues')         or []
             drawing_data['dimension_issues']     = review_data.get('dimension_issues')     or []

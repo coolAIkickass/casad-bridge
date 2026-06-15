@@ -448,13 +448,15 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
 
 def run_review_vision(pdf_bytes: bytes, section_labels: list,
                       missing_referenced_sections: list,
-                      images_b64: list = None) -> dict | None:
+                      images_b64: list = None,
+                      scale: float = 2.0) -> dict | None:
     """
     Run the visual review pass (CHECK 3–6) against the PDF image.
     Returns raw review_data dict from Claude, or None if API key absent / call fails.
     section_labels: list of label strings (e.g. keys of section_view_positions).
     missing_referenced_sections: list of dicts from _text_missing_sections().
-    images_b64: pre-rendered images to avoid double-rendering (optional; PDF path passes these).
+    images_b64: pre-rendered images to avoid double-rendering (PDF path passes these).
+    scale: render scale when images_b64 is not provided (DXF path uses 1.5× to save memory).
     """
     label_block = '\n'.join(f'  • {l}' for l in section_labels) or '  (none extracted)'
     unresolved_block = (
@@ -467,7 +469,7 @@ def run_review_vision(pdf_bytes: bytes, section_labels: list,
         SECTION_LABELS=label_block,
         UNRESOLVED_CUTS=unresolved_block,
     )
-    imgs = images_b64 if images_b64 is not None else _pdf_to_image_b64(pdf_bytes, scale=2.0)
+    imgs = images_b64 if images_b64 is not None else _pdf_to_image_b64(pdf_bytes, scale=scale)
     return _call_vision(imgs, review_prompt, REVIEW_MODEL, 8192)
 
 

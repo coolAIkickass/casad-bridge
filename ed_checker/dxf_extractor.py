@@ -8,6 +8,7 @@ Called from __init__.run_check() when the engineer uploads a DXF alongside the P
 The PDF is still required for display in the review UI; the DXF is used only for data
 extraction.
 """
+import gc
 import io
 import os
 import re
@@ -223,6 +224,13 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     table_1             = _extract_table1(all_text, extents, profile.layout)
     sv_pos, cut_letters = _extract_section_info(all_text, extents, profile.layout)
     xsec                = _count_cross_section_bars(msp, all_text, schedule, extents, profile, diags)
+    geometry_from_drawing = _classify_all_dims(msp, extents, u2mm)
+    multileader_callouts  = _extract_multileader_callouts(msp, extents)
+
+    # ezdxf doc and modelspace are done — all data now lives in plain Python dicts.
+    # Delete explicitly and gc to break cyclic entity refs (~100-200 MB) before returning.
+    del doc, msp, all_text, ps_text
+    gc.collect()
 
     # Supplement notes with DIMENSION-derived values when text extraction missed them.
     # DIMENSION entities give exact geometric measurements with no OCR error.
@@ -1321,6 +1329,251 @@ def _append_section_grade_diagnostics(all_text: list, extents: tuple,
                     severity='error'
                 ))
             break
+
+
+# ── Geometric spatial classification (Tier 2) ────────────────────────────────
+
+_SNAP_TOL = 0.03   # defpoint must land within 3% of drawing span to snap to an edge
+
+
+def _near(a: float, b: float, span: float, tol: float = _SNAP_TOL) -> bool:
+    return abs(a - b) <= span * tol
+
+
+def _detect_component_regions(msp, extents: tuple) -> dict:
+    """
+    Infer structural component bounding boxes from LWPOLYLINE and ARC geometry.
+    Returns {name: {type, bbox=(xmin,ymin,xmax,ymax), center?, radius?, width?, height?}}.
+
+    Classification heuristics:
+      - Wide flat closed/open polyline on non-REINF layer → pilecap
+      - ARC with radius in a plausible pile-size range → pile circle
+    """
+    x_min, y_min, x_max, y_max = extents
+    dw = (x_max - x_min) or 1.0
+    dh = (y_max - y_min) or 1.0
+    regions: dict = {}
+
+    for poly in msp.query('LWPOLYLINE'):
+        try:
+            pts = list(poly.get_points())
+            if len(pts) < 3:
+                continue
+            xs = [float(p[0]) for p in pts]
+            ys = [float(p[1]) for p in pts]
+            w = max(xs) - min(xs)
+            h = max(ys) - min(ys)
+            layer = str(poly.dxf.get('layer', '')).upper()
+
+            if w < dw * 0.02 or h < dh * 0.02:
+                continue
+            if 'REINF' in layer or 'REBAR' in layer:
+                continue
+
+            bbox = (min(xs), min(ys), max(xs), max(ys))
+            cx = (min(xs) + max(xs)) / 2
+            cy = (min(ys) + max(ys)) / 2
+            aspect = w / h if h > 0 else 0
+
+            # Wide flat shape → pilecap (wider than tall, takes up meaningful fraction of drawing)
+            if aspect > 1.5 and w > dw * 0.05 and 'pilecap' not in regions:
+                regions['pilecap'] = {
+                    'type': 'pilecap', 'bbox': bbox,
+                    'center': (cx, cy), 'width': w, 'height': h,
+                }
+        except Exception:
+            pass
+
+    pile_idx = 0
+    for arc in msp.query('ARC'):
+        try:
+            r = float(arc.dxf.radius)
+            # Plausible pile radius: between 0.5% and 20% of drawing width
+            if r < dw * 0.005 or r > dw * 0.20:
+                continue
+            c = arc.dxf.center
+            cx, cy = float(c.x), float(c.y)
+            regions[f'pile_{pile_idx}'] = {
+                'type': 'pile',
+                'center': (cx, cy),
+                'radius': r,
+                'bbox': (cx - r, cy - r, cx + r, cy + r),
+            }
+            pile_idx += 1
+        except Exception:
+            pass
+
+    log.info('Component regions detected: %s', {k: v['type'] for k, v in regions.items()})
+    return regions
+
+
+def _group_pile_groups(piles: dict, draw_w: float) -> list:
+    """
+    Cluster pile circles by x-position — bundle piles share approximately the same x.
+    Returns sorted list of group centre x-values.
+    """
+    if not piles:
+        return []
+    xs = sorted(v['center'][0] for v in piles.values())
+    tol = draw_w * 0.015
+    groups: list = []
+    current = [xs[0]]
+    for x in xs[1:]:
+        if x - current[-1] <= tol:
+            current.append(x)
+        else:
+            groups.append(sum(current) / len(current))
+            current = [x]
+    groups.append(sum(current) / len(current))
+    return sorted(groups)
+
+
+def _classify_dim_spatially(dp2, dp3, val_mm: float, orient: str,
+                             regions: dict, dw: float, dh: float) -> tuple:
+    """
+    Map one DIMENSION (by its defpoints) to a named geometric parameter.
+    Returns (param_name, component_name) or ('unknown', None).
+    """
+    pilecap = regions.get('pilecap')
+    piles = {k: v for k, v in regions.items() if v['type'] == 'pile'}
+
+    if pilecap:
+        pc = pilecap['bbox']   # xmin, ymin, xmax, ymax
+
+        if orient == 'V':
+            lo_y, hi_y = sorted([float(dp2.y), float(dp3.y)])
+            if _near(lo_y, pc[1], dh) and _near(hi_y, pc[3], dh):
+                return 'pilecap_depth', 'pilecap'
+
+        if orient == 'H':
+            lo_x, hi_x = sorted([float(dp2.x), float(dp3.x)])
+            if _near(lo_x, pc[0], dw) and _near(hi_x, pc[2], dw):
+                return 'pilecap_width', 'pilecap'
+            pc_w = pc[2] - pc[0]
+            if (hi_x - lo_x) > pc_w * 1.05:
+                return 'pilecap_length_overall', 'pilecap'
+
+    if orient == 'H' and len(piles) >= 2:
+        pile_groups = _group_pile_groups(piles, dw)
+        lo_x, hi_x = sorted([float(dp2.x), float(dp3.x)])
+        for i, g1 in enumerate(pile_groups):
+            for g2 in pile_groups[i + 1:]:
+                if _near(lo_x, g1, dw) and _near(hi_x, g2, dw):
+                    return 'pile_spacing', 'pile'
+        if pilecap:
+            pc = pilecap['bbox']
+            outermost_l = pile_groups[0]
+            outermost_r = pile_groups[-1]
+            if (_near(lo_x, outermost_r, dw) and _near(hi_x, pc[2], dw)) or \
+               (_near(lo_x, pc[0], dw) and _near(hi_x, outermost_l, dw)):
+                return 'pile_overhang', 'pilecap'
+
+    for pile in piles.values():
+        cx, cy, r = pile['center'][0], pile['center'][1], pile['radius']
+        if orient == 'V':
+            lo_y, hi_y = sorted([float(dp2.y), float(dp3.y)])
+            if _near(lo_y, cy - r, dh) and _near(hi_y, cy + r, dh):
+                return 'pile_dia', 'pile'
+
+    return 'unknown', None
+
+
+def _classify_all_dims(msp, extents: tuple, u2mm: float = 1.0) -> dict:
+    """
+    Classify DIMENSION entities spatially using defpoint-to-geometry matching.
+    Skips dims that already have a text override (handled by _extract_dimensions).
+    Returns geometry_from_drawing: {param → {val_mm, x_pct, y_pct, component, source}}.
+    """
+    x_min, y_min, x_max, y_max = extents
+    dw = (x_max - x_min) or 1.0
+    dh = (y_max - y_min) or 1.0
+
+    regions = _detect_component_regions(msp, extents)
+    result: dict = {}
+    total = 0
+    classified = 0
+
+    for e in msp.query('DIMENSION'):
+        total += 1
+        try:
+            val_mm = float(e.get_measurement()) * u2mm
+            if val_mm <= 0 or val_mm > 1e6:
+                continue
+
+            override = e.dxf.get('text', '') or ''
+            if _strip_dim_override(override).strip():
+                continue   # labeled dim — already handled by _extract_dimensions
+
+            dp2 = e.dxf.get('defpoint2', None)
+            dp3 = e.dxf.get('defpoint3', None)
+            if dp2 is None or dp3 is None:
+                continue
+
+            dx = abs(float(dp3.x) - float(dp2.x))
+            dy = abs(float(dp3.y) - float(dp2.y))
+            if dx > dy * 2:
+                orient = 'H'
+            elif dy > dx * 2:
+                orient = 'V'
+            else:
+                continue   # diagonal — skip
+
+            try:
+                tm = e.dxf.text_midpoint
+                x_pct, y_pct = _pos_to_pct(float(tm.x), float(tm.y), extents)
+            except AttributeError:
+                mx = (float(dp2.x) + float(dp3.x)) / 2
+                my = (float(dp2.y) + float(dp3.y)) / 2
+                x_pct, y_pct = _pos_to_pct(mx, my, extents)
+
+            param, comp = _classify_dim_spatially(dp2, dp3, val_mm, orient, regions, dw, dh)
+            if param == 'unknown':
+                continue
+
+            if param not in result:
+                result[param] = {
+                    'val_mm':    round(val_mm, 1),
+                    'x_pct':     x_pct,
+                    'y_pct':     y_pct,
+                    'component': comp,
+                    'source':    'dxf_spatial',
+                }
+                classified += 1
+        except Exception as ex:
+            log.debug('Spatial dim classify error: %s', ex)
+
+    log.info('Spatial dim classification: %d/%d DIMENSION entities classified → %s',
+             classified, total, list(result.keys()))
+    return result
+
+
+def _extract_multileader_callouts(msp, extents: tuple) -> list:
+    """
+    Extract bar mark annotations from MULTILEADER entities.
+    Text is in the MLeader context MTEXT, via entity.context.mtext.default_content.
+    Returns [{bar_mark, x_pct, y_pct}].
+    """
+    callouts = []
+    for e in msp.query('MULTILEADER'):
+        try:
+            ctx = e.context
+            if not ctx or not ctx.mtext:
+                continue
+            raw = (ctx.mtext.default_content or '').strip()
+            if not raw:
+                continue
+            # Strip MTEXT formatting codes
+            bar_mark = re.sub(r'\\[A-Za-z][^;]*;', '', raw)
+            bar_mark = re.sub(r'\{[^}]*\}', '', bar_mark).strip().lower()
+            if not re.match(r'^[a-z]\d{0,2}$', bar_mark):
+                continue
+            pos = ctx.mtext.insert
+            x_pct, y_pct = _pos_to_pct(float(pos[0]), float(pos[1]), extents)
+            callouts.append({'bar_mark': bar_mark, 'x_pct': x_pct, 'y_pct': y_pct})
+        except Exception as ex:
+            log.debug('MULTILEADER parse error: %s', ex)
+    log.info('MULTILEADER callouts: %d extracted', len(callouts))
+    return callouts
 
 
 # ── DIMENSION entity extraction ───────────────────────────────────────────────

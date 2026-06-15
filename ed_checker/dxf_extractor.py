@@ -20,6 +20,16 @@ from .schema import new_drawing_data, diag
 
 log = logging.getLogger(__name__)
 
+# Suppress ezdxf's "copy process ignored ACDB_BLOCKREPRESENTATION_DATA" warning.
+# virtual_entities() copies block entities into WCS and silently skips AutoCAD-only
+# extension-dictionary entries it doesn't know about. This is harmless — our text
+# extraction is unaffected — but the warning fires once per INSERT referencing the block.
+class _EzdxfCopyIgnoreFilter(logging.Filter):
+    def filter(self, record):
+        return 'copy process ignored' not in record.getMessage()
+
+logging.getLogger('ezdxf').addFilter(_EzdxfCopyIgnoreFilter())
+
 # DXF $INSUNITS code → millimetres per drawing unit.
 # Codes: 1=inches, 2=feet, 4=mm, 5=cm, 6=m, 7=km. 0=unitless (assume mm — CASAD standard).
 _INSUNITS_TO_MM = {1: 25.4, 2: 304.8, 4: 1.0, 5: 10.0, 6: 1000.0, 7: 1e6}

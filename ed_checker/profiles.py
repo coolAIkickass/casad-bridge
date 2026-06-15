@@ -68,6 +68,11 @@ class DrawingTypeProfile:
                                     # matching layers are preferred as rebar-dot candidates
     dot_block_patterns: tuple = ()  # regexes matched against block names; matching block
                                     # INSERTs are authoritative rebar-dot symbols
+    geometry_checks: tuple = ()     # ((param, design_key, tol_pct, label, design_unit), ...)
+                                    # param: key in geometry_from_drawing
+                                    # design_key: key in design_data['geometry']
+                                    # tol_pct: allowed % difference before flagging
+                                    # design_unit: 'm' (multiply ×1000 to get mm) or 'mm'
     layout: LayoutConfig = field(default_factory=LayoutConfig)
 
     def comps_longest_first(self) -> list:
@@ -137,4 +142,15 @@ PPP_PROFILE = DrawingTypeProfile(
     dot_layer_patterns=(r'REBAR', r'REINF', r'\bBAR\b'),
     # CASAD rebar dots are 'REIN.DOT' / 'REIN. DOT' block inserts
     dot_block_patterns=(r'REIN.{0,2}DOT', r'\bDOT\b', r'REBAR'),
+    # Spatial geometric dimension checks — DXF defpoint routing vs design geometry.
+    # Each tuple: (param_in_geometry_from_drawing, design_geometry_key, tol_pct, label, design_unit)
+    # design_unit 'm' → multiply design value × 1000 before comparing with DXF mm value.
+    geometry_checks=(
+        ('pilecap_depth',          'pilecap_depth',          2.0, 'Pilecap depth',              'm'),
+        ('pile_spacing',           'pile_spacing',           2.0, 'Pile c/c spacing',           'm'),
+        ('pile_overhang',          'pile_overhang',          5.0, 'Pile overhang',              'm'),
+        ('pilecap_width',          'pilecap_length_across',  2.0, 'Pilecap width (across)',     'm'),
+        ('pilecap_length_overall', 'pilecap_length_along',   2.0, 'Pilecap length (along)',     'm'),
+        ('pile_dia',               'pile_dia',               2.0, 'Pile diameter',              'm'),
+    ),
 )

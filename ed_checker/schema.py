@@ -52,6 +52,9 @@ def new_drawing_data(**overrides) -> dict:
         'capabilities':                 dict(DEFAULT_CAPABILITIES),
         'extraction_diagnostics':       [],     # [{code, message, severity}] — see diag()
         'raw_text':                     [],
+        # Geometric dimension checking (DXF spatial routing — Tier 2)
+        'geometry_from_drawing':        {},     # param → {val_mm, x_pct, y_pct, component, source}
+        'multileader_callouts':         [],     # [{bar_mark, x_pct, y_pct}] from MULTILEADER entities
     }
     unknown = set(overrides) - set(data)
     if unknown:

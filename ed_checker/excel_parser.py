@@ -164,6 +164,10 @@ def _parse_geometry(rows):
                 geo['pilecap_cover'] = _safe_float(row[ci + 1])
             elif 'Pile Dia=' in c:
                 geo['pile_dia'] = _safe_float(row[ci + 1])
+            elif 'Pile Spacing' in c or 'Pile c/c' in c or 'Pile C/C' in c:
+                geo['pile_spacing'] = _safe_float(row[ci + 1])
+            elif 'Pile Overhang' in c or 'Overhang' in c:
+                geo['pile_overhang'] = _safe_float(row[ci + 1])
             elif 'No. of Piles=' in c:
                 geo['pile_count'] = int(row[ci + 1]) if row[ci + 1] else None
             elif 'Pile length=' in c:

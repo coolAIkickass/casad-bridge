@@ -3,6 +3,7 @@ Compare structured design input data vs extracted drawing data.
 Returns a list of issue dicts matching the DB schema.
 """
 import re
+from .profiles import PPP_PROFILE
 
 _REINF_RE_DIA     = re.compile(r'(\d+)\s*[φΦ]', re.IGNORECASE)
 _REINF_RE_SPACING = re.compile(r'@\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*c/c', re.IGNORECASE)
@@ -243,6 +244,8 @@ def compare(design_data: dict, drawing_data: dict) -> list:
     issues += _check_cross_sections(drawing_data, design_data or {})
     issues += _check_cut_mark_references(drawing_data)
     issues += _check_unlabeled_views(drawing_data)
+    issues += _compare_geometry_dims(drawing_data, design_data)
+    issues += _check_bar_mark_callouts(drawing_data, design_data)
 
     return issues
 
@@ -1054,4 +1057,96 @@ def _check_dimension_issues(dimension_issues: list, sections: list = None,
             di.get('suggestion', 'Add the missing dimension.'),
             'error', 'default', bbox
         ))
+    return issues
+
+
+# ── Geometric dimension comparison (Tier 2 spatial routing) ──────────────────
+
+def _compare_geometry_dims(drawing_data: dict, design_data: dict,
+                            profile=None) -> list:
+    """
+    Compare geometry_from_drawing (DXF spatial classification) against design_data['geometry'].
+    Uses profile.geometry_checks to know which params to check and their tolerances.
+    """
+    if profile is None:
+        profile = PPP_PROFILE
+
+    geo_drawing = drawing_data.get('geometry_from_drawing') or {}
+    geo_design  = (design_data or {}).get('geometry') or {}
+
+    if not geo_drawing or not geo_design:
+        return []
+
+    issues = []
+    for param, design_key, tol_pct, label, design_unit in profile.geometry_checks:
+        drawn = geo_drawing.get(param)
+        if drawn is None:
+            continue
+
+        design_val = geo_design.get(design_key)
+        if design_val is None:
+            continue
+
+        drawn_mm  = drawn['val_mm']
+        design_mm = design_val * 1000.0 if design_unit == 'm' else float(design_val)
+
+        diff_pct = abs(drawn_mm - design_mm) / design_mm * 100 if design_mm else 0
+        if diff_pct <= tol_pct:
+            continue
+
+        x, y = drawn.get('x_pct', 50), drawn.get('y_pct', 50)
+        issues.append({
+            'category':    'Geometric Dimensions',
+            'title':       f'{label}: drawn {drawn_mm:.0f}mm ≠ design {design_mm:.0f}mm',
+            'description': (
+                f'{label} drawn as {drawn_mm:.0f}mm but design specifies '
+                f'{design_mm:.0f}mm ({design_val}{design_unit}). '
+                f'Difference: {diff_pct:.1f}% (tolerance {tol_pct}%).'
+            ),
+            'suggestion':  f'Correct {label.lower()} to {design_mm:.0f}mm.',
+            'severity':    'error',
+            'page_num':    1,
+            'x': x, 'y': y, 'width': 5.0, 'height': 2.0,
+        })
+    return issues
+
+
+def _check_bar_mark_callouts(drawing_data: dict, design_data: dict) -> list:
+    """
+    Check that every bar mark expected from the design schedule appears as a
+    MULTILEADER callout in the drawing. Flags marks that are in the schedule
+    but have no visible leader annotation in any section view.
+    """
+    callouts = {c['bar_mark'] for c in (drawing_data.get('multileader_callouts') or [])}
+    if not callouts:
+        return []   # no callout data — drawing may not use MULTILEADER; skip silently
+
+    schedule = drawing_data.get('schedule') or {}
+    design_schedule = {}
+    if design_data:
+        for comp in ('pilecap_bbs', 'pile_bbs', 'pier_bbs'):
+            for bm in (design_data.get(comp) or {}):
+                design_schedule[bm] = comp.replace('_bbs', '')
+
+    issues = []
+    for bm in sorted(design_schedule):
+        if bm not in schedule:
+            continue   # not in drawing schedule — flagged elsewhere
+        if bm not in callouts:
+            issues.append({
+                'category':    'Bar Mark Callouts',
+                'title':       f"Bar mark '{bm}' not called out in section view",
+                'description': (
+                    f"Bar mark '{bm}' appears in the reinforcement schedule but has no "
+                    f"leader annotation in any section view. Engineers must be able to "
+                    f"trace each bar mark from the schedule to its location in the drawing."
+                ),
+                'suggestion':  (
+                    f"Add a MULTILEADER callout for bar mark '{bm}' pointing to the "
+                    f"bar in the relevant section view."
+                ),
+                'severity':    'error',
+                'page_num':    1,
+                'x': 50.0, 'y': 50.0, 'width': 5.0, 'height': 2.0,
+            })
     return issues

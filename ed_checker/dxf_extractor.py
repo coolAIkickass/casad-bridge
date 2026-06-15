@@ -1313,7 +1313,11 @@ def _append_section_grade_diagnostics(all_text: list, extents: tuple,
         y_low   = y_label - view_h    # lower bound of view region
 
         for t in all_text:
-            if t.get('from_block') or not (y_low <= t['y'] <= y_label):
+            if not (y_low <= t['y'] <= y_label):
+                continue
+            # Allow from_block items only when they contain a grade keyword —
+            # ATTRIB blocks in section annotations carry grade text like "(M35)".
+            if t.get('from_block') and not grade_re.search(t['text'].upper()):
                 continue
             m = grade_re.search(t['text'].upper())
             if not m:

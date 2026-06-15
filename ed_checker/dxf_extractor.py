@@ -229,7 +229,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
 
     # ezdxf doc and modelspace are done — all data now lives in plain Python dicts.
     # Delete explicitly and gc to break cyclic entity refs (~100-200 MB) before returning.
-    del doc, msp, all_text, ps_text
+    del doc, msp, ps_text
     gc.collect()
 
     # Supplement notes with DIMENSION-derived values when text extraction missed them.
@@ -273,6 +273,8 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
         capabilities=capabilities,
         extraction_diagnostics=diags,
         raw_text=[t['text'] for t in all_text],
+        geometry_from_drawing=geometry_from_drawing,
+        multileader_callouts=multileader_callouts,
     )
 
 

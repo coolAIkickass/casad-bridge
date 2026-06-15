@@ -476,24 +476,33 @@ def api_dxf_schedule_debug(review_id):
     dxf_bytes = _decompress_dxf(row['dxf_content'])
     filter_marks = {m.strip() for m in request.args.get('bars', '').split(',') if m.strip()}
 
-    import ezdxf, ezdxf.recover as _dxf_recover
+    import ezdxf, tempfile, os as _os
     from ed_checker.dxf_extractor import (
         _collect_text, _get_extents, _units_to_mm,
         _group_rows, _build_col_map, _build_comp_boundaries,
         _is_bar_mark_token, PPP_PROFILE,
     )
-    from ed_checker.profiles import PPP_PROFILE as _P
-    from ed_checker.schema import diag as _diag
-    import io
 
     profile = PPP_PROFILE
     layout  = profile.layout
     diags   = []
 
+    tmp_path = None
     try:
-        doc = ezdxf.read(io.BytesIO(dxf_bytes))
-    except Exception:
-        doc, _ = _dxf_recover.readfile(io.BytesIO(dxf_bytes))
+        with tempfile.NamedTemporaryFile(suffix='.dxf', delete=False) as tmp:
+            tmp.write(dxf_bytes)
+            tmp_path = tmp.name
+        try:
+            doc = ezdxf.readfile(tmp_path)
+        except Exception:
+            from ezdxf import recover
+            doc, _ = recover.readfile(tmp_path)
+    finally:
+        if tmp_path:
+            try:
+                _os.unlink(tmp_path)
+            except OSError:
+                pass
 
     msp = doc.modelspace()
     all_text, stats = _collect_text(msp)
@@ -502,27 +511,47 @@ def api_dxf_schedule_debug(review_id):
 
     x_min, y_min, x_max, y_max = extents
     dw = x_max - x_min
+    dh = y_max - y_min
     sched_x_min = x_min + dw * layout.schedule_x_min_frac
     sched_text  = [t for t in all_text if t['x'] >= sched_x_min and not t.get('from_block')]
 
-    all_rows   = _group_rows(sched_text, tol_frac=layout.row_tol_frac, extents=extents)
-    col_map    = _build_col_map(all_rows, extents, profile, diags)
-    comp_bounds = _build_comp_boundaries(all_rows, profile)
+    rows = _group_rows(sched_text, tol_frac=layout.sched_row_tol_frac, extents=extents)
+
+    # Find column header row (same logic as _extract_schedule)
+    header_idx = None
+    for idx, row in enumerate(rows):
+        row_text = ' '.join(t['text'] for t in row).upper()
+        if sum(1 for k in ('DIA', 'NOS', 'LENGTH') if k in row_text) >= 2:
+            header_idx = idx
+            break
+
+    if header_idx is None:
+        return jsonify({'error': 'Schedule column header row not found in DXF'}), 422
+
+    header_y = rows[header_idx][0]['y']
+    header_sub_rows = [row for row in rows if abs(row[0]['y'] - header_y) < dh * layout.header_band_frac]
+    col_map = _build_col_map(header_sub_rows)
+
+    if not col_map:
+        return jsonify({'error': 'Column map empty — no known header keywords matched'}), 422
+
+    data_rows   = rows[header_idx + 1:]
+    comp_bounds = _build_comp_boundaries(data_rows, profile)
     comp_by_idx = {}
     for idx, comp in comp_bounds:
         comp_by_idx[idx] = comp
 
-    # Build a simple idx→comp lookup covering all rows
+    # Build a simple idx→comp lookup covering data_rows
     current_comp = 'unknown'
     row_comp = {}
-    for i, row in enumerate(all_rows):
+    for i, row in enumerate(data_rows):
         if i in comp_by_idx:
             current_comp = comp_by_idx[i]
         row_comp[i] = current_comp
 
-    # Identify bar mark rows and their row ranges (same logic as _extract_schedule Pass 1)
+    # Identify bar mark rows and their row indices within data_rows
     bm_row_idxs = {}  # bar_mark → list of row indices where that mark appears
-    for i, row in enumerate(all_rows):
+    for i, row in enumerate(data_rows):
         for cell in row:
             s = cell['text'].strip().strip("'\"").lower()
             if _is_bar_mark_token(s):
@@ -546,9 +575,9 @@ def api_dxf_schedule_debug(review_id):
         # Determine row range: from first mark row to just before next mark
         first_row  = min(mark_rows)
         next_marks = [r for (_, rs) in bm_row_list[idx_in_list+1:] for r in rs]
-        last_row   = (min(next_marks) - 1) if next_marks else len(all_rows) - 1
+        last_row   = (min(next_marks) - 1) if next_marks else len(data_rows) - 1
 
-        bar_rows = all_rows[first_row:last_row + 1]
+        bar_rows = data_rows[first_row:last_row + 1]
         comp     = row_comp.get(first_row, 'unknown')
 
         # Gather all text items in range and assign to nearest column

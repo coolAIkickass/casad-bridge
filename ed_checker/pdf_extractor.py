@@ -236,7 +236,14 @@ b) SPACING — Detailed spacing analysis for each cross-section:
    ]
    Also set "spacing_uniform": false if spacing_issues is non-empty, true if empty.
 
-c) ERRONEOUS BOXES: Skip — always return [].
+c) ERRONEOUS BOXES — scan for rectangular outlines accidentally left on the drawing:
+- Unlabeled, empty rectangles with no structural content (bars, hatching, dimensions) inside
+- A callout box ("DETAILS A" etc.) whose boundary clearly overlaps or cuts into an adjacent view
+- Any isolated rectangle that does not match the boundary of any labeled view, plan, or table
+Do NOT flag: standard view borders, table grid lines, title block border, drawing border, or
+any rectangle that encloses recognisable structural drawing content.
+Return each stray box as: {{"description": "...", "bbox": {{"x":...,"y":...,"w":...,"h":...}}}}
+Empty [] if none found.
 
 CHECK 6 — Unlabeled views
 The following section labels are confirmed present in this drawing (extracted from PDF text):
@@ -263,7 +270,9 @@ Return ONLY valid JSON (no markdown):
   "cross_section_checks": [
     {{"section_name": "Z-Z", "component": "pile", "bar_mark": "x", "visual_count": 21, "is_bundle": true, "spacing_uniform": true, "spacing_issues": [], "bbox": {{"x":5,"y":60,"w":18,"h":15}}}}
   ],
-  "erroneous_boxes": [],
+  "erroneous_boxes": [
+    {{"description": "Unlabeled empty rectangle overlapping SECTION A-A", "bbox": {{"x":5,"y":10,"w":12,"h":8}}}}
+  ],
   "unlabeled_views": [
     {{"description": "Cross-section view for cut letter D is drawn but has no SECTION D-D title label", "bbox": {{"x":30,"y":10,"w":12,"h":15}}}}
   ]
@@ -278,22 +287,10 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
 
     text_data        = _extract_text(pdf_bytes)
 
-    # Build the dynamic review prompt — inject pdfplumber-extracted labels into placeholders.
     section_labels   = text_data.get('all_label_text', [])
     cut_letters      = text_data.get('cut_letters', set())
     section_view_pos = text_data.get('section_view_positions', {})
     text_missing     = _text_missing_sections(cut_letters, section_view_pos)
-
-    label_block = '\n'.join(f'  • {l}' for l in section_labels) or '  (none extracted)'
-    unresolved_block = (
-        '\n'.join(f'  • Cut letter "{m["cut_letter"]}" → {m["missing_section"]} not found'
-                  for m in text_missing)
-        or '  (none — all cut letters resolved)'
-    )
-    review_prompt = REVIEW_PROMPT_TEMPLATE.format(
-        SECTION_LABELS=label_block,
-        UNRESOLVED_CUTS=unresolved_block,
-    )
 
     # Full-page image at 2.0× for the review pass.
     # 1.3× made section circles ~150 px in diameter — too small to count bundle bar pairs
@@ -373,8 +370,8 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
                                      max_images=len(shape_band_images))
             f_title    = pool.submit(_call_vision, title_images, TITLE_PROMPT,
                                      REVIEW_MODEL, 4096)
-            f_review   = pool.submit(_call_vision, full_images_b64, review_prompt,
-                                     REVIEW_MODEL, 8192)
+            f_review   = pool.submit(run_review_vision, pdf_bytes,
+                                     section_labels, text_missing, full_images_b64)
             schedule_data = f_schedule.result()
             title_data    = f_title.result()
             review_data   = f_review.result()
@@ -447,6 +444,31 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
             result['notes'][key] = val
 
     return result
+
+
+def run_review_vision(pdf_bytes: bytes, section_labels: list,
+                      missing_referenced_sections: list,
+                      images_b64: list = None) -> dict | None:
+    """
+    Run the visual review pass (CHECK 3–6) against the PDF image.
+    Returns raw review_data dict from Claude, or None if API key absent / call fails.
+    section_labels: list of label strings (e.g. keys of section_view_positions).
+    missing_referenced_sections: list of dicts from _text_missing_sections().
+    images_b64: pre-rendered images to avoid double-rendering (optional; PDF path passes these).
+    """
+    label_block = '\n'.join(f'  • {l}' for l in section_labels) or '  (none extracted)'
+    unresolved_block = (
+        '\n'.join(
+            f'  • Cut letter "{m["cut_letter"]}" → {m["missing_section"]} not found'
+            for m in (missing_referenced_sections or [])
+        ) or '  (none — all cut letters resolved)'
+    )
+    review_prompt = REVIEW_PROMPT_TEMPLATE.format(
+        SECTION_LABELS=label_block,
+        UNRESOLVED_CUTS=unresolved_block,
+    )
+    imgs = images_b64 if images_b64 is not None else _pdf_to_image_b64(pdf_bytes, scale=2.0)
+    return _call_vision(imgs, review_prompt, REVIEW_MODEL, 8192)
 
 
 # ── pdfplumber text pass ──────────────────────────────────────────────────────

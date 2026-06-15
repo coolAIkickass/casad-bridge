@@ -10,7 +10,7 @@ import re
 import logging
 from .excel_parser import parse_e2e_excel
 from .pdf_extractor import extract_from_drawing, _extract_text as _pdf_extract_text
-from .pdf_extractor import _text_missing_sections
+from .pdf_extractor import _text_missing_sections, run_review_vision
 from .comparator import compare
 
 log = logging.getLogger(__name__)
@@ -234,6 +234,25 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
     cut_letters      = drawing_data.get('cut_letters', set())
     sv_pos           = drawing_data.get('section_view_positions', {})
     drawing_data['missing_referenced_sections'] = _text_missing_sections(cut_letters, sv_pos)
+
+    # Run the visual review pass (CHECK 3–6) even in DXF path.
+    # DXF text extraction cannot detect unlabeled views, stray boxes,
+    # missing dimensions, or label/annotation quality issues.
+    try:
+        _section_labels = sorted(drawing_data.get('section_view_positions', {}).keys())
+        _missing_secs   = drawing_data.get('missing_referenced_sections', [])
+        review_data = run_review_vision(pdf_bytes, _section_labels, _missing_secs)
+        if review_data:
+            drawing_data['label_issues']         = review_data.get('label_issues')         or []
+            drawing_data['dimension_issues']     = review_data.get('dimension_issues')     or []
+            drawing_data['cross_section_checks'] = (
+                drawing_data.get('cross_section_checks') or
+                review_data.get('cross_section_checks') or []
+            )
+            drawing_data['erroneous_boxes']      = review_data.get('erroneous_boxes')      or []
+            drawing_data['unlabeled_views']      = review_data.get('unlabeled_views')      or []
+    except Exception as e:
+        log.warning('DXF path: review vision call failed: %s', e)
 
     vision_ran = bool(drawing_data.get('schedule'))
     return drawing_data, vision_ran

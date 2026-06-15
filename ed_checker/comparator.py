@@ -405,7 +405,8 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
     issues = []
     num_piles = int((design.get('geometry') or {}).get('pile_count') or 1)
     # Spacing can only be flagged as missing if the extraction path reads a c/c column
-    spacing_capable = (capabilities or {}).get('spacing', True)
+    spacing_capable    = (capabilities or {}).get('spacing', True)
+    shape_dims_capable = (capabilities or {}).get('shape_dims', True)
 
     component_map = {
         'pilecap': design.get('pilecap_bbs', {}),
@@ -483,13 +484,14 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
             is_ring = bool(d_bar.get('spacing_mm'))
             issues += _compare_bar(bm, comp, d_bar, drawing_bar, zone, design_bars, bar_bbox,
                                    is_ring=is_ring, num_piles=num_piles,
-                                   spacing_capable=spacing_capable)
+                                   spacing_capable=spacing_capable,
+                                   shape_dims_capable=shape_dims_capable)
 
     return issues
 
 
 def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, bar_bbox=None,
-                 is_ring=False, num_piles=1, spacing_capable=True):
+                 is_ring=False, num_piles=1, spacing_capable=True, shape_dims_capable=True):
     issues = []
     prefix = f"Bar '{bm}' ({comp})"
 
@@ -661,11 +663,11 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
 
     # Bar shape dimension check.
     # Excel stores shape dims in metres; drawing schedule shows them in mm → convert × 1000.
-    # Use best-match (sorted) pairing instead of positional zip — robust to Claude returning
-    # segments in a different order or including an extra misread value.
+    # Use best-match (sorted) pairing: for each Excel dim find closest drawing dim.
+    # Extra drawing dims with no Excel counterpart are ignored (rule: only check Excel dims).
     d_shape_dims = design_bar.get('shape_dims')
     w_shape_dims = drawing_bar.get('shape_dimensions')
-    if d_shape_dims and w_shape_dims and isinstance(w_shape_dims, list):
+    if shape_dims_capable and d_shape_dims and w_shape_dims and isinstance(w_shape_dims, list):
         d_vals_mm = sorted(
             v * 1000
             for d in d_shape_dims
@@ -955,10 +957,19 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
                 'x': x, 'y': y, 'width': w, 'height': h,
             })
 
-    # Erroneous box detection disabled for MVP — produces too many false positives
-    # on drawings where rectangular borders around views are intentional.
-    # Re-enable by restoring the loop here and the CHECK 5c prompt section.
-    # for eb in erroneous_boxes: ...
+    for eb in (erroneous_boxes or []):
+        desc = eb.get('description') or 'A stray rectangular outline is present on the drawing.'
+        bbox = eb.get('bbox')
+        x, y, w, h = _bbox('default', bbox)
+        issues.append({
+            'category':    'Drawing Quality',
+            'title':       'Stray box / erroneous outline',
+            'description': desc,
+            'suggestion':  'Remove the stray outline, or label it if it is an intentional view boundary.',
+            'severity':    'error',
+            'page_num':    1,
+            'x': x, 'y': y, 'width': w, 'height': h,
+        })
 
     return issues
 

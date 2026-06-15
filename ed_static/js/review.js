@@ -79,12 +79,41 @@ async function renderPage(num) {
   renderHighlights(num);
 }
 
-// ── Highlights (disabled for MVP — marker positions too inaccurate) ──────────
+// ── Highlights ───────────────────────────────────────
 
 function renderHighlights(pageNum) {
-  // Highlight overlay disabled: boxes on the drawing confuse users when
-  // coordinates are off. Re-enable by restoring the body of this function.
-  if (hlLayer) hlLayer.innerHTML = '';
+  if (!hlLayer) return;
+  hlLayer.innerHTML = '';
+  hlLayer.style.width  = canvas.width  + 'px';
+  hlLayer.style.height = canvas.height + 'px';
+
+  const filtered = visibleIssues();
+  let globalNum = 0;
+  filtered.forEach((issue) => {
+    globalNum++;
+    const issuePage = issue.page_num || 1;
+    if (issuePage !== pageNum) return;
+    if (!issue.width || !issue.height) return;
+
+    const el = document.createElement('div');
+    const isSelected = issue.id === selectedId;
+    const isResolved = issue.status === 'resolved';
+    el.className = `highlight sev-${issue.severity}${isResolved ? ' resolved' : ''}${isSelected ? ' selected' : ''}`;
+    el.dataset.id  = String(issue.id);
+    el.dataset.num = globalNum;
+
+    el.style.left   = pct(issue.x,      canvas.width)  + 'px';
+    el.style.top    = pct(issue.y,      canvas.height) + 'px';
+    el.style.width  = pct(issue.width,  canvas.width)  + 'px';
+    el.style.height = pct(issue.height, canvas.height) + 'px';
+
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectIssue(issue.id);
+    });
+
+    hlLayer.appendChild(el);
+  });
 }
 
 function pct(val, dim) { return val / 100 * dim; }
@@ -196,11 +225,10 @@ function buildCard(issue, num) {
     ${issue.suggestion ? `<div class="issue-suggestion">What to do: ${issue.suggestion}</div>` : ''}
   `;
 
-  // Click-to-jump disabled (no highlights shown); only resolve button is active.
-  // card.addEventListener('click', (e) => {
-  //   if (e.target.closest('.resolve-btn')) return;
-  //   goToIssue(issue.id, issue.page_num);
-  // });
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('.resolve-btn')) return;
+    goToIssue(issue.id, issue.page_num || 1);
+  });
   card.querySelector('.resolve-btn').addEventListener('click', (e) => {
     e.stopPropagation();
     toggleResolve(issue.id);
@@ -220,8 +248,9 @@ function updateSummary() {
 
 function selectIssue(id) {
   selectedId = id;
+  const strId = String(id);
   document.querySelectorAll('.highlight').forEach(el => {
-    el.classList.toggle('selected', el.dataset.id === id);
+    el.classList.toggle('selected', el.dataset.id === strId);
   });
   if (!id) return;
   const card = document.querySelector(`.issue-card[data-id="${id}"]`);
@@ -253,8 +282,9 @@ function goToIssue(id, pageNum) {
 }
 
 function highlightSelected(id) {
+  const strId = String(id);
   document.querySelectorAll('.highlight').forEach(el => {
-    el.classList.toggle('selected', el.dataset.id === id);
+    el.classList.toggle('selected', el.dataset.id === strId);
   });
 }
 

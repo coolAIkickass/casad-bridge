@@ -272,7 +272,6 @@ function buildCard(issue, num) {
     </div>
     ${cmpHtml}
     <div class="issue-desc">${issue.description}</div>
-    ${issue.suggestion ? `<div class="issue-suggestion">What to do: ${issue.suggestion}</div>` : ''}
   `;
 
   card.addEventListener('click', (e) => {

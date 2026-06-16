@@ -501,24 +501,6 @@ button { cursor: pointer; font: inherit; }
   z-index: 10;
 }
 
-/* Number badge */
-.highlight::before {
-  content: attr(data-num);
-  position: absolute;
-  top: -16px;
-  left: 0;
-  font-size: 10px; font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 3px;
-  color: white;
-  line-height: 1.6;
-  pointer-events: none;
-  white-space: nowrap;
-}
-.highlight.sev-error::before   { background: rgba(220,38,38,.9); }
-.highlight.sev-warning::before { background: rgba(217,119,6,.9); }
-.highlight.resolved::before    { background: var(--text-faint); }
-.highlight.selected::before    { background: #7c3aed; }
 
 /* Issue Panel */
 .issue-panel {

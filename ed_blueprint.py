@@ -567,7 +567,7 @@ def api_dxf_schedule_debug(review_id):
                         'count', 'length_m', 'total_length_m', 'unit_wt_kg_m', 'total_wt_kg']
 
     result = {}
-    bm_row_list = sorted(bm_row_idxs.items())
+    bm_row_list = sorted(bm_row_idxs.items(), key=lambda kv: min(kv[1]))
     for idx_in_list, (bm, mark_rows) in enumerate(bm_row_list):
         if filter_marks and bm not in filter_marks:
             continue

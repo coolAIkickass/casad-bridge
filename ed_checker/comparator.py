@@ -703,7 +703,11 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
             closest_idx = corrected_w.index(closest_corrected)
             remaining_w.pop(closest_idx)
             diff = _pct_diff(d_mm, closest_corrected)
-            if diff and diff > 2:
+            # >55% diff means no drawing dim is plausibly the same segment as the design dim.
+            # Most likely the design dim is an AutoCAD DIMENSION entity (unreadable by text
+            # extraction) and the closest match is an unrelated annotation (hook length, etc.).
+            # Real transcription errors are <30%; skip rather than generate a misleading alert.
+            if diff and 2 < diff <= 55:
                 issues.append(_issue(
                     'Bar Shape',
                     f"{prefix}: Bar shape dimension mismatch — design {d_mm:.0f}mm, drawing {closest_corrected:.0f}mm",

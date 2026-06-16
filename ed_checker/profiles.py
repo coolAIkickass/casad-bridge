@@ -126,7 +126,7 @@ PPP_PROFILE = DrawingTypeProfile(
     },
     note_string_patterns={
         'steel_grade':               r'\b(Fe\s*\d+|FE\s*\d+|HYSD|TMT)\b',
-        'lap_length_concrete_grade': r'LAP\s+LENGTH\s+FOR\s+BAR\s+FOR\s+(M\d+)',
+        'lap_length_concrete_grade': r'LAP\s+LENGTH\b[^.!?\n]{0,120}?\b(M\d+)\b',
     },
     concrete_grade_keywords=('M30', 'M35', 'M40', 'M45', 'M50'),
     bar_mark_comp_fallback={

@@ -1268,6 +1268,8 @@ def _extract_notes(all_text: list, extents: tuple,
 
     full_text = ' '.join(t['text'] for t in scan)
     full_upper = full_text.upper()
+    log.info('Notes scan: anchor=%r items=%d text_preview=%r',
+             notes_anchor and notes_anchor['text'], len(scan), full_text[:200])
 
     # Numeric note values (pile length, fixity, dia, …) — first non-None capture group
     for key, pattern in profile.note_float_patterns.items():
@@ -2279,19 +2281,25 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
     except Exception:
         return []
 
-    max_dot_r   = dh * profile.layout.dot_max_r_frac
-    min_sec_r   = dh * 0.03   # ≥3% of sheet height — eliminates annotation rings
+    # Section boundary circles: radius ≥ 100mm (absolute floor).
+    # dot_max_r_frac (5% of sheet height = ~500mm on a 10m drawing) is the WRONG
+    # threshold here — a 750mm pile has radius 375mm < 500mm and would be excluded.
+    # Rebar dots in CASAD DXFs are ~5–20mm radius, so 100mm comfortably excludes them.
+    min_sec_r = max(100.0, dh * 0.005)
 
     section_rings = [
         c for c in circles
-        if c['r'] > max_dot_r and c['r'] > min_sec_r and c['x'] < view_x_max
+        if c['r'] >= min_sec_r and c['x'] < view_x_max
     ]
+    log.info('Unlabeled-circle scan: %d candidate rings (r≥%.0f) in views area',
+             len(section_rings), min_sec_r)
     if not section_rings:
         return []
 
-    # Search for a TRIGGER_WORD label within 20% of sheet height of the circle centre.
-    # 20% is large enough to catch labels placed above or below the circle.
-    label_r = dh * 0.20
+    # Search for a TRIGGER_WORD label within 10% of sheet height of the circle centre.
+    # Constrained to the views area (x < view_x_max) so schedule-side text like
+    # "REINFORCEMENT SCHEDULE" doesn't falsely count as a nearby label.
+    label_r = dh * 0.10
 
     unlabeled = []
     for c in section_rings:
@@ -2299,14 +2307,15 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
             t for t in all_text
             if abs(t['x'] - c['x']) < label_r
             and abs(t['y'] - c['y']) < label_r
+            and t['x'] < view_x_max
             and not (t.get('from_block') and not t.get('is_attrib'))
             and any(tw in t['text'].upper() for tw in TRIGGER_WORDS)
         ]
+        x_pct = round((c['x'] - x_min) / dw * 100, 1)
+        y_pct = round((y_max - c['y']) / dh * 100, 1)
         if not nearby:
             bbox = _to_bbox(c['x'] - c['r'], c['y'] + c['r'],
                             c['x'] + c['r'], c['y'] - c['r'], extents)
-            x_pct = round((c['x'] - x_min) / dw * 100, 1)
-            y_pct = round((y_max - c['y']) / dh * 100, 1)
             log.info('Unlabeled section circle at %.1f%%,%.1f%% (r=%.0f) — no label within %.0f units',
                      x_pct, y_pct, c['r'], label_r)
             unlabeled.append({
@@ -2319,6 +2328,10 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
                 ),
                 'bbox': bbox,
             })
+        else:
+            log.info('Circle at %.1f%%,%.1f%% (r=%.0f) — labeled by: %s',
+                     x_pct, y_pct, c['r'],
+                     [t['text'][:40] for t in nearby[:3]])
     return unlabeled
 
 
@@ -2346,10 +2359,11 @@ def _detect_missing_detail_refs(all_text: list,
         return []
 
     confirmed = ' '.join(section_view_positions.keys()).upper()
+    log.info('Detail-ref scan: found references=%s; confirmed view labels: %s',
+             sorted(refs), list(section_view_positions.keys())[:10])
     missing = []
     for letter in sorted(refs):
-        # "DETAIL A" must appear as a standalone label, not just inside "DETAILS A"
-        if re.search(rf'\bDETAIL\s+{letter}\b', confirmed):
+        if re.search(rf'\bDETAILS?\s+{letter}\b', confirmed):
             continue
         log.info('DETAIL %s referenced in drawing text but no view label confirmed', letter)
         missing.append({

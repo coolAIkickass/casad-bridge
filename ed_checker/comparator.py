@@ -340,8 +340,9 @@ def _check_notes(notes: dict, design: dict) -> list:
     notes_bbox = notes.get('bbox')  # Claude's estimated bbox for the notes area
 
     # Lap length concrete grade vs pile concrete grade
-    lap_grade = notes.get('lap_length_concrete_grade')
+    lap_grade  = notes.get('lap_length_concrete_grade')
     pile_grade = notes.get('concrete_pile')
+    log.info('Notes check: lap_length_concrete_grade=%r concrete_pile=%r', lap_grade, pile_grade)
     if lap_grade and pile_grade:
         if lap_grade.upper() != pile_grade.upper():
             issues.append(_issue(
@@ -351,6 +352,10 @@ def _check_notes(notes: dict, design: dict) -> list:
                 f'Update lap length table to reference {pile_grade} concrete.',
                 'error', zone, notes_bbox
             ))
+        else:
+            log.info('Notes: lap grade %r matches pile grade %r — no issue', lap_grade, pile_grade)
+    elif lap_grade and not pile_grade:
+        log.info('Notes: lap_grade=%r found but concrete_pile not extracted — skipping comparison', lap_grade)
     elif not lap_grade:
         issues.append(_issue(
             'Notes', 'Lap length concrete grade not found',

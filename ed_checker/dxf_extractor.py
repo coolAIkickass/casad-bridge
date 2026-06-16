@@ -227,7 +227,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     geometry_from_drawing = _classify_all_dims(msp, extents, u2mm)
     multileader_callouts  = _extract_multileader_callouts(msp, extents)
     # Programmatic unlabeled-view and missing-detail detection (runs before del msp).
-    unlabeled_circles   = _detect_unlabeled_section_circles(msp, all_text, extents, sv_pos, profile)
+    unlabeled_circles   = _detect_unlabeled_section_circles(msp, all_text, extents, sv_pos, profile, u2mm)
     missing_detail_refs = _detect_missing_detail_refs(all_text, sv_pos)
 
     # ezdxf doc and modelspace are done — all data now lives in plain Python dicts.
@@ -1248,10 +1248,11 @@ def _extract_notes(all_text: list, extents: tuple,
     layout = profile.layout
     notes = {}
 
-    # Find the NOTES section label
+    # Find the NOTES section label — use startswith so "NOTES:", "GENERAL NOTES :" match.
     notes_anchor = None
     for t in all_text:
-        if t['text'].strip().upper() in ('NOTES', 'NOTE', 'GENERAL NOTES'):
+        tu = t['text'].strip().upper()
+        if any(tu.startswith(kw) for kw in ('NOTES', 'NOTE', 'GENERAL NOTES')):
             notes_anchor = t
             break
 
@@ -1266,10 +1267,17 @@ def _extract_notes(all_text: list, extents: tuple,
         # Fall back: scan the views (left) portion of the drawing
         scan = [t for t in all_text if t['x'] < x_min + (x_max - x_min) * layout.views_x_max_frac]
 
-    full_text = ' '.join(t['text'] for t in scan)
+    # Build full_text preserving per-line structure using DXF y-coordinates.
+    # ' '.join() produces one flat string with no \n, so split('\n') was a no-op.
+    # Real line breaks let the grade extraction loop correctly exclude LAP-table lines.
+    rows = _group_rows(scan, tol_frac=0.005, extents=extents)
+    full_text = '\n'.join(
+        ' '.join(t['text'] for t in sorted(r, key=lambda t: t['x']))
+        for r in rows
+    )
     full_upper = full_text.upper()
-    log.info('Notes scan: anchor=%r items=%d text_preview=%r',
-             notes_anchor and notes_anchor['text'], len(scan), full_text[:200])
+    log.info('Notes scan: anchor=%r rows=%d text_preview=%r',
+             notes_anchor and notes_anchor['text'], len(rows), full_text[:300])
 
     # Numeric note values (pile length, fixity, dia, …) — first non-None capture group
     for key, pattern in profile.note_float_patterns.items():
@@ -1289,10 +1297,17 @@ def _extract_notes(all_text: list, extents: tuple,
     # component qualifier (or whose component is already set) applies to all unset ones.
     # Only the profile's known grades match — a bare \bM\d+\b would pick up grid
     # labels like "M1" from annotation text.
+    # IMPORTANT: skip lines that contain "LAP" or "OVERLAP" — the lap length table header
+    # (e.g. "LAP LENGTHS FOR M35 CONCRETE") has no component qualifier, so the grade would
+    # fall into the "else: set all components" branch, making concrete_pile=M35 from the
+    # lap table — identical to lap_length_concrete_grade — so the comparison always matches.
     grade_re = re.compile(r'\b(' + '|'.join(profile.concrete_grade_keywords) + r')\b')
+    _lap_re  = re.compile(r'\b(LAP|OVERLAP)\b')
     comps_desc = profile.comps_longest_first()   # longest first: PILECAP before PILE
     for line in full_text.split('\n'):
         lu = line.upper()
+        if _lap_re.search(lu):
+            continue   # skip lap-table lines — grade here is the lap reference, not a component spec
         m = grade_re.search(lu)
         if not m:
             continue
@@ -1305,6 +1320,7 @@ def _extract_notes(all_text: list, extents: tuple,
             for comp in profile.components:
                 notes.setdefault(f'concrete_{comp}', grade)
 
+    log.info('Notes extracted: %s', {k: v for k, v in notes.items() if k != 'bbox'})
     notes['bbox'] = None
     return notes
 
@@ -2259,68 +2275,118 @@ def _find_bar_mark_for_section(comp: str, schedule: dict) -> str | None:
 
 def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
                                        section_view_positions: dict,
-                                       profile: DrawingTypeProfile = PPP_PROFILE) -> list:
+                                       profile: DrawingTypeProfile = PPP_PROFILE,
+                                       u2mm: float = 1.0) -> list:
     """
-    Find large CIRCLE entities (section view boundary rings, e.g. pile cross-sections)
-    in the views area that have no SECTION/PLAN/DETAIL label within proximity.
+    Find large circular boundary shapes (pile / pilecap cross-section rings) in the views
+    area that have no confirmed section-view label nearby.
     Returns [{description, bbox}] for unlabeled_views.
 
-    Distinguishes section boundary circles from rebar-dot circles by radius:
-    rebar dots have radius ≤ dot_max_r_frac × drawing_height; section rings are larger.
+    Looks for both CIRCLE primitives AND closed LWPOLYLINEs with roughly circular aspect
+    ratio — CASAD engineers most often draw pile sections as closed LWPOLYLINEs, not CIRCLE.
+
+    Labelling is checked against `section_view_positions` (already-confirmed section labels)
+    rather than raw TRIGGER_WORD text proximity.  TRIGGER_WORDS like 'LAP' and 'NOTES' appear
+    near sections and caused false "already labeled" judgements in the previous approach.
     """
     x_min, y_min, x_max, y_max = extents
     dw = x_max - x_min
     dh = y_max - y_min
     view_x_max = x_min + dw * profile.layout.views_x_max_frac
 
-    circles = []
+    # Minimum radius for a "section boundary" shape.
+    # 100mm absolute floor converted to drawing units via u2mm.
+    # Rebar dots in CASAD DXFs are 5–20mm radius; pile sections are 300–600mm radius.
+    min_sec_r = max(100.0 / u2mm, dh * 0.005)
+
+    rings = []   # {x, y, r, kind}
+
+    # --- CIRCLE primitives ---
     try:
         for e in msp.query('CIRCLE'):
-            c = e.dxf.center
-            circles.append({'x': float(c.x), 'y': float(c.y), 'r': float(e.dxf.radius)})
+            cx, cy, cr = float(e.dxf.center.x), float(e.dxf.center.y), float(e.dxf.radius)
+            if cr >= min_sec_r and cx < view_x_max:
+                rings.append({'x': cx, 'y': cy, 'r': cr, 'kind': 'circle'})
     except Exception:
+        pass
+
+    # --- Closed LWPOLYLINEs with roughly circular bounding box ---
+    # Engineers draw pile cross-sections as closed polylines far more often than as CIRCLE.
+    try:
+        for e in msp.query('LWPOLYLINE'):
+            if not e.is_closed:
+                continue
+            pts = list(e.get_points())
+            if len(pts) < 6:   # triangles / quads are structure details, not circles
+                continue
+            xs = [float(p[0]) for p in pts]
+            ys = [float(p[1]) for p in pts]
+            bx_min, bx_max = min(xs), max(xs)
+            by_min, by_max = min(ys), max(ys)
+            w = bx_max - bx_min
+            h = by_max - by_min
+            if w < 1e-6 or h < 1e-6:
+                continue
+            # Roughly circular = aspect ratio within 15%
+            if abs(w - h) / max(w, h) > 0.15:
+                continue
+            r_approx = (w + h) / 4   # average of half-width and half-height
+            if r_approx < min_sec_r:
+                continue
+            cx = (bx_min + bx_max) / 2
+            cy = (by_min + by_max) / 2
+            if cx < view_x_max:
+                rings.append({'x': cx, 'y': cy, 'r': r_approx, 'kind': 'lwpoly'})
+    except Exception:
+        pass
+
+    log.info('Unlabeled-view scan: %d candidate rings (CIRCLE+LWPOLY, r≥%.0f) in views area',
+             len(rings), min_sec_r)
+    if not rings:
         return []
 
-    # Section boundary circles: radius ≥ 100mm (absolute floor).
-    # dot_max_r_frac (5% of sheet height = ~500mm on a 10m drawing) is the WRONG
-    # threshold here — a 750mm pile has radius 375mm < 500mm and would be excluded.
-    # Rebar dots in CASAD DXFs are ~5–20mm radius, so 100mm comfortably excludes them.
-    min_sec_r = max(100.0, dh * 0.005)
+    # Check labelling by proximity to confirmed section-view labels in section_view_positions.
+    # These were already extracted and confirmed by _extract_section_info — using them
+    # avoids the false-positive problem where 'LAP', 'NOTES' TRIGGER_WORDS near the
+    # sections counted as "labels" when they are not actually section titles.
+    label_r = dh * 0.12   # 12% of sheet height — generous enough for labels above/below
 
-    section_rings = [
-        c for c in circles
-        if c['r'] >= min_sec_r and c['x'] < view_x_max
-    ]
-    log.info('Unlabeled-circle scan: %d candidate rings (r≥%.0f) in views area',
-             len(section_rings), min_sec_r)
-    if not section_rings:
-        return []
+    def _has_confirmed_label(c):
+        for label, bbox in section_view_positions.items():
+            # bbox is pct {x, y, width, height} from top-left — convert to DXF coords
+            lx = x_min + bbox['x'] / 100 * dw
+            ly = y_max - bbox['y'] / 100 * dh   # flip Y: PDF top-down → DXF bottom-up
+            if abs(lx - c['x']) < label_r and abs(ly - c['y']) < label_r:
+                return label
+        return None
 
-    # Search for a TRIGGER_WORD label within 10% of sheet height of the circle centre.
-    # Constrained to the views area (x < view_x_max) so schedule-side text like
-    # "REINFORCEMENT SCHEDULE" doesn't falsely count as a nearby label.
-    label_r = dh * 0.10
+    # Deduplicate rings — a pile drawn as both a CIRCLE and a LWPOLYLINE approximation
+    # would produce two entries at nearly the same position.  Keep the first one found.
+    seen_positions = []
+    unique_rings = []
+    for c in rings:
+        dup = any(abs(c['x'] - s['x']) < min_sec_r and abs(c['y'] - s['y']) < min_sec_r
+                  for s in seen_positions)
+        if not dup:
+            unique_rings.append(c)
+            seen_positions.append(c)
 
     unlabeled = []
-    for c in section_rings:
-        nearby = [
-            t for t in all_text
-            if abs(t['x'] - c['x']) < label_r
-            and abs(t['y'] - c['y']) < label_r
-            and t['x'] < view_x_max
-            and not (t.get('from_block') and not t.get('is_attrib'))
-            and any(tw in t['text'].upper() for tw in TRIGGER_WORDS)
-        ]
+    for c in unique_rings:
         x_pct = round((c['x'] - x_min) / dw * 100, 1)
         y_pct = round((y_max - c['y']) / dh * 100, 1)
-        if not nearby:
+        label = _has_confirmed_label(c)
+        if label:
+            log.info('Ring at %.1f%%,%.1f%% (r≈%.0f, %s) — confirmed label: %r',
+                     x_pct, y_pct, c['r'], c['kind'], label[:60])
+        else:
             bbox = _to_bbox(c['x'] - c['r'], c['y'] + c['r'],
                             c['x'] + c['r'], c['y'] - c['r'], extents)
-            log.info('Unlabeled section circle at %.1f%%,%.1f%% (r=%.0f) — no label within %.0f units',
-                     x_pct, y_pct, c['r'], label_r)
+            log.info('Unlabeled ring at %.1f%%,%.1f%% (r≈%.0f, %s) — no section label within %.0f units',
+                     x_pct, y_pct, c['r'], c['kind'], label_r)
             unlabeled.append({
                 'description': (
-                    f'A structural cross-section circle is drawn at approximately '
+                    f'A structural cross-section ring is drawn at approximately '
                     f'{x_pct}% across, {y_pct}% down the drawing but has no '
                     f'"SECTION X-X" or similar title label nearby. '
                     f'Add a section title (e.g. "SECTION Z-Z FOR PILE") directly '
@@ -2328,10 +2394,6 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
                 ),
                 'bbox': bbox,
             })
-        else:
-            log.info('Circle at %.1f%%,%.1f%% (r=%.0f) — labeled by: %s',
-                     x_pct, y_pct, c['r'],
-                     [t['text'][:40] for t in nearby[:3]])
     return unlabeled
 
 
@@ -2349,8 +2411,9 @@ def _detect_missing_detail_refs(all_text: list,
 
     refs: set = set()
     for t in all_text:
-        if t.get('from_block') and not t.get('is_attrib'):
-            continue
+        # Allow block TEXT through here — "DETAIL A" inside a callout block is genuine
+        # user text, not a glyph substitution like "O" for Ø.  The pattern is specific
+        # enough (requires "DETAIL" + space + single letter) to avoid false matches.
         m = detail_re.search(t['text'].upper())
         if m:
             refs.add(m.group(1))

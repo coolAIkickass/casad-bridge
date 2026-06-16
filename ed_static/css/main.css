@@ -482,22 +482,21 @@ button { cursor: pointer; font: inherit; }
   border-radius: 2px;
   box-sizing: border-box;
   transition: background .15s, border-color .15s;
-  background: transparent;   /* no fill by default — drawing stays fully readable */
 }
-.highlight.sev-error   { border: 1px dashed rgba(220,38,38,.45); }
-.highlight.sev-warning { border: 1px dashed rgba(217,119,6,.45); }
+.highlight.sev-error   { border: 2px solid rgba(220,38,38,.75); background: rgba(220,38,38,.10); }
+.highlight.sev-warning { border: 2px solid rgba(217,119,6,.75);  background: rgba(217,119,6,.10); }
 
-/* Hover: solid border + light fill so the region is clearly visible */
-.highlight.sev-error:hover   { border: 2px solid rgba(220,38,38,.85); background: rgba(220,38,38,.06); }
-.highlight.sev-warning:hover { border: 2px solid rgba(217,119,6,.85);  background: rgba(217,119,6,.06); }
+/* Hover: intensify */
+.highlight.sev-error:hover   { border-color: rgba(220,38,38,1);   background: rgba(220,38,38,.18); }
+.highlight.sev-warning:hover { border-color: rgba(217,119,6,1);   background: rgba(217,119,6,.18); }
 
 /* Resolved: faded dashed outline, no fill */
 .highlight.resolved { opacity: .3; border-style: dashed; background: transparent; }
 
-/* Selected (clicked): solid fill so it clearly stands out from all others */
+/* Selected (clicked): purple — distinct from red errors and blue UI */
 .highlight.selected {
-  border: 3px solid #7c3aed !important;   /* purple — distinct from red errors and blue UI */
-  background: rgba(124,58,237,.15) !important;
+  border: 3px solid #7c3aed !important;
+  background: rgba(124,58,237,.18) !important;
   z-index: 10;
 }
 
@@ -505,21 +504,16 @@ button { cursor: pointer; font: inherit; }
 .highlight::before {
   content: attr(data-num);
   position: absolute;
-  top: -14px;           /* float ABOVE the highlight box, not inside the drawing row */
-  left: 2px;
-  transform: none;
-  font-size: 9px; font-weight: 700;
-  padding: 0px 4px;
+  top: -16px;
+  left: 0;
+  font-size: 10px; font-weight: 700;
+  padding: 1px 5px;
   border-radius: 3px;
   color: white;
   line-height: 1.6;
   pointer-events: none;
   white-space: nowrap;
-  opacity: 0.4;         /* ghosted at rest so drawing text stays readable */
-  transition: opacity .15s;
 }
-.highlight:hover::before,
-.highlight.selected::before { opacity: 1; }   /* fully visible on hover / selection */
 .highlight.sev-error::before   { background: rgba(220,38,38,.9); }
 .highlight.sev-warning::before { background: rgba(217,119,6,.9); }
 .highlight.resolved::before    { background: var(--text-faint); }

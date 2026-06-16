@@ -3,7 +3,10 @@ Compare structured design input data vs extracted drawing data.
 Returns a list of issue dicts matching the DB schema.
 """
 import re
+import logging
 from .profiles import PPP_PROFILE
+
+log = logging.getLogger(__name__)
 
 _REINF_RE_DIA     = re.compile(r'(\d+)\s*[φΦ]', re.IGNORECASE)
 _REINF_RE_SPACING = re.compile(r'@\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*c/c', re.IGNORECASE)
@@ -869,21 +872,6 @@ def _check_notes_completeness(notes_completeness_from_text: list,
 
 # ── Label & annotation quality ────────────────────────────────────────────────
 
-# Phrases that indicate Claude is confirming something is correct OR making a style
-# observation — neither is an actionable issue.
-_LABEL_POSITIVE = (
-    'correctly used', 'correctly placed', 'appears correctly', 'appears correct',
-    'is correct', 'is fine', 'correctly formatted', 'correctly labeled',
-    'properly', 'no issue', 'is proper', 'is appropriate',
-    # Positive confirmations ("no errors found" type)
-    'no genuine', 'no errors detected', 'no spelling', 'no confirmed',
-    # Style/legibility observations about schedule density — not annotation errors
-    'difficult to cross-reference', 'small and difficult', 'hard to read',
-    'appears cut off or partially', 'appear cut off or partially',
-    'text is small', 'font size',
-)
-
-
 def _check_label_issues(label_issues: list, sections: list = None,
                          section_view_positions: dict = None) -> list:
     issues = []
@@ -891,8 +879,7 @@ def _check_label_issues(label_issues: list, sections: list = None,
         desc = li.get('description', '')
         if not desc:
             continue
-        if any(p in desc.lower() for p in _LABEL_POSITIVE):
-            continue  # Claude is confirming correct usage — not an issue
+        log.info('Label issue from Claude: %s', desc[:120])
         bbox = li.get('bbox') or _find_section_bbox(
             desc + ' ' + li.get('suggestion', ''), sections, section_view_positions
         )

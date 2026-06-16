@@ -239,22 +239,12 @@ b) SPACING — Detailed spacing analysis for each cross-section:
    Also set "spacing_uniform": false if spacing_issues is non-empty, true if empty.
 
 c) ERRONEOUS BOXES — scan for rectangular outlines accidentally left by the drafter:
-FLAG the following:
-- A rectangle that encloses an entire drawn structural/graphical component — a section view
-  (SECTION A-A, DETAIL A, SECTION Z-Z etc.), a plan view, an elevation view, or a cross-section
-  circle — with its dimensions and labels all inside the box. These boxes serve no purpose and
-  are accidentally left on the drawing.
-- Unlabeled, empty rectangles with no structural or data content inside.
-- A callout box whose boundary clearly overlaps or cuts into an adjacent view.
-
-Do NOT flag:
-- The outermost drawing sheet border.
-- Title block border/frame.
-- Boxes around data/tabular content: the reinforcement schedule table, TABLE-1 (levels table),
-  NOTES section, any data grid or legend.
-
-The key distinction: data/table boxes are intentional; boxes around drawn graphical/structural
-content are accidental drafter leftovers — always flag those.
+- Unlabeled, empty rectangles with no structural content (bars, hatching, dimensions) inside
+- A callout box ("DETAILS A" etc.) whose boundary clearly overlaps or cuts into an adjacent view
+- Any isolated rectangle that does not match the boundary of any labeled view, plan, or table
+Do NOT flag: standard view borders around labeled section/plan views, table grid lines,
+title block border, drawing sheet border, or any rectangle that encloses recognisable
+structural drawing content (reinforcement bars, dimensions, hatching).
 Return each stray box as: {{"description": "...", "bbox": {{"x":...,"y":...,"w":...,"h":...}}}}
 Empty [] if none found.
 

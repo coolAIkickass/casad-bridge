@@ -231,10 +231,17 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
             'severity': 'error',
         })
 
-    # Compute cut-mark cross-reference using merged cut_letters + section_view_positions
-    cut_letters      = drawing_data.get('cut_letters', set())
-    sv_pos           = drawing_data.get('section_view_positions', {})
-    drawing_data['missing_referenced_sections'] = _text_missing_sections(cut_letters, sv_pos)
+    # Compute cut-mark cross-reference using merged cut_letters + section_view_positions.
+    # Preserve any DXF-derived missing refs (e.g. DETAIL cross-references from
+    # _detect_missing_detail_refs) — append text-derived cut-letter refs without overwriting.
+    cut_letters  = drawing_data.get('cut_letters', set())
+    sv_pos       = drawing_data.get('section_view_positions', {})
+    text_missing = _text_missing_sections(cut_letters, sv_pos)
+    dxf_missing  = drawing_data.get('missing_referenced_sections') or []
+    already      = {m['missing_section'] for m in dxf_missing}
+    drawing_data['missing_referenced_sections'] = dxf_missing + [
+        m for m in text_missing if m['missing_section'] not in already
+    ]
 
     # Free DXF bytes — no longer needed after extraction; saves 25 MB before vision render.
     dxf_bytes = None
@@ -263,7 +270,10 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
                 review_data.get('cross_section_checks') or []
             )
             drawing_data['erroneous_boxes']      = review_data.get('erroneous_boxes')      or []
-            drawing_data['unlabeled_views']      = review_data.get('unlabeled_views')      or []
+            # Merge DXF-detected unlabeled circles with vision-detected unlabeled views.
+            _dxf_unlabeled    = drawing_data.get('unlabeled_views') or []
+            _vision_unlabeled = review_data.get('unlabeled_views')  or []
+            drawing_data['unlabeled_views'] = _dxf_unlabeled + _vision_unlabeled
         else:
             log.warning('DXF path: review vision returned None — visual checks (label quality, '
                         'unlabeled views, erroneous boxes) could not run')

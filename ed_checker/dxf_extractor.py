@@ -226,6 +226,9 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     xsec                = _count_cross_section_bars(msp, all_text, schedule, extents, profile, diags)
     geometry_from_drawing = _classify_all_dims(msp, extents, u2mm)
     multileader_callouts  = _extract_multileader_callouts(msp, extents)
+    # Programmatic unlabeled-view and missing-detail detection (runs before del msp).
+    unlabeled_circles   = _detect_unlabeled_section_circles(msp, all_text, extents, sv_pos, profile)
+    missing_detail_refs = _detect_missing_detail_refs(all_text, sv_pos)
 
     # ezdxf doc and modelspace are done — all data now lives in plain Python dicts.
     # Delete explicitly and gc to break cyclic entity refs (~100-200 MB) before returning.
@@ -276,6 +279,10 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
         raw_text=[t['text'] for t in all_text],
         geometry_from_drawing=geometry_from_drawing,
         multileader_callouts=multileader_callouts,
+        # DXF-derived unlabeled section circles — merged with vision results in __init__.py
+        unlabeled_views=unlabeled_circles,
+        # DXF-derived missing DETAIL refs — __init__.py appends cut-letter missing sections
+        missing_referenced_sections=missing_detail_refs,
     )
 
 
@@ -2244,6 +2251,114 @@ def _find_bar_mark_for_section(comp: str, schedule: dict) -> str | None:
             return bm
     # All bars have spacing (unusual) — fall back to first bar
     return next(iter(schedule[comp]))
+
+
+# ── Programmatic unlabeled-view and missing-detail detection ─────────────────
+
+def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
+                                       section_view_positions: dict,
+                                       profile: DrawingTypeProfile = PPP_PROFILE) -> list:
+    """
+    Find large CIRCLE entities (section view boundary rings, e.g. pile cross-sections)
+    in the views area that have no SECTION/PLAN/DETAIL label within proximity.
+    Returns [{description, bbox}] for unlabeled_views.
+
+    Distinguishes section boundary circles from rebar-dot circles by radius:
+    rebar dots have radius ≤ dot_max_r_frac × drawing_height; section rings are larger.
+    """
+    x_min, y_min, x_max, y_max = extents
+    dw = x_max - x_min
+    dh = y_max - y_min
+    view_x_max = x_min + dw * profile.layout.views_x_max_frac
+
+    circles = []
+    try:
+        for e in msp.query('CIRCLE'):
+            c = e.dxf.center
+            circles.append({'x': float(c.x), 'y': float(c.y), 'r': float(e.dxf.radius)})
+    except Exception:
+        return []
+
+    max_dot_r   = dh * profile.layout.dot_max_r_frac
+    min_sec_r   = dh * 0.03   # ≥3% of sheet height — eliminates annotation rings
+
+    section_rings = [
+        c for c in circles
+        if c['r'] > max_dot_r and c['r'] > min_sec_r and c['x'] < view_x_max
+    ]
+    if not section_rings:
+        return []
+
+    # Search for a TRIGGER_WORD label within 20% of sheet height of the circle centre.
+    # 20% is large enough to catch labels placed above or below the circle.
+    label_r = dh * 0.20
+
+    unlabeled = []
+    for c in section_rings:
+        nearby = [
+            t for t in all_text
+            if abs(t['x'] - c['x']) < label_r
+            and abs(t['y'] - c['y']) < label_r
+            and not (t.get('from_block') and not t.get('is_attrib'))
+            and any(tw in t['text'].upper() for tw in TRIGGER_WORDS)
+        ]
+        if not nearby:
+            bbox = _to_bbox(c['x'] - c['r'], c['y'] + c['r'],
+                            c['x'] + c['r'], c['y'] - c['r'], extents)
+            x_pct = round((c['x'] - x_min) / dw * 100, 1)
+            y_pct = round((y_max - c['y']) / dh * 100, 1)
+            log.info('Unlabeled section circle at %.1f%%,%.1f%% (r=%.0f) — no label within %.0f units',
+                     x_pct, y_pct, c['r'], label_r)
+            unlabeled.append({
+                'description': (
+                    f'A structural cross-section circle is drawn at approximately '
+                    f'{x_pct}% across, {y_pct}% down the drawing but has no '
+                    f'"SECTION X-X" or similar title label nearby. '
+                    f'Add a section title (e.g. "SECTION Z-Z FOR PILE") directly '
+                    f'below or above this view.'
+                ),
+                'bbox': bbox,
+            })
+    return unlabeled
+
+
+def _detect_missing_detail_refs(all_text: list,
+                                 section_view_positions: dict) -> list:
+    """
+    If "DETAIL A" / "DETAILS A" callout text appears in the drawing but no
+    corresponding view label "DETAIL A" exists in section_view_positions,
+    flag as a missing referenced section.
+
+    Returns [{cut_letter, found_on_view, missing_section, bbox}] suitable for
+    _check_cut_mark_references in the comparator.
+    """
+    detail_re = re.compile(r'\bDETAIL[S]?\s+([A-Z])\b')
+
+    refs: set = set()
+    for t in all_text:
+        if t.get('from_block') and not t.get('is_attrib'):
+            continue
+        m = detail_re.search(t['text'].upper())
+        if m:
+            refs.add(m.group(1))
+
+    if not refs:
+        return []
+
+    confirmed = ' '.join(section_view_positions.keys()).upper()
+    missing = []
+    for letter in sorted(refs):
+        # "DETAIL A" must appear as a standalone label, not just inside "DETAILS A"
+        if re.search(rf'\bDETAIL\s+{letter}\b', confirmed):
+            continue
+        log.info('DETAIL %s referenced in drawing text but no view label confirmed', letter)
+        missing.append({
+            'cut_letter':      letter,
+            'found_on_view':   f'callout reference "DETAIL {letter}" in drawing',
+            'missing_section': f'DETAIL {letter}',
+            'bbox':            None,
+        })
+    return missing
 
 
 # ── Completeness checks ───────────────────────────────────────────────────────

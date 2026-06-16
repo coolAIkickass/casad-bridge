@@ -176,7 +176,6 @@ Flag GENUINE ERRORS ONLY:
 - Bar mark labels in section views that don't match the schedule
 - Scale labels that are clearly inconsistent with each other
 - Any label that clearly points to the wrong component
-- Text that is obviously truncated or cut off
 - Concrete grade mismatch: if a section view or plan view has a concrete grade annotation
   (e.g. "M35", "M50") directly labelled on the structural drawing, cross-check it against
   the grade stated in the NOTES section of the same drawing. If they differ, flag it.
@@ -186,6 +185,9 @@ STRICT EXCLUSIONS — do NOT flag any of the following:
 - "BUNDLE BARS" — correct engineering term; do not flag as grammar issue.
 - Dimension values, units, or notation styles that follow standard structural drawing conventions.
 - Text density, font size, or legibility observations about schedule tables.
+- Long NOTES section sentences (e.g. "SCHEDULE OF REINFORCEMENT IS ONLY FOR GUIDANCE...") that
+  appear to end mid-word at a line boundary — AutoCAD MTEXT word-wraps long text and the continuation
+  appears in the next line or entity. Do NOT flag these as truncated text.
 Only report items you are CERTAIN are incorrect. When in doubt, omit.
 
 CHECK 4 — Dimension completeness (MISSING DIMENSIONS ONLY)

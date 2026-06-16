@@ -324,16 +324,6 @@ def _check_title_block(tb: dict, design: dict) -> list:
             'error', zone, tb_bbox
         ))
 
-    # Scale check
-    scale = tb.get('scale', '')
-    if scale and scale.upper() not in ('AS SHOWN', 'NTS') and not re.match(r'1\s*:\s*\d+', scale):
-        issues.append(_issue(
-            'Title Block', f'Scale value unusual: "{scale}"',
-            f'Scale field shows "{scale}". Expected "AS SHOWN" or a ratio like "1:50".',
-            'Verify scale field.',
-            'error', zone, tb_bbox
-        ))
-
     return issues
 
 

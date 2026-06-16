@@ -181,9 +181,6 @@ function renderIssuePanel() {
       body.appendChild(buildCard(issue, globalNum));
     });
 
-    // First time this category appears: default first group open, rest closed.
-    // After that, honour whatever state the user left it in.
-    if (!expandedCategories.has(cat) && groupIndex === 0) expandedCategories.add(cat);
     const isExpanded = expandedCategories.has(cat);
     if (!isExpanded) body.style.display = 'none';
 
@@ -207,11 +204,63 @@ function renderIssuePanel() {
   });
 }
 
+// ── Comparison widget ────────────────────────────────
+// Extracts design vs drawing value pairs from prose descriptions for visual display.
+function extractComparison(desc) {
+  let m;
+
+  // Geometric: "X drawn as 750mm but design specifies 1800mm"
+  m = desc.match(/drawn as ([\d,\.]+\s*mm) but design specifies ([\d,\.]+\s*mm)/i);
+  if (m) return { design: m[2], drawing: m[1] };
+
+  // Bar shape dim: "design input has segment 3450mm but closest value in drawing is 825mm"
+  m = desc.match(/has segment ([\d,\.]+\s*mm) but closest value in drawing is ([\d,\.]+\s*mm)/i);
+  if (m) return { design: m[1], drawing: m[2] };
+
+  // TABLE-1 pilecap depth: "= 0.750m. Design input specifies pilecap depth = 1.800m."
+  m = desc.match(/= ([\d\.]+m)\.\s+Design input specifies.+?= ([\d\.]+m)\./i);
+  if (m) return { design: m[2], drawing: m[1] };
+
+  // Cross-section count: "40 bar(s) are drawn ... Expected 42"
+  m = desc.match(/(\d+) bar(?:s|\(s\))? (?:are|is) drawn.+?Expected (\d+)/i);
+  if (m) return { design: m[2] + ' bars', drawing: m[1] + ' bars' };
+
+  // General "Design input X = VALUE for bar ... Drawing (schedule) shows VALUE2"
+  // covers bar length, total length, unit weight, total weight
+  m = desc.match(/Design input [a-z ]+= (.+?) for (?:bar )?'.+?Drawing (?:schedule )?shows (.+?)\./i);
+  if (m) return { design: m[1].trim(), drawing: m[2].trim() };
+
+  // Count: "specifies N bars for ... Drawing schedule shows M bars"
+  m = desc.match(/specifies (\d+) bars? for .+?Drawing schedule shows (\d+) bars?/i);
+  if (m) return { design: m[1] + ' nos', drawing: m[2] + ' nos' };
+
+  // Diameter: "specifies 25mm diameter ... Drawing shows 20mm"
+  m = desc.match(/specifies (\d+\s*mm) diameter.+?Drawing (?:schedule )?shows (\d+\s*mm)/i);
+  if (m) return { design: m[1], drawing: m[2] };
+
+  // Spacing present: "specifies 100mm c/c ... Drawing shows 150mm c/c"
+  m = desc.match(/specifies ([\d\.]+\s*mm\s*c\/c).+?Drawing (?:schedule )?shows ([\d\.]+\s*mm\s*c\/c)/i);
+  if (m) return { design: m[1], drawing: m[2] };
+
+  // Spacing missing: "specifies spacing of Xmm c/c ... does not show spacing"
+  m = desc.match(/specifies spacing of ([\d\.]+\s*mm\s*c\/c)/i);
+  if (m) return { design: m[1], drawing: 'not shown' };
+
+  return null;
+}
+
 function buildCard(issue, num) {
   const resolved = issue.status === 'resolved';
   const card = document.createElement('div');
   card.className = `issue-card sev-${issue.severity}${resolved ? ' resolved' : ''}`;
   card.dataset.id = issue.id;
+
+  const cmp = extractComparison(issue.description || '');
+  const cmpHtml = cmp ? `
+    <div class="comparison-widget">
+      <span class="cmp-label">Design</span><span class="cmp-val">${cmp.design}</span>
+      <span class="cmp-label">Drawing</span><span class="cmp-val cmp-mismatch">${cmp.drawing}</span>
+    </div>` : '';
 
   card.innerHTML = `
     <div class="issue-title-row">
@@ -221,6 +270,7 @@ function buildCard(issue, num) {
         ${resolved ? '↺ Reopen' : '✓ Resolve'}
       </button>
     </div>
+    ${cmpHtml}
     <div class="issue-desc">${issue.description}</div>
     ${issue.suggestion ? `<div class="issue-suggestion">What to do: ${issue.suggestion}</div>` : ''}
   `;

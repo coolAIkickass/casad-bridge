@@ -214,6 +214,7 @@ def compare(design_data: dict, drawing_data: dict) -> list:
         drawing_data.get('schedule') or {}, design_data,
         section_bboxes, schedule_section_positions,
         capabilities,
+        dxf_comp_anchors=drawing_data.get('dxf_comp_anchors') or {},
     )
     issues += _check_table1(drawing_data.get('table_1') or [], design_data)
     # Section presence and notes completeness are now text-extracted (authoritative).
@@ -399,14 +400,46 @@ COMPONENT_ZONE = {
 RING_BAR_MARKS = {}  # deprecated — retained so imports don't break
 
 
+def _dxf_y_transform(dxf_anchors: dict, pdf_anchors: dict):
+    """Compute (scale, offset) mapping DXF-extent-% y → PDF-page-% y.
+
+    Uses PILECAP/PILE/PIER header rows as calibration anchors — the same
+    physical text located in both DXF model-space and the PDF page.
+    Returns None when fewer than 2 common anchors exist (can't fit a line).
+    """
+    pairs = [
+        (dxf_anchors[c]['y'], pdf_anchors[c]['y'])
+        for c in ('pilecap', 'pile', 'pier')
+        if c in dxf_anchors and c in pdf_anchors
+            and isinstance(pdf_anchors[c], dict) and 'y' in pdf_anchors[c]
+    ]
+    if len(pairs) < 2:
+        return None
+    # Use extreme pair for best spread / least noise
+    y1_d, y1_p = pairs[0]
+    y2_d, y2_p = pairs[-1]
+    if abs(y2_d - y1_d) < 0.5:   # degenerate — anchors at same y
+        return None
+    scale  = (y2_p - y1_p) / (y2_d - y1_d)
+    offset = y1_p - scale * y1_d
+    return scale, offset
+
+
 def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
                     schedule_section_positions: dict = None,
-                    capabilities: dict = None) -> list:
+                    capabilities: dict = None,
+                    dxf_comp_anchors: dict = None) -> list:
     issues = []
     num_piles = int((design.get('geometry') or {}).get('pile_count') or 1)
     # Spacing can only be flagged as missing if the extraction path reads a c/c column
     spacing_capable    = (capabilities or {}).get('spacing', True)
     shape_dims_capable = (capabilities or {}).get('shape_dims', True)
+
+    # Pre-compute y-axis calibration transform (DXF path only).
+    # When both DXF anchor positions and pdfplumber section positions are available,
+    # use the component headers as anchor pairs to derive scale+offset so that
+    # row_bbox y-values (DXF-extent-%) map accurately to PDF-page-%.
+    y_transform = _dxf_y_transform(dxf_comp_anchors or {}, schedule_section_positions or {})
 
     component_map = {
         'pilecap': design.get('pilecap_bbs', {}),
@@ -434,9 +467,6 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
         sect = plumber_sect if plumber_sect else claude_sect
 
         # Use actual schedule insertion order (top-to-bottom in the drawing).
-        # DXF path: bars are inserted in Pass 2 in row-index order — already correct.
-        # PDF path: Claude returns bars in schedule order — also correct.
-        # No hardcoded ordering needed; any project's bar mark convention works.
         sorted_bms = list(drawing_comp.keys())
         total = max(len(sorted_bms), 1)
 
@@ -461,20 +491,33 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
 
             d_bar = design_bars[0]
 
-            # Always distribute bars within the pdfplumber section bbox.
-            # DXF row_bbox uses model-space coordinates which do not map to the
-            # PDF page coordinate system, so it cannot be used for marker placement.
-            try:
-                row_idx = sorted_bms.index(bm)
-            except ValueError:
-                row_idx = total - 1
-            row_h = max(sect['h'] / total, 2.0)
-            bar_bbox = {
-                'x': sect['x'],
-                'y': sect['y'] + row_idx * row_h,
-                'w': sect['w'],
-                'h': row_h,
-            }
+            # Bar bbox strategy:
+            # 1. DXF path + calibration available: transform row_bbox y using
+            #    anchor-point calibration (most accurate — per-row DXF position).
+            # 2. Fallback: distribute bars evenly within pdfplumber section bbox.
+            dxf_row = drawing_bar.get('row_bbox')
+            if dxf_row and y_transform:
+                scale, offset = y_transform
+                cal_y = max(0.0, min(99.0, scale * dxf_row['y'] + offset))
+                cal_h = max(0.5, abs(scale) * dxf_row['h'])
+                bar_bbox = {
+                    'x': sect['x'],   # pdfplumber x/w — more reliable than DXF x
+                    'y': cal_y,
+                    'w': sect['w'],
+                    'h': cal_h,
+                }
+            else:
+                try:
+                    row_idx = sorted_bms.index(bm)
+                except ValueError:
+                    row_idx = total - 1
+                row_h = max(sect['h'] / total, 2.0)
+                bar_bbox = {
+                    'x': sect['x'],
+                    'y': sect['y'] + row_idx * row_h,
+                    'w': sect['w'],
+                    'h': row_h,
+                }
 
             # A bar is a confinement/ring bar if the design specifies a c/c spacing.
             # Longitudinal and distributed bars don't have a c/c pitch column.

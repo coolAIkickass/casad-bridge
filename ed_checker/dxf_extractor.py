@@ -244,7 +244,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     # What this extraction can vouch for (consumed by the comparator instead of
     # source flags). Spacing is only checkable if the schedule has a C/C column.
     capabilities = {
-        'spacing':          sched_info.get('has_spacing_col', False),
+        'spacing':          sched_info.get('has_spacing_col',    False),
         'shape_dims':       sched_info.get('has_shape_dims_col', False),
         'visual_bar_count': True,
         'label_review':     False,   # vision-only check, not run in DXF path
@@ -265,9 +265,10 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
         cross_section_checks=xsec,
         section_view_positions=sv_pos,
         cut_letters=cut_letters,
-        # schedule_section_positions / schedule_section_bboxes stay empty here —
-        # filled by the pdfplumber merge in __init__.py (PDF coords for markers).
-        # missing_referenced_sections also computed in __init__.py after the merge.
+        # schedule_section_positions filled by pdfplumber merge in __init__.py.
+        # dxf_comp_anchors: DXF-extent-% y of each component header — paired with
+        # schedule_section_positions to calibrate row_bbox y into PDF-page-%.
+        dxf_comp_anchors=sched_info.get('dxf_comp_anchors', {}),
         sections_from_text=_check_required_sections(sv_pos, profile),
         notes_completeness_from_text=_check_notes_completeness(all_text, profile),
         capabilities=capabilities,
@@ -842,6 +843,28 @@ def _extract_schedule(msp, all_text: list, extents: tuple,
         diags.append(diag('bar_mark_fallback_used',
                           'The schedule has no component sub-header rows; components were '
                           'assigned from bar mark letter conventions.', severity='info'))
+
+    # Record DXF-extent-% positions of component header rows for coordinate calibration.
+    # These match the same PILECAP/PILE/PIER text that pdfplumber finds in PDF-space.
+    # The comparator uses the (dxf_y%, pdf_y%) pairs as anchor points to compute a linear
+    # transform so that row_bbox y-coords (DXF model-space) can be mapped to PDF page coords.
+    _dx = (x_max - x_min) or 1.0
+    _dy = (y_max - y_min) or 1.0
+    comp_anchors: dict = {}
+    for _row_idx, _comp in comp_boundaries:
+        if _comp in comp_anchors or _row_idx >= len(data_rows):
+            continue
+        _cells = data_rows[_row_idx]
+        if not _cells:
+            continue
+        _cy = _cells[0]['y']
+        _cx = _cells[0]['x']
+        comp_anchors[_comp] = {
+            'x': round((_cx - x_min) / _dx * 100, 2),
+            'y': round((y_max - _cy)  / _dy * 100, 2),   # flipped: same as _to_bbox
+        }
+    info['dxf_comp_anchors'] = comp_anchors
+    log.debug('DXF comp anchors: %s', comp_anchors)
 
     # Pass 1 — locate bar mark rows.
     # A bar mark is: any cell near the bar_mark column whose text is a single letter

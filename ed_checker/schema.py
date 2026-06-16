@@ -48,6 +48,11 @@ def new_drawing_data(**overrides) -> dict:
         'schedule_section_bboxes':      {},
         'section_view_positions':       {},
         'cut_letters':                  set(),
+        # Coordinate calibration (DXF path only)
+        # DXF-extent-% y positions of PILECAP/PILE/PIER header rows.
+        # Paired with schedule_section_positions (PDF-%) to compute y-axis
+        # linear transform so row_bbox coords map correctly to the PDF viewer.
+        'dxf_comp_anchors':             {},
         # Provenance & diagnostics
         'capabilities':                 dict(DEFAULT_CAPABILITIES),
         'extraction_diagnostics':       [],     # [{code, message, severity}] — see diag()

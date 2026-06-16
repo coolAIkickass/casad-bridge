@@ -256,19 +256,28 @@ content are accidental drafter leftovers — always flag those.
 Return each stray box as: {{"description": "...", "bbox": {{"x":...,"y":...,"w":...,"h":...}}}}
 Empty [] if none found.
 
-CHECK 6 — Unlabeled views
-The following section labels are confirmed present in this drawing (extracted from PDF text):
+CHECK 6 — Unlabeled views and missing sections
+The following section/view labels were confirmed present (extracted from drawing text — treat as authoritative):
 {SECTION_LABELS}
 
-The following cut-mark letters were found in the PDF but have NO corresponding section view label — they may be drawn but unlabeled, or the section may be completely absent:
+The following cut-mark letters were found in the drawing but have NO corresponding confirmed section view — they are either drawn but unlabeled, or the section is completely absent:
 {UNRESOLVED_CUTS}
 
-For each entry in the unresolved list above:
-- Look visually in the drawing for a drawn structural view (cross-section circle, rectangle, elevation) that corresponds to that cut letter.
-- If you can see a drawn view for it but it has NO title label → add it to unlabeled_views.
-- If no drawn view at all exists for it → it is a missing section (handled separately, do NOT add here).
+TASK — do ALL of the following:
 
-Additionally, scan the entire drawing for any OTHER drawn structural views not in the confirmed label list above that also lack a title label. Flag each separately in unlabeled_views.
+Step A — For EACH unresolved cut letter listed above:
+- Visually scan the entire drawing for a cross-section circle, rectangular section, or elevation view that corresponds to that cut letter.
+- If you find a drawn view WITHOUT a title label → add to unlabeled_views (describe which cut letter it corresponds to).
+- If NO drawn view exists anywhere for it → do NOT add to unlabeled_views (missing sections are handled separately).
+
+Step B — Scan the ENTIRE drawing for any drawn structural view (circular pile cross-section, rectangular pilecap/pier section, elevation, plan, detail) that:
+  • Is NOT in the confirmed label list above, AND
+  • Has NO title label (e.g. no "SECTION X-X", "PLAN OF …", "DETAIL A" text directly below or above it).
+  Flag each as a separate unlabeled_views entry.
+
+Step C — Check ALL confirmed labels above for consistency:
+  • A view labeled "SECTION C-C FOR PILE" must show a pile cross-section, not a pilecap or pier.
+  • If the label clearly describes the WRONG component for what is drawn, flag it in label_issues.
 
 Return ONLY valid JSON (no markdown):
 {{

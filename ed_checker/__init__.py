@@ -243,13 +243,19 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
     # Run the visual review pass (CHECK 3–6) even in DXF path.
     # DXF text extraction cannot detect unlabeled views, stray boxes,
     # missing dimensions, or label/annotation quality issues.
-    # Use 1.5× render (vs 2.0× in PDF path) — DXF path skips schedule/title extraction
-    # from the image so lower resolution is sufficient; saves ~40% peak memory.
+    # Use 2.0× render (same as PDF path) — 1.5× was tried to save memory but Claude
+    # misses small boxes and unlabeled views at that resolution.
     try:
         _section_labels = sorted(drawing_data.get('section_view_positions', {}).keys())
         _missing_secs   = drawing_data.get('missing_referenced_sections', [])
-        review_data = run_review_vision(pdf_bytes, _section_labels, _missing_secs, scale=1.5)
+        review_data = run_review_vision(pdf_bytes, _section_labels, _missing_secs, scale=2.0)
         if review_data:
+            log.info('DXF review vision OK — label_issues=%d unlabeled_views=%d '
+                     'erroneous_boxes=%d cross_section_checks=%d',
+                     len(review_data.get('label_issues') or []),
+                     len(review_data.get('unlabeled_views') or []),
+                     len(review_data.get('erroneous_boxes') or []),
+                     len(review_data.get('cross_section_checks') or []))
             drawing_data['label_issues']         = review_data.get('label_issues')         or []
             drawing_data['dimension_issues']     = review_data.get('dimension_issues')     or []
             drawing_data['cross_section_checks'] = (
@@ -258,8 +264,30 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
             )
             drawing_data['erroneous_boxes']      = review_data.get('erroneous_boxes')      or []
             drawing_data['unlabeled_views']      = review_data.get('unlabeled_views')      or []
+        else:
+            log.warning('DXF path: review vision returned None — visual checks (label quality, '
+                        'unlabeled views, erroneous boxes) could not run')
+            drawing_data['extraction_diagnostics'].append({
+                'code': 'review_vision_failed',
+                'message': (
+                    'The visual review pass (label quality, unlabeled views, erroneous box '
+                    'detection) could not run — the AI vision call returned no data. '
+                    'Check Render logs for the underlying error. These checks must be '
+                    'performed manually for this drawing.'
+                ),
+                'severity': 'error',
+            })
     except Exception as e:
         log.warning('DXF path: review vision call failed: %s', e)
+        drawing_data['extraction_diagnostics'].append({
+            'code': 'review_vision_failed',
+            'message': (
+                f'The visual review pass failed with an error ({e}). '
+                'Label quality, unlabeled views, and erroneous box checks could not run. '
+                'Check Render logs for details.'
+            ),
+            'severity': 'error',
+        })
 
     vision_ran = bool(drawing_data.get('schedule'))
     return drawing_data, vision_ran

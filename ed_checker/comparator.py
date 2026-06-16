@@ -461,23 +461,20 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
 
             d_bar = design_bars[0]
 
-            # DXF path: use exact per-row bbox stored during extraction.
-            # PDF path fallback: distribute bars evenly within the section bbox.
-            dxf_bbox = drawing_bar.get('row_bbox')
-            if dxf_bbox:
-                bar_bbox = dxf_bbox
-            else:
-                try:
-                    row_idx = sorted_bms.index(bm)
-                except ValueError:
-                    row_idx = total - 1
-                row_h = max(sect['h'] / total, 2.0)
-                bar_bbox = {
-                    'x': sect['x'],
-                    'y': sect['y'] + row_idx * row_h,
-                    'w': sect['w'],
-                    'h': row_h,
-                }
+            # Always distribute bars within the pdfplumber section bbox.
+            # DXF row_bbox uses model-space coordinates which do not map to the
+            # PDF page coordinate system, so it cannot be used for marker placement.
+            try:
+                row_idx = sorted_bms.index(bm)
+            except ValueError:
+                row_idx = total - 1
+            row_h = max(sect['h'] / total, 2.0)
+            bar_bbox = {
+                'x': sect['x'],
+                'y': sect['y'] + row_idx * row_h,
+                'w': sect['w'],
+                'h': row_h,
+            }
 
             # A bar is a confinement/ring bar if the design specifies a c/c spacing.
             # Longitudinal and distributed bars don't have a c/c pitch column.
@@ -866,6 +863,21 @@ def _check_label_issues(label_issues: list, sections: list = None,
 
 # ── Cross-section bar count & quality ────────────────────────────────────────
 
+def _xsec_bbox(section_name: str, drawing_data: dict):
+    """Return a PDF-space bbox for a cross-section view.
+
+    Prefers pdfplumber section_view_positions (PDF coordinates). Falls back to
+    BBOX_FALLBACK['default']. Never uses DXF model-space bbox — those coordinates
+    do not map to the PDF page coordinate system.
+    """
+    svp = drawing_data.get('section_view_positions') or {}
+    needle = section_name.upper()   # e.g. "A-A"
+    for label, pos in svp.items():
+        if needle in label.upper() and pos and all(k in pos for k in ('x', 'y', 'w', 'h')):
+            return pos
+    return None   # triggers BBOX_FALLBACK['default'] in _bbox()
+
+
 def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
     issues = []
     cross_checks  = drawing_data.get('cross_section_checks') or []
@@ -880,7 +892,7 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
         visual_count    = cc.get('visual_count')
         is_bundle       = cc.get('is_bundle', False)
         spacing_uniform = cc.get('spacing_uniform', True)
-        bbox            = cc.get('bbox')
+        bbox            = _xsec_bbox(section_name, drawing_data)
 
         if visual_count is None:
             continue

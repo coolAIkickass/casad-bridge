@@ -185,6 +185,20 @@ def _parse_geometry(rows):
                 geo['pier_width'] = _safe_float(row[ci + 2]) if len(row) > ci + 2 else None
             elif 'Pier Cover' in c:
                 geo['pier_cover'] = _safe_float(row[ci + 1])
+
+    # CASAD's E2E template doesn't label pile spacing/overhang explicitly — 'a1='/'b1='
+    # next to the pilecap length cells are the actual pile c/c spacing (confirmed against
+    # real drawing dimensions); overhang is the remaining gap to the pilecap edge.
+    if 'pile_spacing' not in geo:
+        spacing = geo.get('pilecap_a1') or geo.get('pilecap_b1')
+        if spacing:
+            geo['pile_spacing'] = spacing
+    if 'pile_overhang' not in geo:
+        if geo.get('pilecap_a1') and geo.get('pilecap_length_along'):
+            geo['pile_overhang'] = (geo['pilecap_length_along'] - geo['pilecap_a1']) / 2
+        elif geo.get('pilecap_b1') and geo.get('pilecap_length_across'):
+            geo['pile_overhang'] = (geo['pilecap_length_across'] - geo['pilecap_b1']) / 2
+
     return geo
 
 

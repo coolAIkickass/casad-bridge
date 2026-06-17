@@ -1388,27 +1388,53 @@ def _append_section_grade_diagnostics(all_text: list, extents: tuple,
 
 # ── Geometric spatial classification (Tier 2) ────────────────────────────────
 
-_SNAP_TOL = 0.03   # defpoint must land within 3% of drawing span to snap to an edge
+_EXCLUDED_LAYER_KEYWORDS = ('REINF', 'REBAR', 'TEXT', 'SHAPE_BAR', 'SHAPE BAR')
+
+# Plausible real-world component size bounds, in mm — independent of sheet layout.
+# A full production sheet's extents are dominated by far-apart title block/schedule/
+# multiple section views, so sizing thresholds as a fraction of *sheet* extents (the
+# old approach) silently rejects real components on full sheets while only working
+# by coincidence on single-section crops where sheet size ≈ component size. Absolute
+# mm bounds (converted via u2mm, per the codebase's existing units convention) don't
+# have this failure mode.
+_PILECAP_MIN_W_MM, _PILECAP_MAX_W_MM = 1000.0, 15000.0
+_PILECAP_MIN_H_MM = 200.0
+_PIER_MIN_W_MM, _PIER_MAX_W_MM = 300.0, 6000.0
+_PIER_MIN_H_MM, _PIER_MAX_H_MM = 300.0, 6000.0
+_PILE_MIN_R_MM, _PILE_MAX_R_MM = 150.0, 3000.0
 
 
-def _near(a: float, b: float, span: float, tol: float = _SNAP_TOL) -> bool:
-    return abs(a - b) <= span * tol
-
-
-def _detect_component_regions(msp, extents: tuple) -> dict:
+def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
     """
     Infer structural component bounding boxes from LWPOLYLINE and ARC geometry.
     Returns {name: {type, bbox=(xmin,ymin,xmax,ymax), center?, radius?, width?, height?}}.
 
-    Classification heuristics:
-      - Wide flat closed/open polyline on non-REINF layer → pilecap
+    Classification heuristics (all size bounds in absolute mm via u2mm — see
+    _PILECAP_*/_PIER_*/_PILE_* constants — not fractions of whole-sheet extents,
+    which break down on full multi-view sheets):
+      - Wide flat polyline on non-REINF/TEXT layer, within pilecap size bounds → pilecap
+      - Near-square polyline within pier size bounds → pier (detected independently,
+        not paired to a specific pilecap — real CASAD sheets often draw the pier
+        cross-section in its own separate named view, spatially unrelated to the
+        pilecap+pier combined view)
       - ARC with radius in a plausible pile-size range → pile circle
+
+    Multiple matches per type are expected on full sheets (the same physical
+    component is typically shown via more than one section cut) and are all
+    returned, indexed pilecap_0/pilecap_1/..., pier_0/pier_1/..., pile_0/pile_1/...
+    — callers should cross-check rather than assume a single instance.
     """
     x_min, y_min, x_max, y_max = extents
     dw = (x_max - x_min) or 1.0
     dh = (y_max - y_min) or 1.0
     regions: dict = {}
 
+    def _layer_excluded(layer: str) -> bool:
+        layer = layer.upper()
+        return any(kw in layer for kw in _EXCLUDED_LAYER_KEYWORDS)
+
+    pilecap_idx = 0
+    pier_idx = 0
     for poly in msp.query('LWPOLYLINE'):
         try:
             pts = list(poly.get_points())
@@ -1418,24 +1444,43 @@ def _detect_component_regions(msp, extents: tuple) -> dict:
             ys = [float(p[1]) for p in pts]
             w = max(xs) - min(xs)
             h = max(ys) - min(ys)
-            layer = str(poly.dxf.get('layer', '')).upper()
-
-            if w < dw * 0.02 or h < dh * 0.02:
+            if w <= 0 or h <= 0:
                 continue
-            if 'REINF' in layer or 'REBAR' in layer:
+            layer = str(poly.dxf.get('layer', ''))
+            if _layer_excluded(layer):
+                continue
+            # Sheet border / extents rectangle — exact match to whole-sheet size.
+            if w > dw * 0.95 and h > dh * 0.95:
                 continue
 
+            w_mm, h_mm = w * u2mm, h * u2mm
             bbox = (min(xs), min(ys), max(xs), max(ys))
             cx = (min(xs) + max(xs)) / 2
             cy = (min(ys) + max(ys)) / 2
             aspect = w / h if h > 0 else 0
 
-            # Wide flat shape → pilecap (wider than tall, takes up meaningful fraction of drawing)
-            if aspect > 1.5 and w > dw * 0.05 and 'pilecap' not in regions:
-                regions['pilecap'] = {
+            # Wide flat shape → pilecap.
+            if (aspect > 1.5 and _PILECAP_MIN_W_MM <= w_mm <= _PILECAP_MAX_W_MM
+                    and h_mm >= _PILECAP_MIN_H_MM):
+                regions[f'pilecap_{pilecap_idx}'] = {
                     'type': 'pilecap', 'bbox': bbox,
                     'center': (cx, cy), 'width': w, 'height': h,
                 }
+                pilecap_idx += 1
+                continue
+
+            # Near-square shape within pier size bounds → pier. Detected independently
+            # of pilecap position (see docstring) — aspect tolerance widened to admit
+            # genuinely square piers (aspect == 1.0 exactly is common and must not be
+            # excluded by a strict aspect < 1.0 check).
+            if (0.6 <= aspect <= 1.6
+                    and _PIER_MIN_W_MM <= w_mm <= _PIER_MAX_W_MM
+                    and _PIER_MIN_H_MM <= h_mm <= _PIER_MAX_H_MM):
+                regions[f'pier_{pier_idx}'] = {
+                    'type': 'pier', 'bbox': bbox,
+                    'center': (cx, cy), 'width': w, 'height': h,
+                }
+                pier_idx += 1
         except Exception:
             pass
 
@@ -1443,8 +1488,8 @@ def _detect_component_regions(msp, extents: tuple) -> dict:
     for arc in msp.query('ARC'):
         try:
             r = float(arc.dxf.radius)
-            # Plausible pile radius: between 0.5% and 20% of drawing width
-            if r < dw * 0.005 or r > dw * 0.20:
+            r_mm = r * u2mm
+            if r_mm < _PILE_MIN_R_MM or r_mm > _PILE_MAX_R_MM:
                 continue
             c = arc.dxf.center
             cx, cy = float(c.x), float(c.y)
@@ -1462,17 +1507,23 @@ def _detect_component_regions(msp, extents: tuple) -> dict:
     return regions
 
 
-def _group_pile_groups(piles: dict, draw_w: float) -> list:
+_BUNDLE_TOL_MM = 800.0   # max gap between bundle-pile centers; real distinct piles sit farther apart
+
+
+def _group_pile_groups(piles: dict, u2mm: float = 1.0) -> list:
     """
     Cluster pile circles by x-position — bundle piles share approximately the same x.
-    Uses 5% of drawing width so that bundle piles (spaced ~600mm in a ~17m section)
-    collapse to one group while distinct pile lines (~2400mm apart) stay separate.
+    Uses an absolute mm tolerance (bundle piles are typically <800mm apart; distinct
+    pile lines are spaced at least ~1.5-2x pile diameter, i.e. well over 1m) rather
+    than a fraction of drawing width — on a full sheet, drawing width is dominated by
+    far-apart title block/schedule/other views and a width-relative tolerance would
+    incorrectly merge genuinely distinct piles into one group.
     Returns sorted list of group centre x-values.
     """
     if not piles:
         return []
     xs = sorted(v['center'][0] for v in piles.values())
-    tol = draw_w * 0.05
+    tol = _BUNDLE_TOL_MM / u2mm if u2mm else _BUNDLE_TOL_MM
     groups: list = []
     current = [xs[0]]
     for x in xs[1:]:
@@ -1485,52 +1536,74 @@ def _group_pile_groups(piles: dict, draw_w: float) -> list:
     return sorted(groups)
 
 
+_DIM_SNAP_TOL_MM = 150.0   # absolute snap tolerance for defpoint-to-edge matching
+
+
 def _classify_dim_spatially(dp2, dp3, val_mm: float, orient: str,
-                             regions: dict, dw: float, dh: float) -> tuple:
+                             regions: dict, u2mm: float = 1.0) -> tuple:
     """
     Map one DIMENSION (by its defpoints) to a named geometric parameter.
-    Returns (param_name, component_name) or ('unknown', None).
+    Tests against every detected pilecap_i/pier_i candidate (a full sheet may show
+    the same physical component via more than one section cut) and returns on the
+    first snap match. Returns (param_name, component_key) or ('unknown', None).
     """
-    pilecap = regions.get('pilecap')
+    tol = _DIM_SNAP_TOL_MM / u2mm if u2mm else _DIM_SNAP_TOL_MM
+
+    def near(a, b):
+        return abs(a - b) <= tol
+
+    pilecaps = [(k, v) for k, v in regions.items() if v['type'] == 'pilecap']
+    piers = [(k, v) for k, v in regions.items() if v['type'] == 'pier']
     piles = {k: v for k, v in regions.items() if v['type'] == 'pile'}
 
-    if pilecap:
+    for key, pilecap in pilecaps:
         pc = pilecap['bbox']   # xmin, ymin, xmax, ymax
 
         if orient == 'V':
             lo_y, hi_y = sorted([float(dp2.y), float(dp3.y)])
-            if _near(lo_y, pc[1], dh) and _near(hi_y, pc[3], dh):
-                return 'pilecap_depth', 'pilecap'
+            if near(lo_y, pc[1]) and near(hi_y, pc[3]):
+                return 'pilecap_depth', key
 
         if orient == 'H':
             lo_x, hi_x = sorted([float(dp2.x), float(dp3.x)])
-            if _near(lo_x, pc[0], dw) and _near(hi_x, pc[2], dw):
-                return 'pilecap_width', 'pilecap'
+            if near(lo_x, pc[0]) and near(hi_x, pc[2]):
+                return 'pilecap_width', key
             pc_w = pc[2] - pc[0]
             if (hi_x - lo_x) > pc_w * 1.05:
-                return 'pilecap_length_overall', 'pilecap'
+                return 'pilecap_length_overall', key
+
+    if orient == 'H':
+        for key, pier in piers:
+            pr = pier['bbox']
+            lo_x, hi_x = sorted([float(dp2.x), float(dp3.x)])
+            if near(lo_x, pr[0]) and near(hi_x, pr[2]):
+                # Single section view shows only one plan direction of the pier — could
+                # be length (along traffic) or width (across traffic) depending on which
+                # section this is. Reported generically; comparator checks it against
+                # whichever design dimension is closer.
+                return 'pier_plan_dim', key
 
     if orient == 'H' and len(piles) >= 2:
-        pile_groups = _group_pile_groups(piles, dw)
+        pile_groups = _group_pile_groups(piles, u2mm)
         lo_x, hi_x = sorted([float(dp2.x), float(dp3.x)])
         for i, g1 in enumerate(pile_groups):
             for g2 in pile_groups[i + 1:]:
-                if _near(lo_x, g1, dw) and _near(hi_x, g2, dw):
+                if near(lo_x, g1) and near(hi_x, g2):
                     return 'pile_spacing', 'pile'
-        if pilecap:
+        for key, pilecap in pilecaps:
             pc = pilecap['bbox']
             outermost_l = pile_groups[0]
             outermost_r = pile_groups[-1]
-            if (_near(lo_x, outermost_r, dw) and _near(hi_x, pc[2], dw)) or \
-               (_near(lo_x, pc[0], dw) and _near(hi_x, outermost_l, dw)):
-                return 'pile_overhang', 'pilecap'
+            if (near(lo_x, outermost_r) and near(hi_x, pc[2])) or \
+               (near(lo_x, pc[0]) and near(hi_x, outermost_l)):
+                return 'pile_overhang', key
 
-    for pile in piles.values():
+    for key, pile in piles.items():
         cx, cy, r = pile['center'][0], pile['center'][1], pile['radius']
         if orient == 'V':
             lo_y, hi_y = sorted([float(dp2.y), float(dp3.y)])
-            if _near(lo_y, cy - r, dh) and _near(hi_y, cy + r, dh):
-                return 'pile_dia', 'pile'
+            if near(lo_y, cy - r) and near(hi_y, cy + r):
+                return 'pile_dia', key
 
     return 'unknown', None
 
@@ -1539,14 +1612,13 @@ def _classify_all_dims(msp, extents: tuple, u2mm: float = 1.0) -> dict:
     """
     Classify DIMENSION entities spatially using defpoint-to-geometry matching.
     Skips dims that already have a text override (handled by _extract_dimensions).
-    Returns geometry_from_drawing: {param → {val_mm, x_pct, y_pct, component, source}}.
+    Returns geometry_from_drawing: {param → [{val_mm, x_pct, y_pct, component, source}, ...]}.
+    Always a list — a full sheet may show the same physical component via more than
+    one section cut, each contributing an independent reading to be cross-checked.
     """
-    x_min, y_min, x_max, y_max = extents
-    dw = (x_max - x_min) or 1.0
-    dh = (y_max - y_min) or 1.0
-
-    regions = _detect_component_regions(msp, extents)
+    regions = _detect_component_regions(msp, extents, u2mm)
     result: dict = {}
+    seen_keys: set = set()   # (param, component_key) — dedup repeated dims for the same candidate
     total = 0
     classified = 0
 
@@ -1583,24 +1655,28 @@ def _classify_all_dims(msp, extents: tuple, u2mm: float = 1.0) -> dict:
                 my = (float(dp2.y) + float(dp3.y)) / 2
                 x_pct, y_pct = _pos_to_pct(mx, my, extents)
 
-            param, comp = _classify_dim_spatially(dp2, dp3, val_mm, orient, regions, dw, dh)
+            param, comp_key = _classify_dim_spatially(dp2, dp3, val_mm, orient, regions, u2mm)
             if param == 'unknown':
                 continue
 
-            if param not in result:
-                result[param] = {
-                    'val_mm':    round(val_mm, 1),
-                    'x_pct':     x_pct,
-                    'y_pct':     y_pct,
-                    'component': comp,
-                    'source':    'dxf_spatial',
-                }
-                classified += 1
+            dedup_key = (param, comp_key)
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+
+            result.setdefault(param, []).append({
+                'val_mm':    round(val_mm, 1),
+                'x_pct':     x_pct,
+                'y_pct':     y_pct,
+                'component': regions.get(comp_key, {}).get('type', comp_key),
+                'source':    'dxf_spatial',
+            })
+            classified += 1
         except Exception as ex:
             log.debug('Spatial dim classify error: %s', ex)
 
     log.info('Spatial dim classification: %d/%d DIMENSION entities classified → %s',
-             classified, total, list(result.keys()))
+             classified, total, {k: len(v) for k, v in result.items()})
     return result
 
 

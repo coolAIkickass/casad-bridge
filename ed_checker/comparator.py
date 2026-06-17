@@ -1125,37 +1125,75 @@ def _compare_geometry_dims(drawing_data: dict, design_data: dict,
     if not geo_drawing or not geo_design:
         return []
 
+    checks = list(profile.geometry_checks)
+
+    # A single section view shows only one plan direction of the pier (length along
+    # traffic, or width across traffic) — resolve 'pier_plan_dim' to whichever design
+    # dimension it's numerically closer to before running the declarative checks below.
+    # geo_drawing values are lists (a real sheet may show the same physical component
+    # via more than one section cut) — use the first reading to pick the direction.
+    pier_dims = geo_drawing.get('pier_plan_dim')
+    if pier_dims:
+        pl, pw = geo_design.get('pier_length'), geo_design.get('pier_width')
+        candidates = [(k, v) for k, v in (('pier_length', pl), ('pier_width', pw)) if v is not None]
+        if candidates:
+            closest_key = min(candidates, key=lambda kv: abs(pier_dims[0]['val_mm'] - kv[1] * 1000.0))[0]
+            checks.append(('pier_plan_dim', closest_key, 5.0, 'Pier plan dimension', 'm'))
+
     issues = []
-    for param, design_key, tol_pct, label, design_unit in profile.geometry_checks:
-        drawn = geo_drawing.get(param)
-        if drawn is None:
+    for param, design_key, tol_pct, label, design_unit in checks:
+        drawn_list = geo_drawing.get(param)
+        if not drawn_list:
             continue
 
         design_val = geo_design.get(design_key)
         if design_val is None:
             continue
 
-        drawn_mm  = drawn['val_mm']
         design_mm = design_val * 1000.0 if design_unit == 'm' else float(design_val)
+        multi = len(drawn_list) > 1
 
-        diff_pct = abs(drawn_mm - design_mm) / design_mm * 100 if design_mm else 0
-        if diff_pct <= tol_pct:
-            continue
+        for drawn in drawn_list:
+            drawn_mm = drawn['val_mm']
+            diff_pct = abs(drawn_mm - design_mm) / design_mm * 100 if design_mm else 0
+            if diff_pct <= tol_pct:
+                continue
 
-        x, y = drawn.get('x_pct', 50), drawn.get('y_pct', 50)
-        issues.append({
-            'category':    'Geometric Dimensions',
-            'title':       f'{label}: drawn {drawn_mm:.0f}mm ≠ design {design_mm:.0f}mm',
-            'description': (
-                f'{label} drawn as {drawn_mm:.0f}mm but design specifies '
-                f'{design_mm:.0f}mm ({design_val}{design_unit}). '
-                f'Difference: {diff_pct:.1f}% (tolerance {tol_pct}%).'
-            ),
-            'suggestion':  f'Correct {label.lower()} to {design_mm:.0f}mm.',
-            'severity':    'error',
-            'page_num':    1,
-            'x': x, 'y': y, 'width': 5.0, 'height': 2.0,
-        })
+            x, y = drawn.get('x_pct', 50), drawn.get('y_pct', 50)
+            suffix = f' (view near x={x:.0f}%)' if multi else ''
+            issues.append({
+                'category':    'Geometric Dimensions',
+                'title':       f'{label}: drawn {drawn_mm:.0f}mm ≠ design {design_mm:.0f}mm{suffix}',
+                'description': (
+                    f'{label} drawn as {drawn_mm:.0f}mm but design specifies '
+                    f'{design_mm:.0f}mm ({design_val}{design_unit}). '
+                    f'Difference: {diff_pct:.1f}% (tolerance {tol_pct}%).'
+                ),
+                'suggestion':  f'Correct {label.lower()} to {design_mm:.0f}mm.',
+                'severity':    'error',
+                'page_num':    1,
+                'x': x, 'y': y, 'width': 5.0, 'height': 2.0,
+            })
+
+        # The same physical component is measured by more than one section cut —
+        # those readings should agree with each other, independent of the design
+        # comparison above. Disagreement is a genuine drafting inconsistency.
+        if multi:
+            vals = [d['val_mm'] for d in drawn_list]
+            if (max(vals) - min(vals)) / max(vals) * 100 > tol_pct:
+                x, y = drawn_list[0].get('x_pct', 50), drawn_list[0].get('y_pct', 50)
+                issues.append({
+                    'category':    'Geometric Dimensions',
+                    'title':       f'{label}: inconsistent between drawing views',
+                    'description': (
+                        f'{label} measures differently across section views in the same '
+                        f'drawing: {", ".join(f"{v:.0f}mm" for v in vals)}.'
+                    ),
+                    'suggestion':  f'Confirm {label.lower()} is drawn consistently across all section views.',
+                    'severity':    'error',
+                    'page_num':    1,
+                    'x': x, 'y': y, 'width': 5.0, 'height': 2.0,
+                })
     return issues
 
 

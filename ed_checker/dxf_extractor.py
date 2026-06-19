@@ -1403,6 +1403,40 @@ _PIER_MIN_W_MM, _PIER_MAX_W_MM = 300.0, 6000.0
 _PIER_MIN_H_MM, _PIER_MAX_H_MM = 300.0, 6000.0
 _PILE_MIN_R_MM, _PILE_MAX_R_MM = 150.0, 3000.0
 
+# A pier pedestal/haunch drawn atop a pilecap in the same section view is itself
+# wide-flat-shaped and falls within the pilecap size bounds, so it would otherwise
+# register as its own independent pilecap candidate — confirmed on a real production
+# sheet where a 2100x900mm pedestal sitting on a real 4500x1800mm pilecap pulled a
+# pier-width DIMENSION onto 'pilecap_width' instead of 'pier_plan_dim'. Suppressed via
+# _suppress_nested_pilecap_candidates: a candidate is dropped when its x-range is
+# contained within a larger candidate's x-range and the two bboxes are vertically
+# stacked directly against each other.
+_PILECAP_NESTED_TOL_MM = 100.0
+
+
+def _suppress_nested_pilecap_candidates(candidates: list, u2mm: float = 1.0) -> list:
+    """
+    Drop a pilecap candidate whose x-range sits inside a larger candidate's x-range
+    and whose bbox is vertically stacked directly against it — see _PILECAP_NESTED_TOL_MM.
+    """
+    tol = _PILECAP_NESTED_TOL_MM / u2mm if u2mm else _PILECAP_NESTED_TOL_MM
+    survivors = []
+    for cand in candidates:
+        x0, y0, x1, y1 = cand['bbox']
+        nested = False
+        for other in candidates:
+            if other is cand or other['width'] <= cand['width']:
+                continue
+            ox0, oy0, ox1, oy1 = other['bbox']
+            contained_x = ox0 - tol <= x0 and x1 <= ox1 + tol
+            stacked = abs(y0 - oy1) <= tol or abs(y1 - oy0) <= tol
+            if contained_x and stacked:
+                nested = True
+                break
+        if not nested:
+            survivors.append(cand)
+    return survivors
+
 
 def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0,
                                view_labels: list | None = None) -> dict:
@@ -1443,7 +1477,7 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0,
         layer = layer.upper()
         return any(kw in layer for kw in _EXCLUDED_LAYER_KEYWORDS)
 
-    pilecap_idx = 0
+    pilecap_candidates = []
     pier_idx = 0
     for poly in msp.query('LWPOLYLINE'):
         try:
@@ -1474,11 +1508,9 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0,
                     and h_mm >= _PILECAP_MIN_H_MM):
                 if _nearest_label_view_type(cx, cy, view_labels, u2mm) in ('plan', 'detail', 'unplaced'):
                     continue
-                regions[f'pilecap_{pilecap_idx}'] = {
-                    'type': 'pilecap', 'bbox': bbox,
-                    'center': (cx, cy), 'width': w, 'height': h,
-                }
-                pilecap_idx += 1
+                pilecap_candidates.append({
+                    'bbox': bbox, 'center': (cx, cy), 'width': w, 'height': h,
+                })
                 continue
 
             # Near-square shape within pier size bounds → pier. Detected independently
@@ -1497,6 +1529,9 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0,
                 pier_idx += 1
         except Exception:
             pass
+
+    for i, cand in enumerate(_suppress_nested_pilecap_candidates(pilecap_candidates, u2mm)):
+        regions[f'pilecap_{i}'] = {'type': 'pilecap', **cand}
 
     pile_idx = 0
     for arc in msp.query('ARC'):

@@ -224,7 +224,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     table_1             = _extract_table1(all_text, extents, profile.layout)
     sv_pos, cut_letters = _extract_section_info(all_text, extents, profile.layout)
     xsec                = _count_cross_section_bars(msp, all_text, schedule, extents, profile, diags)
-    geometry_from_drawing = _classify_all_dims(msp, extents, u2mm)
+    geometry_from_drawing = _classify_all_dims(msp, all_text, extents, profile, u2mm)
     multileader_callouts  = _extract_multileader_callouts(msp, extents)
     # Programmatic unlabeled-view and missing-detail detection (runs before del msp).
     unlabeled_circles   = _detect_unlabeled_section_circles(msp, all_text, extents, sv_pos, profile, u2mm)
@@ -1404,7 +1404,8 @@ _PIER_MIN_H_MM, _PIER_MAX_H_MM = 300.0, 6000.0
 _PILE_MIN_R_MM, _PILE_MAX_R_MM = 150.0, 3000.0
 
 
-def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
+def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0,
+                               view_labels: list | None = None) -> dict:
     """
     Infer structural component bounding boxes from LWPOLYLINE and ARC geometry.
     Returns {name: {type, bbox=(xmin,ymin,xmax,ymax), center?, radius?, width?, height?}}.
@@ -1423,6 +1424,15 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
     component is typically shown via more than one section cut) and are all
     returned, indexed pilecap_0/pilecap_1/..., pier_0/pier_1/..., pile_0/pile_1/...
     — callers should cross-check rather than assume a single instance.
+
+    view_labels (from _extract_view_labels) gates out candidates whose nearest view
+    label is a plan or detail view — a plan-view footprint (e.g. "PLAN OF PILECAP")
+    can be similarly shaped/sized to a real section profile and would otherwise be
+    misread as that component's section dimension. Also gates out candidates farther
+    than _MAX_LABEL_DIST_MM from every label ('unplaced') — e.g. a small ARC bend from
+    a bar-shape sketch in the schedule table, which would otherwise nearest-match
+    whichever named view happens to be least far away even when that's 10+m off.
+    None/empty view_labels → no gating (preserves behavior on label-less cropped DXFs).
     """
     x_min, y_min, x_max, y_max = extents
     dw = (x_max - x_min) or 1.0
@@ -1462,6 +1472,8 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
             # Wide flat shape → pilecap.
             if (aspect > 1.5 and _PILECAP_MIN_W_MM <= w_mm <= _PILECAP_MAX_W_MM
                     and h_mm >= _PILECAP_MIN_H_MM):
+                if _nearest_label_view_type(cx, cy, view_labels, u2mm) in ('plan', 'detail', 'unplaced'):
+                    continue
                 regions[f'pilecap_{pilecap_idx}'] = {
                     'type': 'pilecap', 'bbox': bbox,
                     'center': (cx, cy), 'width': w, 'height': h,
@@ -1476,6 +1488,8 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
             if (0.6 <= aspect <= 1.6
                     and _PIER_MIN_W_MM <= w_mm <= _PIER_MAX_W_MM
                     and _PIER_MIN_H_MM <= h_mm <= _PIER_MAX_H_MM):
+                if _nearest_label_view_type(cx, cy, view_labels, u2mm) in ('plan', 'detail', 'unplaced'):
+                    continue
                 regions[f'pier_{pier_idx}'] = {
                     'type': 'pier', 'bbox': bbox,
                     'center': (cx, cy), 'width': w, 'height': h,
@@ -1493,6 +1507,8 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
                 continue
             c = arc.dxf.center
             cx, cy = float(c.x), float(c.y)
+            if _nearest_label_view_type(cx, cy, view_labels, u2mm) in ('plan', 'detail', 'unplaced'):
+                continue
             regions[f'pile_{pile_idx}'] = {
                 'type': 'pile',
                 'center': (cx, cy),
@@ -1608,15 +1624,22 @@ def _classify_dim_spatially(dp2, dp3, val_mm: float, orient: str,
     return 'unknown', None
 
 
-def _classify_all_dims(msp, extents: tuple, u2mm: float = 1.0) -> dict:
+def _classify_all_dims(msp, all_text: list, extents: tuple,
+                        profile: DrawingTypeProfile = PPP_PROFILE, u2mm: float = 1.0) -> dict:
     """
     Classify DIMENSION entities spatially using defpoint-to-geometry matching.
     Skips dims that already have a text override (handled by _extract_dimensions).
     Returns geometry_from_drawing: {param → [{val_mm, x_pct, y_pct, component, source}, ...]}.
     Always a list — a full sheet may show the same physical component via more than
     one section cut, each contributing an independent reading to be cross-checked.
+
+    view_labels (from _extract_view_labels) excludes plan/detail-view candidates from
+    _detect_component_regions before any DIMENSION gets snapped to them — see that
+    function's docstring for why plan-view footprints would otherwise be misread as
+    section-profile dimensions.
     """
-    regions = _detect_component_regions(msp, extents, u2mm)
+    view_labels = _extract_view_labels(all_text, profile)
+    regions = _detect_component_regions(msp, extents, u2mm, view_labels)
     result: dict = {}
     seen_keys: set = set()   # (param, component_key) — dedup repeated dims for the same candidate
     total = 0
@@ -1905,6 +1928,82 @@ def _extract_table1(all_text: list, extents: tuple, layout=None) -> list:
             table_rows.append(entry)
 
     return table_rows
+
+
+# ── View label extraction (for Tier 2 plan/section disambiguation) ────────────
+
+_VIEW_LABEL_RE = re.compile(r'^(SECTION|PLAN OF|REINFORCEMENT PLAN OF|DETAIL)\b', re.IGNORECASE)
+
+
+def _extract_view_labels(all_text: list, profile: DrawingTypeProfile = PPP_PROFILE) -> list:
+    """
+    Identify view-title labels (SECTION x-x, PLAN OF ..., REINFORCEMENT PLAN OF ...,
+    DETAIL x) and classify each by view_type and mentioned component(s).
+
+    CASAD draws plan views of a component (e.g. "PLAN OF PILECAP") alongside section
+    views (e.g. "SECTION A-A FOR PILECAP & PIER") on every sheet. A plan-view footprint
+    can be similarly shaped/sized to a real section profile (e.g. a square pilecap plan
+    vs. a square pier section) — shape/size alone can't tell them apart. This label list
+    lets _detect_component_regions discard candidates that sit inside a plan/detail view,
+    since none of the current geometry_checks represent plan-footprint measurements.
+
+    Returns [{text, x, y, view_type, components}, ...] in raw model-space coordinates
+    (same space as _detect_component_regions candidate centers). view_type is one of
+    'section' / 'plan' / 'detail'. components is the set of component keywords
+    (profile.comp_header_patterns) found in the label text — may be empty (e.g.
+    "SECTION C-C" names no component explicitly).
+    """
+    labels = []
+    for t in all_text:
+        text = t['text'].strip()
+        if not text or len(text) > 80:
+            continue
+        if not _VIEW_LABEL_RE.match(text):
+            continue
+        upper = text.upper()
+        if upper.startswith('DETAIL'):
+            view_type = 'detail'
+        elif 'PLAN OF' in upper or 'REINFORCEMENT PLAN' in upper:
+            view_type = 'plan'
+        elif upper.startswith('SECTION'):
+            view_type = 'section'
+        else:
+            continue
+        components = {comp for comp, pat in profile.comp_header_patterns if pat.search(upper)}
+        labels.append({
+            'text': text, 'x': t['x'], 'y': t['y'],
+            'view_type': view_type, 'components': components,
+        })
+    return labels
+
+
+_MAX_LABEL_DIST_MM = 8000.0   # beyond this, a candidate isn't reliably "inside" any named
+                              # view — e.g. a small ARC from a bar-shape sketch in the
+                              # schedule table can otherwise get nearest-matched to whichever
+                              # named view happens to be least far away, even 13+m off.
+                              # Verified against a real production sheet: genuine view
+                              # candidates sit within ~6000mm of their label; schedule-area
+                              # debris sits 13000mm+ away — clean separation at 8000mm.
+
+
+def _nearest_label_view_type(cx: float, cy: float, view_labels: list,
+                              u2mm: float = 1.0) -> str | None:
+    """
+    Return the view_type of the nearest view label to (cx, cy):
+      - None if view_labels is empty (label-less DXF, e.g. a cropped single-section
+        extract — callers must treat None as "no filtering", not as a view type to discard).
+      - 'unplaced' if the nearest label is farther than _MAX_LABEL_DIST_MM — too far to
+        reliably belong to any view; callers should discard, same as 'plan'/'detail'.
+      - otherwise the nearest label's view_type ('section' / 'plan' / 'detail').
+    """
+    if not view_labels:
+        return None
+    max_dist = _MAX_LABEL_DIST_MM / u2mm if u2mm else _MAX_LABEL_DIST_MM
+    nearest = min(view_labels, key=lambda lb: (lb['x'] - cx) ** 2 + (lb['y'] - cy) ** 2)
+    dist = ((nearest['x'] - cx) ** 2 + (nearest['y'] - cy) ** 2) ** 0.5
+    if dist > max_dist:
+        return 'unplaced'
+    return nearest['view_type']
 
 
 # ── Section info extraction ───────────────────────────────────────────────────

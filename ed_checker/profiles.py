@@ -114,7 +114,8 @@ PPP_PROFILE = DrawingTypeProfile(
         'concrete_pile':    ['M30', 'M35', 'M40', 'M45', 'M50'],
         'concrete_pilecap': ['M30', 'M35', 'M40', 'M45', 'M50'],
         'concrete_pier':    ['M30', 'M35', 'M40', 'M45', 'M50'],
-        'steel_grade':      ['FE415', 'FE500', 'FE550', 'FE 415', 'FE 500', 'FE 550', 'HYSD', 'TMT'],
+        'steel_grade':      ['FE415', 'FE500', 'FE550', 'FE 415', 'FE 500', 'FE 550',
+                              'FE-415', 'FE-500', 'FE-550', 'HYSD', 'TMT'],
         'irc_code_ref':     ['IRC:', 'IRC-', 'IRC '],
     },
     note_float_patterns={
@@ -124,7 +125,7 @@ PPP_PROFILE = DrawingTypeProfile(
         'max_pile_load_t': r'MAX\.?\s+(?:SAFE\s+)?PILE\s+LOAD\s*[=:]\s*([\d.]+)\s*T',
     },
     note_string_patterns={
-        'steel_grade':               r'\b(Fe\s*\d+|FE\s*\d+|HYSD|TMT)\b',
+        'steel_grade':               r'\b(Fe\s*-?\s*\d+[A-Z]*|FE\s*-?\s*\d+[A-Z]*|HYSD|TMT)\b',
         'lap_length_concrete_grade': r'LAP\s+LENGTH\b[^.!?\n]{0,120}?\b(M\d+)\b',
     },
     concrete_grade_keywords=('M30', 'M35', 'M40', 'M45', 'M50'),

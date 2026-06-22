@@ -591,6 +591,94 @@ def _get_vertical_line_x_positions(msp, sched_x_min: float, x_max: float, dh: fl
     return deduped
 
 
+def _zone_anchor_indices(bar_rows: list, col_map: dict, bm: str,
+                         x_offset_min: float = 1000.0) -> list[int]:
+    """
+    Row indices (local to bar_rows) that carry their own TOTAL_LEN cell —
+    one per confinement zone.
+
+    TOTAL_LEN is the reliable per-zone anchor, not NOS: on the real
+    production schedule, a zone's authoritative '=N' count restatement
+    sometimes sits on a row *adjacent* to that zone's own data (e.g. bar
+    'y' zone 2's '=240' is one row below its TOTAL_LEN/DIA/UNIT_WT row),
+    while TOTAL_LEN always lands exactly once, on the zone's own row,
+    with zero redundancy — verified against y/y1/i/i1/j/j1/k/k1/f/f1.
+    Returns [] if TOTAL_LEN isn't mapped or no row has a parseable cell
+    there — caller treats that as "single zone, no split".
+    """
+    real_col_map = {k: v for k, v in col_map.items() if not k.endswith('_assigned_x')}
+    total_len_x = real_col_map.get('total_length_m')
+    if total_len_x is None or not real_col_map:
+        return []
+
+    x_offset = 0.0
+    bm_col_x = real_col_map.get('bar_mark')
+    if bm_col_x is not None:
+        for row in bar_rows:
+            for cell in row:
+                if cell['text'].strip().strip("'\"").lower() == bm:
+                    x_offset = cell['x'] - bm_col_x
+                    break
+            else:
+                continue
+            break
+    if abs(x_offset) > x_offset_min:
+        total_len_x += x_offset
+
+    x_span = max(real_col_map.values()) - min(real_col_map.values()) if len(real_col_map) > 1 else 100.0
+    x_tol = x_span * 0.20
+
+    anchors = []
+    for idx, row in enumerate(bar_rows):
+        for cell in row:
+            if abs(cell['x'] - total_len_x) < x_tol and _safe_float(cell['text']) is not None:
+                anchors.append(idx)
+                break
+    return anchors
+
+
+def _split_zone_row_ranges(n_rows: int, anchor_indices: list[int]) -> list[tuple[int, int]]:
+    """
+    Split a bar mark's local row range [0, n_rows) into per-zone (start, end)
+    slices, one per TOTAL_LEN anchor row. Boundary sits at the floor-midpoint
+    between consecutive anchors — the same convention Pass 2 already uses to
+    split between adjacent bar marks above. The first zone absorbs everything
+    before its anchor (e.g. the bar-mark label row); the last zone absorbs
+    everything after its anchor (e.g. a redundant '=N' restatement on a
+    trailing row) — see _aggregate_bar_rows docstring for why that
+    restatement doesn't need its own zone.
+    """
+    if len(anchor_indices) <= 1:
+        return [(0, n_rows)]
+    ranges = []
+    for i, anchor in enumerate(anchor_indices):
+        start = 0 if i == 0 else (anchor_indices[i - 1] + anchor) // 2 + 1
+        end = n_rows if i == len(anchor_indices) - 1 else (anchor + anchor_indices[i + 1]) // 2 + 1
+        ranges.append((start, end))
+    return ranges
+
+
+def _aggregate_bar_rows_for_bar(bar_rows: list, col_map: dict, bm: str,
+                                x_offset_min: float = 1000.0) -> dict | list | None:
+    """
+    Aggregate a bar mark's full row range, splitting into per-confinement-zone
+    dicts when more than one TOTAL_LEN anchor is present. Single-zone bars
+    (the overwhelming majority) return exactly the same single dict
+    _aggregate_bar_rows has always returned — zero behavior change for them.
+    """
+    anchor_indices = _zone_anchor_indices(bar_rows, col_map, bm, x_offset_min)
+    zone_ranges = (_split_zone_row_ranges(len(bar_rows), anchor_indices)
+                   if len(anchor_indices) > 1 else [(0, len(bar_rows))])
+    zones = []
+    for start, end in zone_ranges:
+        zone_dict = _aggregate_bar_rows(bar_rows[start:end], col_map, bm, x_offset_min)
+        if zone_dict is not None:
+            zones.append(zone_dict)
+    if not zones:
+        return None
+    return zones[0] if len(zones) == 1 else zones
+
+
 def _aggregate_bar_rows(bar_rows: list, col_map: dict, bm: str,
                         x_offset_min: float = 1000.0) -> dict | None:
     """
@@ -949,27 +1037,40 @@ def _extract_schedule(msp, all_text: list, extents: tuple,
             range_end = (bm_row_idx + next_idx) // 2 + 1
 
         bar_rows = data_rows[range_start:range_end]
-        bar_data = _aggregate_bar_rows(bar_rows, col_map, bm, x_offset_min)
-        if bar_data is None:
+        anchor_indices = _zone_anchor_indices(bar_rows, col_map, bm, x_offset_min)
+        zone_ranges = (_split_zone_row_ranges(len(bar_rows), anchor_indices)
+                       if len(anchor_indices) > 1 else [(0, len(bar_rows))])
+
+        # Aggregate per zone (usually just one) so a multi-row confinement bar
+        # (e.g. y/y1) yields a list of per-zone dicts instead of one pre-summed
+        # dict — preserves the row-level detail the comparator needs to match
+        # zone rows against design Excel rows individually or sum-and-compare.
+        zone_dicts = []
+        for z_start, z_end in zone_ranges:
+            zone_rows = bar_rows[z_start:z_end]
+            zone_dict = _aggregate_bar_rows(zone_rows, col_map, bm, x_offset_min)
+            if zone_dict is None:
+                continue
+            # Attach exact DXF bbox for this zone's own rows so the review UI can
+            # highlight the precise schedule row(s) instead of the whole bar's range.
+            if zone_rows:
+                all_ys = [cell['y'] for row in zone_rows for cell in row]
+                all_xs = [cell['x'] for row in zone_rows for cell in row]
+                if all_ys and all_xs:
+                    row_pad = dh * layout.sched_row_tol_frac
+                    zone_dict['row_bbox'] = _to_bbox(
+                        min(all_xs) - x_span * 0.05,
+                        min(all_ys) - row_pad,
+                        max(all_xs) + x_span * 0.05,
+                        max(all_ys) + row_pad,
+                        extents,
+                    )
+            zone_dict['bar_mark'] = bm
+            zone_dicts.append(zone_dict)
+
+        if not zone_dicts:
             continue
-
-        # Attach exact DXF bbox for this bar's rows so the review UI can highlight
-        # the precise schedule row(s) instead of distributing evenly within a section.
-        # bar_rows spans the bar mark label row plus any sub-rows (confinement zones).
-        if bar_rows:
-            all_ys = [cell['y'] for row in bar_rows for cell in row]
-            all_xs = [cell['x'] for row in bar_rows for cell in row]
-            if all_ys and all_xs:
-                row_pad = dh * layout.sched_row_tol_frac
-                bar_data['row_bbox'] = _to_bbox(
-                    min(all_xs) - x_span * 0.05,
-                    min(all_ys) - row_pad,
-                    max(all_xs) + x_span * 0.05,
-                    max(all_ys) + row_pad,
-                    extents,
-                )
-
-        bar_data['bar_mark'] = bm
+        bar_data = zone_dicts[0] if len(zone_dicts) == 1 else zone_dicts
         comp_dict = schedule.setdefault(comp, {})
         if bm in comp_dict:
             # Bar mark seen again — second schedule block for a different pier variant.

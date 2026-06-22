@@ -495,13 +495,20 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
                 })
                 continue
 
+            # DXF path may split one bar mark across multiple confinement-zone
+            # rows (e.g. y/y1) — normalize to a list, mirroring the design-side
+            # normalization above. PDF/vision path always yields a single dict.
+            drawing_bars = drawing_bar if isinstance(drawing_bar, list) else [drawing_bar]
+
             d_bar = design_bars[0]
 
             # Bar bbox strategy:
             # 1. DXF path + calibration available: transform row_bbox y using
             #    anchor-point calibration (most accurate — per-row DXF position).
             # 2. Fallback: distribute bars evenly within pdfplumber section bbox.
-            dxf_row = drawing_bar.get('row_bbox')
+            # Uses the first zone row's bbox when there are several — schedule-row
+            # highlight positioning is already best-effort (see CLAUDE.md).
+            dxf_row = drawing_bars[0].get('row_bbox')
             if dxf_row and y_transform:
                 scale, offset = y_transform
                 cal_y = max(0.0, min(99.0, scale * dxf_row['y'] + offset))
@@ -528,7 +535,7 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
             # A bar is a confinement/ring bar if the design specifies a c/c spacing.
             # Longitudinal and distributed bars don't have a c/c pitch column.
             is_ring = bool(d_bar.get('spacing_mm'))
-            issues += _compare_bar(bm, comp, d_bar, drawing_bar, zone, design_bars, bar_bbox,
+            issues += _compare_bar(bm, comp, d_bar, drawing_bars, zone, design_bars, bar_bbox,
                                    is_ring=is_ring, num_piles=num_piles,
                                    spacing_capable=spacing_capable,
                                    shape_dims_capable=shape_dims_capable)
@@ -536,8 +543,162 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
     return issues
 
 
-def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, bar_bbox=None,
-                 is_ring=False, num_piles=1, spacing_capable=True, shape_dims_capable=True):
+def _sum_keys(rows: list, keys: list) -> dict:
+    """Sum each of `keys` across `rows`; a key with no parseable value in any
+    row comes back as None (caller treats that the same as 'not specified')."""
+    out = {}
+    for k in keys:
+        vals = [r.get(k) for r in rows if r.get(k)]
+        out[k] = sum(vals) if vals else None
+    return out
+
+
+def _pair_rows_by_closest_value(design_bars: list, drawing_bars: list) -> list:
+    """
+    Greedy nearest-match pairing of equal-length design/drawing zone-row
+    lists, by count value (primary) with total_length_m as a fallback when
+    count is missing on either side. Physical row order isn't assumed
+    reliable. Design rows are matched largest-count-first so the most
+    distinctive values claim their match before a closer-but-wrong
+    competitor can steal it.
+    """
+    remaining_w = list(drawing_bars)
+    pairs = []
+    for d_row in sorted(design_bars, key=lambda b: -(b.get('count') or 0)):
+        if not remaining_w:
+            break
+        d_count = d_row.get('count')
+        d_len = d_row.get('total_len_m')
+
+        def _score(w_row):
+            w_count = _norm_count(w_row.get('count') or w_row.get('count_text', ''))
+            if d_count and w_count:
+                return abs(d_count - w_count)
+            w_len = _norm_float(w_row.get('total_length_m'))
+            if d_len and w_len:
+                return abs(d_len - w_len)
+            return float('inf')
+
+        best = min(remaining_w, key=_score)
+        remaining_w.remove(best)
+        pairs.append((d_row, best))
+    return pairs
+
+
+def _compare_bar_totals(bm, comp, d_row, w_row, zone, bar_bbox=None, is_ring=False, num_piles=1) -> list:
+    """
+    Count / total-length / total-weight comparison for one design row vs one
+    drawing row — or pre-summed synthetic rows built by _sum_keys() when row
+    counts don't match 1:1. d_row uses design-side field names (count,
+    total_len_m, total_wt_kg); w_row uses drawing-side field names
+    (count/count_text, total_length_m, total_wt_kg).
+    """
+    issues = []
+    prefix = f"Bar '{bm}' ({comp})"
+
+    d_count = d_row.get('count')
+    w_count = _norm_count(w_row.get('count') or w_row.get('count_text', ''))
+    if d_count and w_count:
+        if is_ring:
+            # Ring bars: allow ±2 per pile absolute tolerance (count derives from geometric
+            # spacing and varies by 1–2 due to length rounding).
+            tolerance = 2 * max(num_piles, 1)
+            if abs(d_count - w_count) > tolerance:
+                issues.append(_issue(
+                    'Bar Count', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
+                    f"Design input specifies {d_count} bars for '{bm}' ({comp}). Drawing schedule shows {w_count} bars. "
+                    f"Ring bar counts can vary by ±{tolerance} due to spacing rounding — verify manually.",
+                    f"Check ring count for bar '{bm}' against Detail A/A' selection.",
+                    'error', zone, bar_bbox
+                ))
+        elif d_count != w_count:
+            issues.append(_issue(
+                'Bar Count', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
+                f"Design input specifies {d_count} bars for '{bm}' ({comp}). Drawing schedule shows {w_count} bars.",
+                f"Update count to {d_count} nos.",
+                'error', zone, bar_bbox
+            ))
+
+    d_total_len = d_row.get('total_len_m')
+    w_total_len = _norm_float(w_row.get('total_length_m'))
+    if d_total_len and w_total_len:
+        diff = _pct_diff(d_total_len, w_total_len)
+        if diff and diff > 2:
+            issues.append(_issue(
+                'Bar Total Length',
+                f"{prefix}: Total length mismatch — design {round(d_total_len, 2)}m, drawing {round(w_total_len, 2)}m",
+                f"Design input total length = {round(d_total_len, 2)}m for '{bm}' ({comp}). Drawing schedule shows {round(w_total_len, 2)}m.",
+                f"Update total length for bar '{bm}' to {round(d_total_len, 2)}m.",
+                'error', zone, bar_bbox
+            ))
+
+    d_total_wt = d_row.get('total_wt_kg')
+    w_total_wt = _norm_float(w_row.get('total_wt_kg'))
+    if d_total_wt and w_total_wt:
+        diff = _pct_diff(d_total_wt, w_total_wt)
+        if diff and diff > 5:
+            issues.append(_issue(
+                'Bar Weight',
+                f"{prefix}: Total weight mismatch — design {d_total_wt:.1f}kg, drawing {w_total_wt:.1f}kg",
+                f"Design input total weight = {d_total_wt:.1f}kg for bar '{bm}' ({comp}). Drawing schedule shows {w_total_wt:.1f}kg.",
+                f"Recheck total weight for bar '{bm}' — likely a consequence of a count or length error.",
+                'error', zone, bar_bbox
+            ))
+    return issues
+
+
+def _check_drawing_internal_consistency(bm, comp, drawing_bars: list, zone, bar_bbox=None) -> list:
+    """
+    Flags disagreement between a bar mark's own zone rows on fields expected
+    to repeat identically across zones (dia, spacing, per-bar length, unit
+    weight). Additive to the normal vs-design comparison: that only ever
+    checks design's single expected value, so two zones that are each
+    individually wrong in the same direction — or where design itself is
+    ambiguous — would otherwise go unflagged.
+    """
+    issues = []
+    prefix = f"Bar '{bm}' ({comp})"
+    fields = [
+        ('bar_dia_mm',    'Diameter',     'mm',      _norm_dia),
+        ('spacing_mm',    'Spacing',      'mm c/c',  _norm_float),
+        ('length_m',      'Bar length',   'm',       _norm_float),
+        ('unit_wt_kg_m',  'Unit weight',  'kg/m',    _norm_float),
+    ]
+    for field, label, unit, norm in fields:
+        vals = [(i, norm(b.get(field))) for i, b in enumerate(drawing_bars)]
+        vals = [(i, v) for i, v in vals if v]
+        if len(vals) < 2:
+            continue
+        first_i, first_v = vals[0]
+        for i, v in vals[1:]:
+            diff = _pct_diff(first_v, v)
+            if diff and diff > 2:
+                issues.append(_issue(
+                    'Reinforcement',
+                    f"{prefix}: {label} differs between drawing zone-rows — "
+                    f"row {first_i + 1}: {first_v}{unit}, row {i + 1}: {v}{unit}",
+                    f"Bar '{bm}' ({comp}) is split across {len(drawing_bars)} schedule rows "
+                    f"(confinement zones), but {label.lower()} is not the same across them: "
+                    f"row {first_i + 1} shows {first_v}{unit}, row {i + 1} shows {v}{unit}. "
+                    f"This field is expected to be identical across all zone rows for one bar mark.",
+                    f"Check the schedule rows for bar '{bm}' — {label.lower()} should match across zones.",
+                    'error', zone, bar_bbox
+                ))
+    return issues
+
+
+def _compare_bar_scalars(bm, comp, design_bar, drawing_bar, zone, bar_bbox, d_count_total, d_spacing,
+                         spacing_capable=True, shape_dims_capable=True) -> list:
+    """
+    Dia, spacing-presence, per-bar length, unit weight, reinforcement-column
+    format, and shape-dim checks for ONE drawing row against design intent.
+    Called once per zone row (see _compare_bar) — these fields are expected
+    to repeat identically across a bar mark's zone rows, so checking every
+    row (not just the first) catches a transcription error confined to a
+    single zone. Identical issues from different zones naturally collapse
+    under compare()'s (category, title) dedup, since the embedded values
+    are the same.
+    """
     issues = []
     prefix = f"Bar '{bm}' ({comp})"
 
@@ -553,7 +714,6 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
         ))
 
     # Spacing check
-    d_spacing = design_bar.get('spacing_mm')
     w_spacing = _norm_float(drawing_bar.get('spacing_mm'))
     if d_spacing and w_spacing:
         diff = _pct_diff(d_spacing, w_spacing)
@@ -576,33 +736,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 'error', zone, bar_bbox
             ))
 
-    # Count check
-    d_count = design_bar.get('count')
-    if all_design_bars and len(all_design_bars) > 1:
-        d_count = sum(b.get('count') or 0 for b in all_design_bars if b.get('count'))
-    w_count = _norm_count(drawing_bar.get('count') or drawing_bar.get('count_text', ''))
-    if d_count and w_count:
-        if is_ring:
-            # Ring bars: allow ±2 per pile absolute tolerance (count derives from geometric
-            # spacing and varies by 1–2 due to length rounding).
-            tolerance = 2 * max(num_piles, 1)
-            if abs(d_count - w_count) > tolerance:
-                issues.append(_issue(
-                    'Bar Count', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
-                    f"Design input specifies {d_count} bars for '{bm}' ({comp}). Drawing schedule shows {w_count} bars. "
-                    f"Ring bar counts can vary by ±{tolerance} due to spacing rounding — verify manually.",
-                    f"Check ring count for bar '{bm}' against Detail A/A' selection.",
-                    'error', zone, bar_bbox
-                ))
-        elif d_count != w_count:
-            issues.append(_issue(
-                'Bar Count', f"{prefix}: Count mismatch — design {d_count} nos, drawing {w_count} nos",
-                f"Design input specifies {d_count} bars for '{bm}' ({comp}). Drawing schedule shows {w_count} bars.",
-                f"Update count to {d_count} nos.",
-                'error', zone, bar_bbox
-            ))
-
-    # Length check
+    # Length check (per-bar length, not total)
     d_len = design_bar.get('length_m')
     w_len = _norm_float(drawing_bar.get('length_m'))
     if d_len and w_len:
@@ -615,23 +749,7 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 'error', zone, bar_bbox
             ))
 
-    d_total_len = design_bar.get('total_len_m')
-    if all_design_bars and len(all_design_bars) > 1:
-        vals = [b.get('total_len_m') for b in all_design_bars if b.get('total_len_m')]
-        if vals:
-            d_total_len = sum(vals)
-    w_total_len = _norm_float(drawing_bar.get('total_length_m'))
-    if d_total_len and w_total_len:
-        diff = _pct_diff(d_total_len, w_total_len)
-        if diff and diff > 2:
-            issues.append(_issue(
-                'Bar Total Length',
-                f"{prefix}: Total length mismatch — design {round(d_total_len, 2)}m, drawing {round(w_total_len, 2)}m",
-                f"Design input total length = {round(d_total_len, 2)}m for '{bm}' ({comp}). Drawing schedule shows {round(w_total_len, 2)}m.",
-                f"Update total length for bar '{bm}' to {round(d_total_len, 2)}m.",
-                'error', zone, bar_bbox
-            ))
-
+    # Unit weight check
     d_unit_wt = design_bar.get('unit_wt')
     w_unit_wt = _norm_float(drawing_bar.get('unit_wt_kg_m'))
     if d_unit_wt and w_unit_wt:
@@ -642,24 +760,6 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                 f"{prefix}: Unit weight mismatch — design {round(d_unit_wt, 3)} kg/m, drawing {round(w_unit_wt, 3)} kg/m",
                 f"Design input unit weight = {round(d_unit_wt, 3)} kg/m for '{bm}' ({comp}). Drawing schedule shows {round(w_unit_wt, 3)} kg/m.",
                 f"Unit weight for bar '{bm}' should be {round(d_unit_wt, 3)} kg/m — check for typo in schedule.",
-                'error', zone, bar_bbox
-            ))
-
-    # Total weight: compare design input (Excel formula value, authoritative) vs drawing schedule
-    d_total_wt = design_bar.get('total_wt_kg')
-    if all_design_bars and len(all_design_bars) > 1:
-        vals = [b.get('total_wt_kg') for b in all_design_bars if b.get('total_wt_kg')]
-        if vals:
-            d_total_wt = sum(vals)
-    w_total_wt = _norm_float(drawing_bar.get('total_wt_kg'))
-    if d_total_wt and w_total_wt:
-        diff = _pct_diff(d_total_wt, w_total_wt)
-        if diff and diff > 5:
-            issues.append(_issue(
-                'Bar Weight',
-                f"{prefix}: Total weight mismatch — design {d_total_wt:.1f}kg, drawing {w_total_wt:.1f}kg",
-                f"Design input total weight = {d_total_wt:.1f}kg for bar '{bm}' ({comp}). Drawing schedule shows {w_total_wt:.1f}kg.",
-                f"Recheck total weight for bar '{bm}' — likely a consequence of a count or length error.",
                 'error', zone, bar_bbox
             ))
 
@@ -696,14 +796,14 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                         f"Update the reinforcement column spacing for '{bm}' to {round(d_spacing)}mm c/c.",
                         'error', zone, bar_bbox
                     ))
-            elif reinf_secondary == 'count' and d_count and int(w_val) != d_count:
+            elif reinf_secondary == 'count' and d_count_total and int(w_val) != d_count_total:
                 issues.append(_issue(
                     'Reinforcement',
                     f"{prefix}: Reinforcement column count mismatch — "
-                    f"design {d_count} NOS, drawing text {int(w_val)} NOS",
+                    f"design {d_count_total} NOS, drawing text {int(w_val)} NOS",
                     f"Bar '{bm}' ({comp}): reinforcement column shows {int(w_val)} NOS "
-                    f"but design expects {d_count} NOS ({w_reinf_text!r}).",
-                    f"Update the reinforcement column for '{bm}' to {d_count} NOS.",
+                    f"but design expects {d_count_total} NOS ({w_reinf_text!r}).",
+                    f"Update the reinforcement column for '{bm}' to {d_count_total} NOS.",
                     'error', zone, bar_bbox
                 ))
 
@@ -752,6 +852,54 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                     f"Correct the bar shape dimension for '{bm}' to {d_mm:.0f}mm.",
                     'error', zone, bar_bbox
                 ))
+    return issues
+
+
+def _compare_bar(bm, comp, design_bar, drawing_bars, zone, all_design_bars=None, bar_bbox=None,
+                 is_ring=False, num_piles=1, spacing_capable=True, shape_dims_capable=True):
+    """
+    drawing_bars is always a list now (normalized in _check_schedule): a
+    single-element list for the overwhelming majority of bar marks (one
+    physical schedule row), or multiple elements for a bar mark split across
+    confinement-zone rows (DXF path only — see CLAUDE.md "multi-row zone
+    matching"). all_design_bars is the equivalent design-side list.
+    """
+    issues = []
+
+    d_count_total = design_bar.get('count')
+    if all_design_bars and len(all_design_bars) > 1:
+        d_count_total = sum(b.get('count') or 0 for b in all_design_bars if b.get('count'))
+    d_spacing = design_bar.get('spacing_mm')
+
+    # Scalar fields: check every drawing zone row individually against design's
+    # expected value (not just the first), so a mismatch confined to one zone surfaces.
+    for drawing_bar in drawing_bars:
+        issues += _compare_bar_scalars(bm, comp, design_bar, drawing_bar, zone, bar_bbox,
+                                       d_count_total, d_spacing,
+                                       spacing_capable=spacing_capable,
+                                       shape_dims_capable=shape_dims_capable)
+
+    # Count / total-length / total-weight — zone-row aware.
+    design_bars = all_design_bars if (all_design_bars and len(all_design_bars) > 1) else [design_bar]
+    if len(design_bars) == len(drawing_bars) > 1:
+        # Equal row counts on both sides: pair by closest value and compare each
+        # pair individually — no summing (e.g. bar 'y': 2 Excel rows ↔ 2 drawing rows).
+        for d_row, w_row in _pair_rows_by_closest_value(design_bars, drawing_bars):
+            issues += _compare_bar_totals(bm, comp, d_row, w_row, zone, bar_bbox,
+                                          is_ring=is_ring, num_piles=num_piles)
+    else:
+        # Row counts differ (or both sides are single-row, the common case): sum
+        # across all rows on both sides and compare the sums (e.g. bar 'y1': 1
+        # Excel row ↔ 2 drawing rows — sum the drawing rows, compare against Excel's one).
+        d_summed = _sum_keys(design_bars, ['count', 'total_len_m', 'total_wt_kg'])
+        w_summed = _sum_keys(drawing_bars, ['count', 'total_length_m', 'total_wt_kg'])
+        issues += _compare_bar_totals(bm, comp, d_summed, w_summed, zone, bar_bbox,
+                                      is_ring=is_ring, num_piles=num_piles)
+
+    if len(drawing_bars) > 1:
+        issues += _check_drawing_internal_consistency(bm, comp, drawing_bars, zone, bar_bbox)
+
+    return issues
 
     return issues
 
@@ -931,13 +1079,21 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
         if not drawing_bar:
             continue
 
-        schedule_count = _norm_count(
-            drawing_bar.get('count') or drawing_bar.get('count_text', ''))
+        # DXF path may split one bar mark across multiple confinement-zone rows
+        # (e.g. y/y1) — sum counts across zones for cross-section comparison
+        # purposes (the dot count in a section view represents the bar mark's
+        # full schedule total, not one zone alone).
+        drawing_bars = drawing_bar if isinstance(drawing_bar, list) else [drawing_bar]
+        schedule_count = sum(
+            _norm_count(b.get('count') or b.get('count_text', '')) or 0
+            for b in drawing_bars
+        )
         if not schedule_count:
             continue
 
-        bundle_factor = 2 if is_bundle else _parse_bundle_factor(
-            drawing_bar.get('reinforcement_text', ''))
+        reinf_text = next((b.get('reinforcement_text') for b in drawing_bars
+                           if b.get('reinforcement_text')), '')
+        bundle_factor = 2 if is_bundle else _parse_bundle_factor(reinf_text)
 
         # Pile sections: divide total by pile count and bundle factor.
         # Pilecap/pier sections: divide only by bundle factor.

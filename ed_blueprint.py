@@ -594,13 +594,17 @@ def api_dxf_schedule_debug(review_id):
                 else:
                     raw_by_col['_unassigned'].append(entry)
 
-        # Get final parsed values (re-run _aggregate_bar_rows)
-        from ed_checker.dxf_extractor import _aggregate_bar_rows
-        parsed = _aggregate_bar_rows(bar_rows, col_map, bm,
-                                     x_offset_min=1000.0 / u2mm)
+        # Get final parsed values (re-run via the zone-aware orchestrator — splits
+        # bar_rows into per-confinement-zone dicts when more than one TOTAL_LEN
+        # anchor is present, e.g. y/y1; single-zone bars are unaffected)
+        from ed_checker.dxf_extractor import _aggregate_bar_rows_for_bar
+        parsed = _aggregate_bar_rows_for_bar(bar_rows, col_map, bm,
+                                             x_offset_min=1000.0 / u2mm)
+        n_zones = len(parsed) if isinstance(parsed, list) else 1
         result[bm] = {
             'component':   comp,
             'row_range':   [first_row, last_row],
+            'n_zones':     n_zones,
             'raw_rows_text': [
                 ' | '.join(c['text'] for c in sorted(row, key=lambda t: t['x']))
                 for row in bar_rows

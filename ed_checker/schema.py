@@ -29,7 +29,13 @@ def new_drawing_data(**overrides) -> dict:
     """
     data = {
         # Core extracted content
-        'schedule':                     {},     # comp -> {bar_mark -> bar dict}
+        # comp -> {bar_mark -> bar dict | list[bar dict]}. A bar mark is a list
+        # (DXF path only) when the schedule splits it across multiple physical
+        # confinement-zone rows (e.g. y/y1) — mirrors excel_parser._add()'s
+        # equivalent list-shape on the design side. PDF/vision path always
+        # produces a flat dict (pdf_extractor pre-sums duplicate bar marks).
+        'schedule':                     {},
+
         'title_block':                  {},
         'notes':                        {},
         'dim_data':                     {},     # DXF DIMENSION-derived data (DXF path only)

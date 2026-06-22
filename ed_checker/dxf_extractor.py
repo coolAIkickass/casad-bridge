@@ -223,7 +223,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     dim_data            = _extract_dimensions(msp, extents, u2mm)
     table_1             = _extract_table1(all_text, extents, profile.layout)
     sv_pos, cut_letters = _extract_section_info(all_text, extents, profile.layout)
-    xsec                = _count_cross_section_bars(msp, all_text, schedule, extents, profile, diags)
+    xsec                = _count_cross_section_bars(msp, all_text, schedule, extents, profile, diags, u2mm)
     geometry_from_drawing = _classify_all_dims(msp, all_text, extents, profile, u2mm)
     multileader_callouts  = _extract_multileader_callouts(msp, extents)
     # Programmatic unlabeled-view and missing-detail detection (runs before del msp).
@@ -514,9 +514,15 @@ def _strip_text_codes(text: str) -> str:
 
 
 def _strip_mtext_codes(text: str) -> str:
-    """Remove AutoCAD MTEXT inline formatting codes."""
+    """Remove AutoCAD MTEXT inline formatting codes.
+
+    {\\Wn;text} braces are a formatting *scope*, not a content wrapper — e.g. a
+    bar-count callout written as {\\W1;32 -15 NOS} must yield "32 -15 NOS", not ''.
+    Strip the \\code; prefix, then strip the brace delimiters themselves, but never
+    delete the text they enclose.
+    """
     text = re.sub(r'\\[PpLlOoKkCcFfAaQqHhWwBbIiTtSs][^;]*;', '', text)
-    text = re.sub(r'\{[^}]*\}', '', text)
+    text = text.replace('{', '').replace('}', '')
     text = text.replace('\\~', ' ').replace('\\P', '\n').replace('\\p', '\n')
     return text.strip()
 
@@ -1770,13 +1776,19 @@ def _extract_multileader_callouts(msp, extents: tuple) -> list:
 # ── DIMENSION entity extraction ───────────────────────────────────────────────
 
 def _strip_dim_override(text: str) -> str:
-    """Strip AutoCAD MTEXT formatting codes from a DIMENSION override string."""
+    """Strip AutoCAD MTEXT formatting codes from a DIMENSION override string.
+
+    {\\Wn;text} braces are a formatting *scope*, not a content wrapper — a
+    bar-count callout written as {\\W1;32 -15 NOS} must yield "32 -15 NOS", not ''.
+    Strip the \\code; prefix first, then strip the brace delimiters themselves
+    (never delete the text they enclose) before stripping the other codes below.
+    """
     if not text:
         return ''
-    text = re.sub(r'\{\\[^}]+\}', '', text)     # {\\W1;...} style blocks
+    text = re.sub(r'\\[A-Za-z][^;\\]*?;', '', text)  # \code; inline codes (incl. inside braces)
+    text = text.replace('{', '').replace('}', '')      # formatting-scope delimiters only
     text = re.sub(r'\\[Xx]', ' ', text)          # \X stacking separator
     text = re.sub(r'\\[Pp]', ' ', text)          # \P paragraph break
-    text = re.sub(r'\\[A-Za-z][^;\\]*?;', '', text)  # \code; inline codes
     text = text.replace('<>', '').strip()         # <> = "show measured value"
     return re.sub(r'\s{2,}', ' ', text).strip()
 
@@ -2124,7 +2136,7 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
 
 def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tuple,
                               profile: DrawingTypeProfile = PPP_PROFILE,
-                              diags: list = None) -> list:
+                              diags: list = None, u2mm: float = 1.0) -> list:
     """
     Count bar-dot symbols within each section view to get exact bar counts.
     Returns list of cross_section_check dicts matching pdf_extractor format.
@@ -2186,6 +2198,13 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
     view_x_max = x_min + dw * layout.views_x_max_frac
     results = []
 
+    # Bare labels (e.g. "SECTION C-C" cut from a multi-component parent elevation like
+    # "SECTION A-A FOR PILECAP & PIER") name no component of their own — resolve via
+    # cut-mark geometry before falling back to skipping the count. See docstring.
+    view_labels = _extract_view_labels(all_text, profile)
+    regions = _detect_component_regions(msp, extents, u2mm, view_labels)
+    cutmark_components = _infer_cutmark_components(all_text, view_labels, regions, profile)
+
     for t in all_text:
         if t['x'] >= view_x_max:
             continue
@@ -2199,6 +2218,14 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
         lx, ly = t['x'], t['y']
 
         comp = _infer_component_from_label(label_text, profile)
+        if comp == 'unknown':
+            comp = cutmark_components.get(letter, 'unknown')
+            if comp != 'unknown':
+                diags.append(diag('xsec_component_from_cutmark',
+                                  f'Section "{label_text}": component resolved as {comp!r} '
+                                  f'via cut-mark position on its parent elevation '
+                                  f'(label text itself names no component).',
+                                  severity='info'))
         if comp == 'unknown':
             log.debug('Section %r: cannot determine component from label — skipping count', label_text)
             diags.append(diag('xsec_component_unknown',
@@ -2455,13 +2482,86 @@ def _infer_component_from_label(label: str, profile: DrawingTypeProfile = PPP_PR
     Infer the component from section label text using the profile's component names
     (longest first, so PILECAP matches before PILE). Returns 'unknown' if no component
     keyword is present — caller should skip counting rather than guess from section
-    letter conventions.
+    letter conventions. (Callers may still resolve 'unknown' via
+    _infer_cutmark_components, which reads cut-mark geometry instead of guessing
+    from the letter itself — see that function's docstring.)
     """
     u = label.upper()
     for comp in profile.comps_longest_first():
         if comp.upper() in u:
             return comp
     return 'unknown'
+
+
+def _infer_cutmark_components(all_text: list, view_labels: list, regions: dict,
+                               profile: DrawingTypeProfile = PPP_PROFILE) -> dict:
+    """
+    Resolve the component for SECTION X-X labels that name no component (e.g. bare
+    "SECTION C-C") by reading where their cut-mark triangle sits on a parent elevation.
+
+    CASAD convention: a multi-component elevation like "SECTION A-A FOR PILECAP & PIER"
+    carries cut-mark triangle annotations (ATTRIB text "C", "D", ... on a small INSERT
+    block) marking where child SECTION C-C / SECTION D-D views are cut from. Since the
+    parent elevation already states both components, the child label omits the
+    qualifier — it's implied by which part of the parent elevation the triangle sits on.
+    Confirmed on a real production sheet (2026-06-22): cut-marks "C"/"D" for the pier
+    cross-sections sit ~1500-2700mm *above* the matched pilecap region's top edge, i.e.
+    in the pier shaft portion of the elevation, while the pilecap itself occupies the
+    bbox below.
+
+    Algorithm: for each unqualified "SECTION L-L" label, collect cut-mark ATTRIB
+    occurrences of letter L, find the nearest *qualified* section label (by distance)
+    to get the candidate component set, then use the cut-mark's y position relative to
+    the nearest pilecap region's bbox to pick one: above the top edge → 'pier' (if pier
+    is in the candidate set), inside the bbox → 'pilecap'. Returns {} (not 'unknown' —
+    see _infer_component_from_label) for any letter where no pilecap region is nearby,
+    where the candidate set has only one member already, or where the geometry doesn't
+    resolve cleanly — under-detecting is safer than guessing.
+
+    Returns {letter: component}.
+    """
+    unqualified = {}
+    for lb in view_labels:
+        if lb['view_type'] != 'section' or lb['components']:
+            continue
+        m = re.search(r'SECTION\s+([A-Z])[\-\xad–]\1', lb['text'].upper())
+        if m:
+            unqualified[m.group(1)] = lb
+
+    qualified = [lb for lb in view_labels if lb['view_type'] == 'section' and lb['components']]
+    pilecap_regions = [r for r in regions.values() if r['type'] == 'pilecap']
+    if not unqualified or not qualified or not pilecap_regions:
+        return {}
+
+    cut_pts: dict = {}
+    for t in all_text:
+        s = t['text'].strip()
+        if len(s) == 1 and s.isupper() and s.isalpha() and t.get('is_attrib') and s in unqualified:
+            cut_pts.setdefault(s, []).append((t['x'], t['y']))
+
+    result = {}
+    for letter, pts in cut_pts.items():
+        votes: dict = {}
+        for cx, cy in pts:
+            nearest_label = min(qualified, key=lambda lb: (lb['x'] - cx) ** 2 + (lb['y'] - cy) ** 2)
+            candidates = nearest_label['components']
+            if len(candidates) == 1:
+                votes[next(iter(candidates))] = votes.get(next(iter(candidates)), 0) + 1
+                continue
+            if 'pilecap' not in candidates:
+                continue   # geometry rule below is pilecap-relative; can't resolve otherwise
+            nearest_pc = min(pilecap_regions,
+                              key=lambda r: ((r['bbox'][0] + r['bbox'][2]) / 2 - cx) ** 2)
+            _, pc_y0, _, pc_y1 = nearest_pc['bbox']
+            if cy > pc_y1 and 'pier' in candidates:
+                votes['pier'] = votes.get('pier', 0) + 1
+            elif pc_y0 <= cy <= pc_y1:
+                votes['pilecap'] = votes.get('pilecap', 0) + 1
+        if votes:
+            result[letter] = max(votes, key=votes.get)
+            log.info('Cut-mark "%s" resolved to component %r via elevation geometry (votes=%s)',
+                     letter, result[letter], votes)
+    return result
 
 
 def _find_bar_mark_for_section(comp: str, schedule: dict) -> str | None:

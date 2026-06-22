@@ -31,14 +31,13 @@ class LayoutConfig:
     # Scan windows around anchors
     notes_w_frac: float = 0.40          # half-width of notes scan around the NOTES label
     notes_h_frac: float = 0.40          # height of notes scan below the label
-    table1_w_frac: float = 0.30         # half-width of TABLE-1 scan around its label
-    table1_h_frac: float = 0.30         # height of TABLE-1 scan below its label
-    # Cross-section bar counting
-    xsec_dx_frac: float = 0.25          # half-width of the dot search box around a section label
-    xsec_below_frac: float = 0.40       # search box extends this far below the label
-    xsec_above_frac: float = 0.05       # … and this far above
-    dot_max_r_frac: float = 0.05        # max bar-dot radius (filters section boundary circles)
-    cluster_gap_frac: float = 0.15      # max gap between dots of one section view cluster
+    # Cross-section bar counting: NOT sheet-relative fractions — see
+    # _XSEC_REGION_MARGIN_MM / _XSEC_FALLBACK_*_MM / _XSEC_CLUSTER_GAP_MM /
+    # _XSEC_DOT_MAX_R_MM in dxf_extractor.py. A fraction of sheet width/height gives a
+    # reasonable search box on a small cropped single-section DXF but blows up to tens
+    # of metres on a full multi-view sheet, pulling neighbouring section views' dots
+    # into one inflated "cluster" (found 2026-06-22 on Section C-C/D-D, ~4.5m apart,
+    # both swept into one 359-dot blob by a then-26m-wide search box).
     # Label / row geometry
     view_h_frac: float = 0.18           # estimated section-view height below its label
     header_band_frac: float = 0.012     # Y-band that collects multi-line schedule header rows
@@ -145,12 +144,20 @@ PPP_PROFILE = DrawingTypeProfile(
     # Spatial geometric dimension checks — DXF defpoint routing vs design geometry.
     # Each tuple: (param_in_geometry_from_drawing, design_geometry_key, tol_pct, label, design_unit)
     # design_unit 'm' → multiply design value × 1000 before comparing with DXF mm value.
+    # 'pilecap_length_overall' is deliberately NOT compared here: on a full multi-
+    # pilecap sheet it's the drawn span across multiple pile caps along the pier line
+    # (15800mm, confirmed on the P3-P7 production sheet), not a single pilecap's own
+    # length — there is no design-side key for that span, and pairing it against
+    # design's pilecap_length_along (a single-unit value, 4500mm) is comparing two
+    # different physical quantities, producing a guaranteed false-positive mismatch
+    # on every sheet using this drawing convention. Extraction itself is unaffected —
+    # 'pilecap_length_overall' still appears in geometry_from_drawing, just not
+    # compared against design. Found + fixed 2026-06-22.
     geometry_checks=(
         ('pilecap_depth',          'pilecap_depth',          2.0, 'Pilecap depth',              'm'),
         ('pile_spacing',           'pile_spacing',           2.0, 'Pile c/c spacing',           'm'),
         ('pile_overhang',          'pile_overhang',          5.0, 'Pile overhang',              'm'),
         ('pilecap_width',          'pilecap_length_across',  2.0, 'Pilecap width (across)',     'm'),
-        ('pilecap_length_overall', 'pilecap_length_along',   2.0, 'Pilecap length (along)',     'm'),
         ('pile_dia',               'pile_dia',               2.0, 'Pile diameter',              'm'),
     ),
 )

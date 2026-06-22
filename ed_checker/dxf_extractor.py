@@ -221,7 +221,6 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     notes               = _extract_notes(all_text, extents, profile)
     _append_section_grade_diagnostics(all_text, extents, profile, notes, diags)
     dim_data            = _extract_dimensions(msp, extents, u2mm)
-    table_1             = _extract_table1(all_text, extents, profile.layout)
     sv_pos, cut_letters = _extract_section_info(all_text, extents, profile.layout)
     xsec                = _count_cross_section_bars(msp, all_text, schedule, extents, profile, diags, u2mm)
     geometry_from_drawing = _classify_all_dims(msp, all_text, extents, profile, u2mm)
@@ -264,7 +263,6 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
         title_block=title_block,
         notes=notes,
         dim_data=dim_data,
-        table_1=table_1,
         cross_section_checks=xsec,
         section_view_positions=sv_pos,
         cut_letters=cut_letters,
@@ -1924,59 +1922,6 @@ def _extract_dimensions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
     return result
 
 
-# ── TABLE-1 (pier levels) extraction ─────────────────────────────────────────
-
-def _extract_table1(all_text: list, extents: tuple, layout=None) -> list:
-    """Extract TABLE-1 pier elevation data."""
-    layout = layout or PPP_PROFILE.layout
-    # Find TABLE-1 label
-    table1_anchor = None
-    for t in all_text:
-        if re.search(r'TABLE[\s\-]*1', t['text'].upper()):
-            table1_anchor = t
-            break
-
-    if not table1_anchor:
-        return []
-
-    x_min, y_min, x_max, y_max = extents
-    dw = x_max - x_min
-    dh = y_max - y_min
-
-    # Collect text near TABLE-1: within the scan window around/below the label
-    nearby = [t for t in all_text
-              if abs(t['x'] - table1_anchor['x']) < dw * layout.table1_w_frac
-              and (table1_anchor['y'] - dh * layout.table1_h_frac) <= t['y'] <= table1_anchor['y'] + 5]
-
-    rows = _group_rows(nearby, tol_frac=layout.sched_row_tol_frac, extents=extents)
-    if len(rows) < 2:
-        return []
-
-    # First row after label = headers, subsequent rows = pier data
-    # Identify which column has pier ID (P3, P4...) vs numeric levels
-    table_rows = []
-    for row in rows[1:]:  # skip the TABLE-1 label row
-        row_text = [t['text'].strip() for t in row]
-        # Look for pier ID pattern: P3, I1, N2, A1, etc. (letter + digits)
-        pier_ids = [s for s in row_text if re.match(r'^[A-Z]\d+$', s, re.IGNORECASE)]
-        level_vals = [_safe_float(s) for s in row_text if _safe_float(s) is not None]
-
-        if not pier_ids and not level_vals:
-            continue  # header row or gap
-
-        for pier_id in pier_ids:
-            entry = {'pier_id': pier_id, 'bbox': None}
-            # CASAD TABLE-1 columns list elevations in ascending order (lowest first):
-            # col 0 = bottom of pilecap, col 1 = top of pilecap, col 2 = top of pier,
-            # col 3 = top of pier cap, col 4 = ground level (if present).
-            level_keys = ['bottom_pilecap_m', 'top_pilecap_m', 'top_pier_m', 'top_pier_cap_m', 'ground_level_m']
-            for i, key in enumerate(level_keys):
-                entry[key] = level_vals[i] if i < len(level_vals) else None
-            table_rows.append(entry)
-
-    return table_rows
-
-
 # ── View label extraction (for Tier 2 plan/section disambiguation) ────────────
 
 _VIEW_LABEL_RE = re.compile(r'^(SECTION|PLAN OF|REINFORCEMENT PLAN OF|DETAIL)\b', re.IGNORECASE)
@@ -2134,6 +2079,21 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
 
 # ── Cross-section bar counting ────────────────────────────────────────────────
 
+# Absolute mm, NOT sheet-relative fractions (see profiles.py LayoutConfig comment).
+# A fraction of sheet width/height gives a reasonable box on a small cropped
+# single-section DXF but balloons to tens of metres on a full multi-view sheet,
+# sweeping a neighbouring section view's dots into the same cluster. Found 2026-06-22:
+# SECTION C-C and SECTION D-D labels sit only ~4.5m apart on the real P3-P7 sheet, but
+# the old xsec_dx_frac=0.25 gave a 26.7m half-width search box (sheet width 107m) —
+# every dot on roughly half the sheet (359 of ~436) landed in "one" section's cluster.
+_XSEC_REGION_MARGIN_MM   = 600.0    # margin around a detected component's own bbox
+_XSEC_FALLBACK_DX_MM     = 4500.0   # used only when no matching region was detected
+_XSEC_FALLBACK_BELOW_MM  = 5000.0
+_XSEC_FALLBACK_ABOVE_MM  = 700.0
+_XSEC_CLUSTER_GAP_MM     = 2600.0   # max gap between dots of one section view cluster
+_XSEC_DOT_MAX_R_MM       = 600.0    # max bar-dot radius (filters section boundary circles)
+
+
 def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tuple,
                               profile: DrawingTypeProfile = PPP_PROFILE,
                               diags: list = None, u2mm: float = 1.0) -> list:
@@ -2234,12 +2194,29 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
             continue
         bar_mark = _find_bar_mark_for_section(comp, schedule)
 
-        # Search for bar dots in a region around the section label
-        # (the section view is typically below and/or beside the label)
-        search_x0 = lx - dw * layout.xsec_dx_frac
-        search_x1 = lx + dw * layout.xsec_dx_frac
-        search_y0 = ly - dh * layout.xsec_below_frac   # below label (DXF y decreases downward)
-        search_y1 = ly + dh * layout.xsec_above_frac   # slightly above label
+        # Search for bar dots in a region around the section label. Anchored to the
+        # section's own detected component region when available — its bbox already
+        # excludes neighbouring views by construction, unlike a fixed offset from the
+        # label (see _XSEC_* constants' docstring). Falls back to a label-relative box
+        # only when region detection found nothing for this component (e.g. an
+        # elevation view with no closed-polyline/arc geometry to detect).
+        margin = _XSEC_REGION_MARGIN_MM / u2mm if u2mm else _XSEC_REGION_MARGIN_MM
+        comp_regions = [r for r in regions.values() if r['type'] == comp]
+        if comp_regions:
+            nearest = min(comp_regions, key=lambda r: (
+                (r['bbox'][0] + r['bbox'][2]) / 2 - lx) ** 2 +
+                ((r['bbox'][1] + r['bbox'][3]) / 2 - ly) ** 2)
+            rx0, ry0, rx1, ry1 = nearest['bbox']
+            search_x0, search_x1 = rx0 - margin, rx1 + margin
+            search_y0, search_y1 = ry0 - margin, ry1 + margin
+        else:
+            fb_dx    = _XSEC_FALLBACK_DX_MM / u2mm if u2mm else _XSEC_FALLBACK_DX_MM
+            fb_below = _XSEC_FALLBACK_BELOW_MM / u2mm if u2mm else _XSEC_FALLBACK_BELOW_MM
+            fb_above = _XSEC_FALLBACK_ABOVE_MM / u2mm if u2mm else _XSEC_FALLBACK_ABOVE_MM
+            search_x0 = lx - fb_dx
+            search_x1 = lx + fb_dx
+            search_y0 = ly - fb_below   # below label (DXF y decreases downward)
+            search_y1 = ly + fb_above  # slightly above label
 
         def _in_box(c):
             return search_x0 <= c['x'] <= search_x1 and search_y0 <= c['y'] <= search_y1
@@ -2258,7 +2235,7 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
         # Candidate source 2: circles, radius-filtered (excludes section boundary
         # circles) — for drawings that draw bar dots as plain CIRCLE entities.
         if not nearby:
-            max_bar_r = dh * layout.dot_max_r_frac
+            max_bar_r = _XSEC_DOT_MAX_R_MM / u2mm if u2mm else _XSEC_DOT_MAX_R_MM
             nearby = [c for c in circles if _in_box(c) and c['r'] <= max_bar_r]
 
         if not nearby:
@@ -2273,7 +2250,8 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
             continue
 
         # Cluster nearby dots: group dots that are close together into one section view
-        cluster = _largest_cluster(nearby, max_gap=dw * layout.cluster_gap_frac)
+        cluster_gap = _XSEC_CLUSTER_GAP_MM / u2mm if u2mm else _XSEC_CLUSTER_GAP_MM
+        cluster = _largest_cluster(nearby, max_gap=cluster_gap)
         if not cluster:
             continue
 
@@ -2454,18 +2432,48 @@ def _collapse_bundle_pairs(cluster: list) -> list:
 
 
 def _detect_bundles(cluster: list) -> bool:
-    """Return True if bars appear to be bundle bars (closely-spaced pairs)."""
-    if len(cluster) < 2:
+    """
+    Return True only when most dots form genuine touching pairs: each dot's
+    nearest neighbour reciprocates (mutual 1-NN), and that pair distance is
+    clearly smaller than each dot's *own* next-nearest spacing.
+
+    The old version compared the single smallest pairwise distance in the
+    whole cluster against the GLOBAL median pairwise distance. That breaks on
+    a rectangular perimeter where different edges have different uniform bar
+    pitches (e.g. 138.6mm c/c along the short edges vs. ~1580mm to dots on the
+    far edge): the global median is dominated by long cross-cluster/diagonal
+    distances, so the short edge's perfectly normal, non-bundled spacing looks
+    "anomalously small" by comparison and the whole cluster gets misclassified
+    as bundled. Confirmed on Section C-C/D-D (2026-06-22): 56 single dots at
+    15+13 per face (matching the schedule's bar-count annotations and total
+    count of 56) were wrongly halved to 32/31 "bundle pairs". The mutual-NN +
+    per-point-ratio test only fires when dots are actually arranged as twins,
+    regardless of how spacing varies between sides of a non-circular shape.
+    """
+    n = len(cluster)
+    if n < 4:
         return False
-    # Compute all pairwise distances
-    pairs = []
-    for i, a in enumerate(cluster):
-        for b in cluster[i+1:]:
-            pairs.append(math.hypot(a['x'] - b['x'], a['y'] - b['y']))
-    pairs.sort()
-    # If the smallest distance is much less than the median, likely bundles
-    median_d = pairs[len(pairs) // 2]
-    return pairs[0] < median_d * 0.3 if median_d > 0 else False
+    nn1_idx, nn1_d, nn2_d = [], [], []
+    for i in range(n):
+        ds = sorted(
+            (math.hypot(cluster[i]['x'] - cluster[j]['x'], cluster[i]['y'] - cluster[j]['y']), j)
+            for j in range(n) if j != i
+        )
+        nn1_d.append(ds[0][0])
+        nn1_idx.append(ds[0][1])
+        nn2_d.append(ds[1][0] if len(ds) > 1 else ds[0][0])
+    # Mutual nearest-neighbour pairing: i's nearest is j AND j's nearest is i.
+    mutual = sum(1 for i in range(n) if nn1_idx[nn1_idx[i]] == i)
+    if mutual < n * 0.7:
+        return False
+    # For paired dots, the pair gap must be clearly smaller than that dot's
+    # OWN spacing to the next-nearest (different) bar — not the cluster's
+    # global stats, which vary by which edge/side a dot sits on.
+    ratios = sorted(nn1_d[i] / nn2_d[i] for i in range(n) if nn2_d[i] > 0)
+    if not ratios:
+        return False
+    median_ratio = ratios[len(ratios) // 2]
+    return median_ratio < 0.6
 
 
 def _angle_to_clock(angle_rad: float) -> str:

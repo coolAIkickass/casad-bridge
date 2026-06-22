@@ -41,7 +41,6 @@ BBOX_FALLBACK = {
     'pier_schedule':    {'x': 62, 'y': 47, 'w': 35, 'h': 22},
     'title_block':      {'x': 63, 'y': 77, 'w': 34, 'h': 20},
     'notes':            {'x': 63, 'y': 67, 'w': 34, 'h':  9},
-    'table_1':          {'x': 82, 'y':  1, 'w': 16, 'h':  4},
     'default':          {'x': 63, 'y': 22, 'w': 34, 'h':  4},
 }
 
@@ -219,23 +218,22 @@ def compare(design_data: dict, drawing_data: dict) -> list:
         capabilities,
         dxf_comp_anchors=drawing_data.get('dxf_comp_anchors') or {},
     )
-    issues += _check_table1(drawing_data.get('table_1') or [], design_data)
     # Section presence and notes completeness are now text-extracted (authoritative).
     # Supplement with inferences from extracted data: pdfplumber only scans the left 55%
-    # of the page, so labels in the right/schedule area ('SCHEDULE OF REINFORCEMENT',
-    # 'TABLE-1') are invisible to it. If we successfully extracted the content, the label
+    # of the page, so labels in the right/schedule area ('SCHEDULE OF REINFORCEMENT')
+    # are invisible to it. If we successfully extracted the content, the label
     # must exist in the drawing — don't flag it as missing.
+    # Note: TABLE-1 is deliberately not data-checked here (see _check_sections / required_sections
+    # for the presence-only check) — CASAD always pastes TABLE-1 in as a picture/OLE object
+    # copied directly from the design Excel, so its values can never diverge from design intent.
     _sft_raw = drawing_data.get('sections_from_text') or []
     _schedule = drawing_data.get('schedule') or {}
-    _table_1  = drawing_data.get('table_1') or []
     _sft = []
     for _e in _sft_raw:
         _e2 = dict(_e)
         if not _e2.get('present'):
             _n = _e2.get('name', '')
             if _n == 'SCHEDULE OF REINFORCEMENT' and _schedule:
-                _e2['present'] = True
-            elif _n == 'TABLE-1' and _table_1:
                 _e2['present'] = True
         _sft.append(_e2)
     issues += _check_sections(_sft)
@@ -753,43 +751,6 @@ def _compare_bar(bm, comp, design_bar, drawing_bar, zone, all_design_bars=None, 
                     f"but closest value in drawing is {closest_corrected:.0f}mm.",
                     f"Correct the bar shape dimension for '{bm}' to {d_mm:.0f}mm.",
                     'error', zone, bar_bbox
-                ))
-
-    return issues
-
-
-# ── TABLE-1 ───────────────────────────────────────────────────────────────────
-
-def _check_table1(table1: list, design: dict) -> list:
-    issues = []
-    if not table1:
-        issues.append(_issue(
-            'Levels (TABLE-1)', 'TABLE-1 not found or not legible',
-            'Could not extract TABLE-1 (pier level/elevation data) from the drawing.',
-            'Ensure TABLE-1 is present and legible in the drawing.',
-            'error', 'table_1'
-        ))
-        return issues
-
-    geo = design.get('geometry', {})
-    pilecap_depth = geo.get('pilecap_depth')
-
-    for row in table1:
-        pier = row.get('pier_id', '?')
-        top_pc = _norm_float(row.get('top_pilecap_m'))
-        bot_pc = _norm_float(row.get('bottom_pilecap_m'))
-        row_bbox = row.get('bbox')  # Claude's estimated bbox for this TABLE-1 row
-
-        if top_pc and bot_pc and pilecap_depth:
-            drawn_depth = round(top_pc - bot_pc, 3)
-            expected = round(pilecap_depth, 3)
-            if abs(drawn_depth - expected) > 0.01:
-                issues.append(_issue(
-                    'Levels (TABLE-1)', f'Pier {pier}: Pilecap depth mismatch — TABLE-1 shows {drawn_depth}m, design specifies {expected}m',
-                    f'For pier {pier}: top of pilecap ({top_pc}) − bottom of pilecap ({bot_pc}) = {drawn_depth}m. '
-                    f'Design input specifies pilecap depth = {expected}m.',
-                    f'Correct the pilecap level values in TABLE-1 for pier {pier}.',
-                    'error', 'table_1', row_bbox
                 ))
 
     return issues

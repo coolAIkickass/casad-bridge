@@ -32,7 +32,6 @@ def new_drawing_data(**overrides) -> dict:
         'schedule':                     {},     # comp -> {bar_mark -> bar dict}
         'title_block':                  {},
         'notes':                        {},
-        'table_1':                      [],
         'dim_data':                     {},     # DXF DIMENSION-derived data (DXF path only)
         # Visual / completeness checks
         'cross_section_checks':         [],

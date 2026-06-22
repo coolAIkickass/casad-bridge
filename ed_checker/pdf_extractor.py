@@ -1,7 +1,7 @@
 """
 Extract structured data from an AutoCAD engineering drawing PDF.
 Step 1: pdfplumber text extraction (title block, note labels, grades).
-Step 2: PyMuPDF → image → Claude vision API (schedule tables, TABLE-1, notes).
+Step 2: PyMuPDF → image → Claude vision API (schedule tables, notes).
 """
 import io
 import os
@@ -102,7 +102,7 @@ Use null for any schedule value not found or not legible.
 """
 
 TITLE_PROMPT = """You are analyzing a CASAD AutoCAD engineering drawing for a bridge structure (Pile-Pilecap-Pier foundation).
-Extract the title block, notes, and TABLE-1 from this image (right-side strip of the drawing).
+Extract the title block and notes from this image (right-side strip of the drawing).
 
 1. TITLE BLOCK — extract:
    {
@@ -139,22 +139,10 @@ Extract the title block, notes, and TABLE-1 from this image (right-side strip of
    (e.g. "Concrete Mix M35", "All M35", or just "M35" in the notes), set
    concrete_pile, concrete_pilecap AND concrete_pier all to that grade.
 
-3. TABLE-1 (levels table, if visible) — for each pier row:
-   {
-     "pier_id": "P7",
-     "top_pier_cap_m": 98.5,
-     "top_pier_m": null,
-     "top_pilecap_m": null,
-     "bottom_pilecap_m": null,
-     "ground_level_m": null,
-     "bbox": {"x": 82.0, "y": 2.0, "w": 16.0, "h": 3.0}
-   }
-
 Return ONLY valid JSON (no markdown, no extra text):
 {
   "title_block": {...},
-  "notes": {...},
-  "table_1": [...]
+  "notes": {...}
 }
 Use null for any value not found or not legible.
 """
@@ -371,7 +359,7 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
 
     # Run three API calls in parallel:
     # (1) schedule: rows + shape dims — Haiku/Sonnet, 2.5× component bands, 8192 tok
-    # (2) title: title block/notes/TABLE-1 — Haiku, 1.5× schedule strip, 4096 tok
+    # (2) title: title block/notes — Haiku, 1.5× schedule strip, 4096 tok
     # (3) review: CHECK 3-6 — Haiku, 2.5× full page, 8192 tok
     schedule_data, title_data, review_data = None, None, None
     title_images = sched_images_b64 or full_images_b64
@@ -407,7 +395,6 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
     if title_data:
         result['title_block'] = title_data.get('title_block') or {}
         result['notes']       = title_data.get('notes') or {}
-        result['table_1']     = title_data.get('table_1') or []
 
     if schedule_data:
         raw_sched = schedule_data.get('schedule') or []

@@ -217,10 +217,6 @@ function extractComparison(desc) {
   m = desc.match(/has segment ([\d,\.]+\s*mm) but closest value in drawing is ([\d,\.]+\s*mm)/i);
   if (m) return { design: m[1], drawing: m[2] };
 
-  // TABLE-1 pilecap depth: "= 0.750m. Design input specifies pilecap depth = 1.800m."
-  m = desc.match(/= ([\d\.]+m)\.\s+Design input specifies.+?= ([\d\.]+m)\./i);
-  if (m) return { design: m[2], drawing: m[1] };
-
   // Cross-section count: "40 bar(s) are drawn ... Expected 42"
   m = desc.match(/(\d+) bar(?:s|\(s\))? (?:are|is) drawn.+?Expected (\d+)/i);
   if (m) return { design: m[2] + ' bars', drawing: m[1] + ' bars' };

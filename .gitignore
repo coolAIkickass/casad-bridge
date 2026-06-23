@@ -4,4 +4,7 @@ media/
 __pycache__/
 *.pyc
 *.pyo
+.DS_Store
+*.bak*
+~$*
 # Excel templates are committed as slim versions (images stripped)

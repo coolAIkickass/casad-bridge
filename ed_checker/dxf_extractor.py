@@ -2112,17 +2112,22 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
     dw = x_max - x_min
     dh = y_max - y_min
 
-    # Views area on the left (schedule occupies the right).
-    # TRIGGER_WORDS like TABLE-1, SCHEDULE can appear in the right area too —
-    # scan all text for labels but only count cut letters from the left area.
-    view_x_max = x_min + dw * layout.views_x_max_frac
-
     all_rows = _group_rows(all_text, tol_frac=layout.row_tol_frac, extents=extents)
 
     section_view_positions = {}
     single_letter_counts = {}
     single_letter_ys     = {}  # letter → list of y-values, for axis-label filter
 
+    # Cut-letter detection is NOT gated by views_x_max_frac (removed 2026-06-24,
+    # found on ALL_SECTIONS-02.dxf): that fraction assumes cut marks always sit in
+    # a fixed left band, but on a full/combined sheet a cut mark can legitimately
+    # sit anywhere (this file's "A"/"B" cut marks on the PLAN OF PILECAP elevation
+    # were past the 55% mark and were silently dropped from cut_letters entirely —
+    # same root cause as the SECTION-label gating bug in _count_cross_section_bars).
+    # Safe to drop: bar marks are lowercase (a, b, c... per convention) so they
+    # never match the s.isupper() filter below, and the y-band check a few lines
+    # down already excludes repeated uppercase pier/grid-column labels — the two
+    # things the position gate was guarding against don't actually need it.
     for row in all_rows:
         row_sorted = sorted(row, key=lambda t: t['x'])
         line = ' '.join(t['text'] for t in row_sorted).upper().strip()
@@ -2138,28 +2143,24 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
             bbox = _to_bbox(x0, y_c, x1 + dw * 0.01, y_c - view_h, extents)
             section_view_positions[line[:80]] = bbox
 
-        # Cut letter detection only in the left (view) area to avoid picking up
-        # schedule row annotations, bar marks, pier labels on the right side.
         # Block-derived text is excluded EXCEPT ATTRIBs — ATTRIBs are user-typed
         # tag values on INSERT blocks (e.g. the "C"/"D" letter on a cut-mark arrow
         # block), not glyph substitutions from symbol block geometry.
-        if all(t['x'] < view_x_max for t in row):
-            for t in row:
-                if t.get('from_block') and not t.get('is_attrib'):
-                    continue
-                s = t['text'].strip()
-                if len(s) == 1 and s.isupper() and s.isalpha():
-                    single_letter_counts[s] = single_letter_counts.get(s, 0) + 1
-                    single_letter_ys.setdefault(s, []).append(t['y'])
-
-    # Second pass over raw entities — cut marks are often separate entities that the
-    # row grouping merges into mixed rows (same block-text exclusion applies)
-    for t in all_text:
-        if t['x'] < view_x_max and (not t.get('from_block') or t.get('is_attrib')):
+        for t in row:
+            if t.get('from_block') and not t.get('is_attrib'):
+                continue
             s = t['text'].strip()
             if len(s) == 1 and s.isupper() and s.isalpha():
                 single_letter_counts[s] = single_letter_counts.get(s, 0) + 1
                 single_letter_ys.setdefault(s, []).append(t['y'])
+
+    # No second raw-entity pass: _group_rows() partitions all_text completely (every
+    # item lands in exactly one row), so the loop above already visits each text item
+    # once. A second pass over all_text used to double-count every qualifying letter —
+    # found 2026-06-24 via ALL_SECTIONS-02.dxf, where cut-mark pairs sharing one y
+    # (e.g. "A" ... "A" either side of one cut line) got double-counted from 2 to 4
+    # occurrences, which spuriously tripped the "≥3 in one y-band = axis label" filter
+    # below and silently dropped genuine cut letters ("A", "Z") from the result.
 
     # Cut-mark letters appear in PAIRS. Filter: if a letter appears ≥ 3 times all
     # within the same 5%-height horizontal band, it is a plan-view axis/grid label
@@ -2255,8 +2256,15 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
              len(circles), len(dot_blocks),
              {n: len(p) for n, p in dot_blocks.items()} or '-')
 
-    # Find section labels in the views (left) area of the drawing
-    view_x_max = x_min + dw * layout.views_x_max_frac
+    # Find section labels anywhere on the sheet. NOT gated by views_x_max_frac —
+    # that fraction assumes the schedule sits in a fixed right-hand band, which broke
+    # on a combined/full sheet where SECTION Z-Z, C-C, D-D sit past the 55% mark
+    # (found 2026-06-24 on ALL_SECTIONS-02.dxf: those three section labels were
+    # silently skipped before the regex even ran, so their bar counts — including
+    # Z-Z's genuine bundle-bar inner ring — were never verified). The "SECTION X-X"
+    # regex below is specific enough on its own; a stray match in a schedule/notes
+    # region would still need a nearby component region and ≥4 dot hits to produce
+    # a result, so dropping the position gate does not reintroduce false positives.
     results = []
 
     # Bare labels (e.g. "SECTION C-C" cut from a multi-component parent elevation like
@@ -2267,8 +2275,6 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
     cutmark_components = _infer_cutmark_components(all_text, view_labels, regions, profile)
 
     for t in all_text:
-        if t['x'] >= view_x_max:
-            continue
         # Match "SECTION Z-Z" or "SECTION A-A FOR PILE" etc.
         m = re.search(r'SECTION\s+([A-Z])[\-\xad–](\1)', t['text'].upper())
         if not m:
@@ -2711,7 +2717,6 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
     x_min, y_min, x_max, y_max = extents
     dw = x_max - x_min
     dh = y_max - y_min
-    view_x_max = x_min + dw * profile.layout.views_x_max_frac
 
     # Minimum radius for a "section boundary" shape.
     # 100mm absolute floor converted to drawing units via u2mm.
@@ -2720,11 +2725,19 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
 
     rings = []   # {x, y, r, kind}
 
-    # --- CIRCLE primitives ---
+    # Ring candidates are NOT gated by views_x_max_frac (removed 2026-06-24, same root
+    # cause as the section-label/cut-letter gating bugs above): on ALL_SECTIONS-02.dxf
+    # 9 of 11 real ring candidates sit past the 55% mark and were silently excluded
+    # before ever reaching the "is this labeled?" check below — a position gate here
+    # is actively dangerous for this function specifically, since its whole purpose is
+    # catching genuinely-unlabeled rings; a candidate dropped before the label check
+    # can never be flagged, a false negative in the system's core job. The downstream
+    # `_has_confirmed_label` proximity check (and radius/aspect filters above) already
+    # do the real false-positive guarding, same as the other two fixes.
     try:
         for e in msp.query('CIRCLE'):
             cx, cy, cr = float(e.dxf.center.x), float(e.dxf.center.y), float(e.dxf.radius)
-            if cr >= min_sec_r and cx < view_x_max:
+            if cr >= min_sec_r:
                 rings.append({'x': cx, 'y': cy, 'r': cr, 'kind': 'circle'})
     except Exception:
         pass
@@ -2754,8 +2767,7 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
                 continue
             cx = (bx_min + bx_max) / 2
             cy = (by_min + by_max) / 2
-            if cx < view_x_max:
-                rings.append({'x': cx, 'y': cy, 'r': r_approx, 'kind': 'lwpoly'})
+            rings.append({'x': cx, 'y': cy, 'r': r_approx, 'kind': 'lwpoly'})
     except Exception:
         pass
 

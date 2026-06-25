@@ -2892,6 +2892,8 @@ def _check_notes_completeness(all_text: list,
                               profile: DrawingTypeProfile = PPP_PROFILE) -> list:
     """Return presence status for each required note item via keyword scan of DXF text."""
     full_upper = ' '.join(t['text'] for t in all_text).upper()
+    # Normalise non-ASCII hyphens (AutoCAD often writes soft hyphen / en-dash for "Fe-500")
+    full_upper = full_upper.replace('\xad', '-').replace('–', '-').replace('—', '-')
     concrete_keys = tuple(f'concrete_{c}' for c in profile.components)
     concrete_found = any(kw in full_upper for kw in profile.concrete_grade_keywords)
     result = []

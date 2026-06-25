@@ -598,6 +598,8 @@ def _sections_from_text(section_view_positions: dict) -> list:
 def _notes_completeness_from_text(raw_lines: list) -> list:
     """Return presence status for each required note item using keyword scan of raw text."""
     text = '\n'.join(raw_lines).upper()
+    # Normalise non-ASCII hyphens (AutoCAD often writes soft hyphen / en-dash for "Fe-500")
+    text = text.replace('\xad', '-').replace('–', '-').replace('—', '-')
     # Concrete keys share the same grade keywords — if any grade found, all three are covered.
     concrete_keys = ('concrete_pile', 'concrete_pilecap', 'concrete_pier')
     concrete_found = any(kw.upper() in text for kw in _NOTE_KEYWORDS.get('concrete_pile', []))

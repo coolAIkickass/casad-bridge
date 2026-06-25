@@ -1495,6 +1495,11 @@ def _append_section_grade_diagnostics(all_text: list, extents: tuple,
 
 _EXCLUDED_LAYER_KEYWORDS = ('REINF', 'REBAR', 'TEXT', 'SHAPE_BAR', 'SHAPE BAR')
 
+
+def _layer_excluded(layer: str) -> bool:
+    layer = layer.upper()
+    return any(kw in layer for kw in _EXCLUDED_LAYER_KEYWORDS)
+
 # Plausible real-world component size bounds, in mm — independent of sheet layout.
 # A full production sheet's extents are dominated by far-apart title block/schedule/
 # multiple section views, so sizing thresholds as a fraction of *sheet* extents (the
@@ -1577,10 +1582,6 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0,
     dw = (x_max - x_min) or 1.0
     dh = (y_max - y_min) or 1.0
     regions: dict = {}
-
-    def _layer_excluded(layer: str) -> bool:
-        layer = layer.upper()
-        return any(kw in layer for kw in _EXCLUDED_LAYER_KEYWORDS)
 
     pilecap_candidates = []
     pier_idx = 0
@@ -2713,6 +2714,14 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
     Labelling is checked against `section_view_positions` (already-confirmed section labels)
     rather than raw TRIGGER_WORD text proximity.  TRIGGER_WORDS like 'LAP' and 'NOTES' appear
     near sections and caused false "already labeled" judgements in the previous approach.
+
+    Candidates on REINF/SHAPE_BAR-style layers are excluded (`_layer_excluded`, shared with
+    `_detect_component_regions`) — bent-bar shape sketches drawn in the schedule's "Shape of
+    Bar" column are closed polylines with a roughly square bounding box and can coincidentally
+    pass the radius+aspect-ratio circular heuristic below, even though they're zigzag/jogged
+    outlines, not circles. Confirmed on a real production sheet (`01A_PPP before checking
+    (2026-06-24).dxf`): two `S_REINF` and one `S_SHAPE_BAR` polyline inside the schedule's
+    bar-shape column were misflagged as unlabeled cross-section rings.
     """
     x_min, y_min, x_max, y_max = extents
     dw = x_max - x_min
@@ -2736,6 +2745,8 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
     # do the real false-positive guarding, same as the other two fixes.
     try:
         for e in msp.query('CIRCLE'):
+            if _layer_excluded(str(e.dxf.get('layer', ''))):
+                continue
             cx, cy, cr = float(e.dxf.center.x), float(e.dxf.center.y), float(e.dxf.radius)
             if cr >= min_sec_r:
                 rings.append({'x': cx, 'y': cy, 'r': cr, 'kind': 'circle'})
@@ -2747,6 +2758,8 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
     try:
         for e in msp.query('LWPOLYLINE'):
             if not e.is_closed:
+                continue
+            if _layer_excluded(str(e.dxf.get('layer', ''))):
                 continue
             pts = list(e.get_points())
             if len(pts) < 6:   # triangles / quads are structure details, not circles

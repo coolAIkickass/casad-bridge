@@ -223,7 +223,7 @@ function extractComparison(desc) {
 
   // General "Design input X = VALUE for bar ... Drawing (schedule) shows VALUE2"
   // covers bar length, total length, unit weight, total weight
-  m = desc.match(/Design input [a-z ]+= (.+?) for (?:bar )?'.+?Drawing (?:schedule )?shows (.+?)\./i);
+  m = desc.match(/Design input [a-z ]+= (.+?) for (?:bar )?'.+?Drawing (?:schedule )?shows (.+?)\.?$/i);
   if (m) return { design: m[1].trim(), drawing: m[2].trim() };
 
   // Count: "specifies N bars for ... Drawing schedule shows M bars"

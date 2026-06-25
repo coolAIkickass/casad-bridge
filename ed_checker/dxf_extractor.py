@@ -2196,6 +2196,12 @@ _XSEC_FALLBACK_ABOVE_MM  = 700.0
 _XSEC_CLUSTER_GAP_MM     = 2600.0   # max gap between dots of one section view cluster
 _XSEC_DOT_MAX_R_MM       = 600.0    # max bar-dot radius (filters section boundary circles)
 
+# Chord-distance ratio thresholds for _compute_spacing_issues (ratio to the ring's
+# own median chord, not to a unit-circle angular gap — see that function's docstring
+# for why angular gap doesn't generalize across rectangle aspect ratios).
+_XSEC_GAP_RATIO          = 1.3      # chord > this × median ⇒ flag missing/oversized gap
+_XSEC_CLUSTER_RATIO      = 0.4      # chord < this × median ⇒ flag overly tight bars
+
 
 def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tuple,
                               profile: DrawingTypeProfile = PPP_PROFILE,
@@ -2469,32 +2475,48 @@ def _largest_cluster(circles: list, max_gap: float) -> list:
 
 
 def _compute_spacing_issues(cluster: list) -> list:
-    """Detect angular spacing irregularities for bars arranged in a ring."""
+    """
+    Detect spacing irregularities for bars arranged in a ring, using ring-order
+    chord (Euclidean) distance between consecutive bars rather than angular gap
+    from the centroid. Angular gap is only uniform for a circular ring; on a
+    rectangular pier cross-section the same correctly-spaced perimeter pitch
+    subtends a larger angle near a corner than along a side (angle depends on
+    distance from the centroid), and how much larger varies with the
+    rectangle's aspect ratio — a fixed angular-gap multiplier that catches a
+    corner defect on a near-square section can miss the identical defect on a
+    more elongated one. Chord distance is shape-agnostic: bars are nominally
+    spaced at a uniform pitch along the perimeter regardless of section shape,
+    so comparing each gap to the ring's own median chord generalizes across
+    circular and rectangular (or any convex) sections alike.
+    """
     if len(cluster) < 4:
         return []
 
     cx = sum(c['x'] for c in cluster) / len(cluster)
     cy = sum(c['y'] for c in cluster) / len(cluster)
 
-    angles = sorted(math.atan2(c['y'] - cy, c['x'] - cx) for c in cluster)
-    n = len(angles)
-    expected_gap = 2 * math.pi / n
+    ring = sorted(cluster, key=lambda c: math.atan2(c['y'] - cy, c['x'] - cx))
+    n = len(ring)
+    chords = [math.hypot(ring[(i + 1) % n]['x'] - ring[i]['x'],
+                          ring[(i + 1) % n]['y'] - ring[i]['y']) for i in range(n)]
+    median_chord = sorted(chords)[n // 2]
+    if median_chord <= 0:
+        return []
 
     issues = []
     for i in range(n):
-        a_next = angles[(i + 1) % n]
-        a_curr = angles[i]
-        gap = (a_next - a_curr) % (2 * math.pi)
-        mid_angle = a_curr + gap / 2
+        a, b = ring[i], ring[(i + 1) % n]
+        ratio = chords[i] / median_chord
+        mid_angle = math.atan2((a['y'] + b['y']) / 2 - cy, (a['x'] + b['x']) / 2 - cx)
         clock_pos = _angle_to_clock(mid_angle)
 
-        if gap > expected_gap * 1.6:
+        if ratio > _XSEC_GAP_RATIO:
             issues.append({
                 'type': 'gap',
                 'location': f'approx {clock_pos}',
                 'description': f'Arc gap larger than expected (no bar between positions)',
             })
-        elif gap < expected_gap * 0.4:
+        elif ratio < _XSEC_CLUSTER_RATIO:
             issues.append({
                 'type': 'clustering',
                 'location': f'approx {clock_pos}',

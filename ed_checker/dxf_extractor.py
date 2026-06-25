@@ -86,9 +86,15 @@ def _build_comp_boundaries(data_rows: list, profile: DrawingTypeProfile) -> list
     False positives that must be excluded:
         "PILE = 11460 KG ..."  — total weight summary row (COMP followed by = and digits)
         "MAX. LOAD ON TOP OF PILE"  — note row (PILE buried mid-sentence)
-    Both are excluded by two guards:
+        "PIER NO. BOT. OF PILECAP TOP OF PILECAP ..."  — TABLE-1's pier/pile-numbering
+            column header row (COMP followed by "NO.")
+    Excluded by three guards:
       1. Skip any row where COMP is followed by '=' and a digit.
       2. Require the component keyword to appear in the first two tokens of the row.
+      3. Skip any row where COMP is immediately followed by "NO." — that is TABLE-1's
+         column header (e.g. "PIER NO."), not a schedule section header. Confirmed on
+         real CASAD sheets where this swallowed every bar mark above it as "no component
+         found yet" and mis-assigned every bar mark below it to the wrong component.
 
     Falls back to profile.bar_mark_comp_fallback when no boundaries are found
     (drawings without explicit sub-headers rely on bar mark letter conventions).
@@ -103,11 +109,17 @@ def _build_comp_boundaries(data_rows: list, profile: DrawingTypeProfile) -> list
         tokens = row_text.split()
         first_two = ' '.join(tokens[:2]).upper()
         for comp, pattern in profile.comp_header_patterns:
-            if not pattern.search(row_text):
+            m = pattern.search(row_text)
+            if not m:
                 continue
             # Guard 2: component keyword must be within the first two tokens
             # (excludes "MAX. LOAD ON TOP OF PILE", "LOAD ON PILE CAP" etc.)
             if not pattern.search(first_two):
+                continue
+            # Guard 3: skip "<COMP> NO." style table column headers (TABLE-1's
+            # pier/pile-numbering column), not a schedule section header.
+            next_tok = row_text[m.end():].split()[:1]
+            if next_tok and next_tok[0].rstrip('.').upper() == 'NO':
                 continue
             boundaries.append((idx, comp))
             log.debug('Component boundary at row %d: %r → %s', idx, row_text[:60], comp)
@@ -929,6 +941,21 @@ def _extract_schedule(msp, all_text: list, extents: tuple,
     info['has_shape_dims_col'] = ('bar_mark' in col_map and 'reinforcement' in col_map)
 
     data_rows = rows[header_idx + 1:]
+    if not data_rows:
+        return {}, info
+
+    # Truncate at the first row marking the end of the schedule (TABLE-1's own
+    # column header, or the start of a NOTES block). Without this, the LAST bar
+    # mark's row-range runs to end-of-data (see Pass 2 below) and — when TABLE-1
+    # or NOTES is stacked directly below the schedule in the same x-region, as on
+    # some CASAD sheets — the zone-row aggregator vacuums up TABLE-1/NOTES text as
+    # bogus zone-continuation data for that bar mark. A no-op when TABLE-1/NOTES
+    # sit outside the schedule's x-region, which is the more common layout.
+    _SCHEDULE_END_RE = re.compile(r'\bTABLE-1\b|\bTABLE\s+1\b|\bNOTES\s*:', re.IGNORECASE)
+    for _end_idx, _row in enumerate(data_rows):
+        if _SCHEDULE_END_RE.search(' '.join(t['text'] for t in _row)):
+            data_rows = data_rows[:_end_idx]
+            break
     if not data_rows:
         return {}, info
 
@@ -2515,12 +2542,14 @@ def _compute_spacing_issues(cluster: list) -> list:
                 'type': 'gap',
                 'location': f'approx {clock_pos}',
                 'description': f'Arc gap larger than expected (no bar between positions)',
+                'angle_rad': mid_angle,
             })
         elif ratio < _XSEC_CLUSTER_RATIO:
             issues.append({
                 'type': 'clustering',
                 'location': f'approx {clock_pos}',
                 'description': f'Bars unusually close together',
+                'angle_rad': mid_angle,
             })
 
     return issues

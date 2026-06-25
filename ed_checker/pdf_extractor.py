@@ -615,12 +615,15 @@ def _notes_completeness_from_text(raw_lines: list) -> list:
 
 def _text_missing_sections(cut_letters: set, section_view_positions: dict) -> list:
     """Cross-reference cut-mark letters against section label text. Returns missing list."""
-    # Find which letters are resolved by a SECTION X-X label in the drawing
+    # Find which letters are resolved by a SECTION X-X label in the drawing.
+    # Row-grouping can merge two adjacent section labels into one combined key
+    # (e.g. "SECTION A-A FOR PILE ... SECTION B-B FOR ..." as a single string) —
+    # re.findall (not re.search, which stops after the first match) is required
+    # so the second label's letter isn't silently dropped.
     found_section_letters: set = set()
     for label in section_view_positions.keys():
-        m = re.search(r'SECTION\s+([A-Z])-\1', label.upper())
-        if m:
-            found_section_letters.add(m.group(1))
+        for letter in re.findall(r'SECTION\s+([A-Z])-\1', label.upper()):
+            found_section_letters.add(letter)
 
     missing = []
     for letter in sorted(cut_letters - found_section_letters):
@@ -726,6 +729,26 @@ def _extract_positions(page) -> tuple:
             view_h_pts = ph * 0.18
             name = line_text[:60]
             section_view_positions[name] = to_pct(x0, top, x1, top + view_h_pts)
+
+    # The 'NOTES' heading is excluded from the loop above by the schedule_x_min gate
+    # whenever it's drawn in the right/schedule portion of a full combined sheet (a real
+    # CASAD layout — confirmed in production) rather than the left/views portion the gate
+    # assumes. Give it its own unrestricted, single-purpose scan instead of loosening the
+    # shared gate for every TRIGGER_WORDS label, which would risk new false matches for
+    # SECTION/TABLE-1/LAP/DETAIL/PLAN/REINFORCEMENT (e.g. the schedule's own "SCHEDULE OF
+    # REINFORCEMENT" header) — this keeps the blast radius limited to the Notes bbox only.
+    if not any('NOTES' in name for name in section_view_positions):
+        notes_word = next(
+            (w for w in words
+             if w['text'].strip().upper().replace('\xad', '-').startswith('NOTES')
+             and w['top'] < ph * 0.80),
+            None,
+        )
+        if notes_word:
+            nx0, ntop = notes_word['x0'], notes_word['top']
+            section_view_positions[f'NOTES:{round(ntop)}'] = to_pct(
+                nx0, ntop, pw, min(ntop + ph * 0.15, ph * 0.82)
+            )
 
     log.info(
         '_extract_positions: schedule_sections=%s section_views=%d cut_letters=%s',

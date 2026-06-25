@@ -175,11 +175,22 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
         # Override schedule_section_positions — these must be PDF coordinates
         drawing_data['schedule_section_positions'] = text_data.get('schedule_section_positions', {})
 
-        # Merge section_view_positions: start with DXF labels, overlay pdfplumber labels
-        # (pdfplumber uses PDF coordinates which are correct for marker placement).
+        # Merge section_view_positions: start with DXF labels, overlay pdfplumber labels.
+        # DXF-derived bboxes are percentages of the DXF drawing EXTENTS; pdfplumber-derived
+        # bboxes are percentages of the PDF PAGE — two different coordinate spaces that
+        # happen to share the same 0-100 range and field names. The two label strings are
+        # reconstructed by independent text-grouping logic and frequently don't match
+        # character-for-character, so a plain {**dxf_sv, **pdf_sv} union (de-duping only on
+        # exact key match) often keeps BOTH a dxf-space and a pdf-space entry for the same
+        # physical section under different keys. Tag provenance so downstream coordinate
+        # lookups (_xsec_bbox/_find_section_bbox in comparator.py) can filter to pdf-space
+        # entries only — using a dxf-space bbox as if it were a pdf-space bbox silently
+        # mis-places the marker on the review UI. Keys-only consumers (_text_missing_sections,
+        # the view_labels join above, _section_labels below) are unaffected by the added field.
         dxf_sv = drawing_data.get('section_view_positions', {})
         pdf_sv = text_data.get('section_view_positions', {})
-        merged_sv = {**dxf_sv, **pdf_sv}   # pdf takes precedence for shared keys
+        merged_sv = {k: {**v, '_space': 'dxf'} for k, v in dxf_sv.items()}
+        merged_sv.update({k: {**v, '_space': 'pdf'} for k, v in pdf_sv.items()})
         drawing_data['section_view_positions'] = merged_sv
 
         # Prefer pdfplumber sections_from_text but patch any present=False entries
@@ -187,9 +198,28 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
         # that are text-underlined (%%U codes) or use non-standard PDF encoding.
         if text_data.get('sections_from_text'):
             sft = text_data['sections_from_text']
+            # First, recover anything the DXF-only pass already confirmed present —
+            # it was computed with profile.required_sections' own keyword tuples
+            # (_check_required_sections), which are short and robust (e.g. 'Z-Z',
+            # 'LAP LENGTH'). The proximity patch below re-derives matching from each
+            # entry's full display NAME instead (e.g. 'SECTION Z-Z (PILE)', 'LAP
+            # LENGTH TABLE') against raw DXF label text, which routinely fails on
+            # CASAD sheets — DXF labels carry extra inner spacing ('Z-Z ( PILE )')
+            # and the display name's trailing word ("TABLE") often isn't part of
+            # the matched label fragment at all. Re-deriving the same check twice
+            # with two different strings is what drifts out of sync; trusting the
+            # already-correct DXF result sidesteps it.
+            dxf_present = {e['name']: e for e in drawing_data.get('sections_from_text', [])
+                           if e.get('present')}
             sv_upper = {k.upper() for k in merged_sv}
             for entry in sft:
                 if not entry.get('present'):
+                    if entry['name'] in dxf_present:
+                        entry['present'] = True
+                        entry['bbox'] = dxf_present[entry['name']].get('bbox') or entry.get('bbox')
+                        log.info('sections_from_text: patched %r to present=True via DXF '
+                                 '(required_sections keyword match)', entry['name'])
+                        continue
                     name_u = entry['name'].upper()
                     # Check if any keyword from this section appears in merged sv keys
                     if any(name_u in sv_key or sv_key in name_u for sv_key in sv_upper):

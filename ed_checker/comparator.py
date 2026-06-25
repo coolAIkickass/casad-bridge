@@ -3,6 +3,7 @@ Compare structured design input data vs extracted drawing data.
 Returns a list of issue dicts matching the DB schema.
 """
 import re
+import math
 import logging
 from .profiles import PPP_PROFILE
 
@@ -87,8 +88,13 @@ def _find_section_bbox(text: str, sections: list,
         return None
     text_upper = text.upper()
 
-    # 1. pdfplumber exact positions — keys are upper-cased line text (up to 60 chars)
+    # 1. pdfplumber exact positions — keys are upper-cased line text (up to 60 chars).
+    # Entries tagged '_space': 'dxf' are percentages of the DXF drawing extents, not the
+    # PDF page — never return one of those as if it were a page-space bbox (see the
+    # provenance-tagging comment in __init__.py's _run_dxf_extraction).
     for name, bbox in (section_view_positions or {}).items():
+        if (bbox or {}).get('_space') == 'dxf':
+            continue
         parts = [p for p in name.split() if len(p) >= 5]
         if name in text_upper or any(p in text_upper for p in parts):
             if bbox and all(k in bbox for k in ('x', 'y', 'w', 'h')):
@@ -108,6 +114,25 @@ def _find_section_bbox(text: str, sections: list,
             bbox = s.get('bbox')
             if bbox and all(k in bbox for k in ('x', 'y', 'w', 'h')):
                 return bbox
+    return None
+
+
+def _label_bbox(keyword: str, section_view_positions: dict) -> dict | None:
+    """Find a PDF-space bbox among section_view_positions whose label CONTAINS `keyword`.
+
+    Opposite match direction from _find_section_bbox (which checks whether a label
+    appears inside a long issue-description string). Some callers instead have a
+    short fixed keyword (e.g. 'NOTES') and need to search section_view_positions'
+    labels for it — using _find_section_bbox for that always returns None, since a
+    60-char label string is never a substring of a 5-char keyword. Skips '_space':
+    'dxf' entries for the same reason _find_section_bbox does (see its docstring).
+    """
+    kw = keyword.upper()
+    for label, pos in (section_view_positions or {}).items():
+        if (pos or {}).get('_space') == 'dxf':
+            continue
+        if kw in label.upper() and pos and all(k in pos for k in ('x', 'y', 'w', 'h')):
+            return pos
     return None
 
 
@@ -211,7 +236,7 @@ def compare(design_data: dict, drawing_data: dict) -> list:
 
     issues += _check_extraction_diagnostics(drawing_data.get('extraction_diagnostics') or [])
     issues += _check_title_block(drawing_data.get('title_block') or {}, design_data)
-    issues += _check_notes(drawing_data.get('notes') or {}, design_data)
+    issues += _check_notes(drawing_data.get('notes') or {}, design_data, section_view_positions)
     issues += _check_schedule(
         drawing_data.get('schedule') or {}, design_data,
         section_bboxes, schedule_section_positions,
@@ -331,11 +356,14 @@ def _check_title_block(tb: dict, design: dict) -> list:
 
 # ── Notes ─────────────────────────────────────────────────────────────────────
 
-def _check_notes(notes: dict, design: dict) -> list:
+def _check_notes(notes: dict, design: dict, section_view_positions: dict = None) -> list:
     issues = []
     zone = 'notes'
     geo = design.get('geometry', {})
-    notes_bbox = notes.get('bbox')  # Claude's estimated bbox for the notes area
+    # Claude's estimated bbox for the notes area (PDF/vision path) — None in the DXF
+    # path (dxf_extractor never has page-pixel coordinates to give). Fall back to the
+    # PDF-space 'NOTES' label position pdfplumber found, same as _check_notes_completeness.
+    notes_bbox = notes.get('bbox') or _label_bbox('NOTES', section_view_positions)
 
     # Lap length concrete grade vs pile concrete grade
     lap_grade  = notes.get('lap_length_concrete_grade')
@@ -967,7 +995,7 @@ def _check_notes_completeness(notes_completeness_from_text: list,
         found.get(k) and found[k].get('present') for k in concrete_keys
     )
 
-    notes_bbox = _find_section_bbox('NOTES', [], section_view_positions)
+    notes_bbox = _label_bbox('NOTES', section_view_positions)
 
     for item_key, missing_msg in REQUIRED_NOTES.items():
         entry = found.get(item_key)
@@ -1017,9 +1045,33 @@ def _xsec_bbox(section_name: str, drawing_data: dict):
     svp = drawing_data.get('section_view_positions') or {}
     needle = section_name.upper()   # e.g. "A-A"
     for label, pos in svp.items():
+        if (pos or {}).get('_space') == 'dxf':
+            continue   # DXF-extent-% — not a PDF-page-% bbox, would mis-place the marker
         if needle in label.upper() and pos and all(k in pos for k in ('x', 'y', 'w', 'h')):
             return pos
     return None   # triggers BBOX_FALLBACK['default'] in _bbox()
+
+
+def _xsec_issue_bbox(section_bbox, angle_rad):
+    """Return (x, y, w, h) for one spacing-issue marker.
+
+    When section_bbox is a confirmed PDF-space rectangle (from _xsec_bbox) and the
+    issue carries its exact angular position (angle_rad — DXF model-space convention,
+    0=right, CCW, same as _angle_to_clock), place a small marker at that position
+    around the section bbox's inscribed ellipse instead of highlighting the whole
+    section for every issue. DXF y is up; PDF-% y is down, hence the sign flip on
+    the sin term. Falls back to the full section bbox (or BBOX_FALLBACK['default']
+    via _bbox) when either input is missing — no regression for cases this can't
+    improve (old-format issues with no angle, or no confirmed section bbox at all).
+    """
+    if section_bbox is None or angle_rad is None:
+        return _bbox('default', section_bbox)
+    x, y, w, h = _bbox('default', section_bbox)
+    cx, cy = x + w / 2, y + h / 2
+    sub_w, sub_h = max(w * 0.12, 3.0), max(h * 0.12, 3.0)
+    sub_cx = cx + 0.40 * (w / 2) * math.cos(angle_rad)
+    sub_cy = cy - 0.40 * (h / 2) * math.sin(angle_rad)
+    return sub_cx - sub_w / 2, sub_cy - sub_h / 2, sub_w, sub_h
 
 
 def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
@@ -1053,7 +1105,7 @@ def _check_cross_sections(drawing_data: dict, design_data: dict) -> list:
             'missing_bar': 'possible missing bar',
         }
         for si in spacing_issues:
-            x, y, w, h = _bbox('default', bbox)
+            x, y, w, h = _xsec_issue_bbox(bbox, si.get('angle_rad'))
             si_type  = si.get('type', 'uneven')
             si_loc   = si.get('location', '')
             si_desc  = si.get('description', '')

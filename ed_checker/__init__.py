@@ -227,7 +227,27 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
                         log.info('sections_from_text: patched %r to present=True via DXF', entry['name'])
             drawing_data['sections_from_text'] = sft
         if text_data.get('notes_completeness_from_text'):
-            drawing_data['notes_completeness_from_text'] = text_data['notes_completeness_from_text']
+            # DXF TEXT entities are exact; pdfplumber can miss a whole note line when
+            # CASAD's PDF plot renders an SHX-font note body as vector outlines rather
+            # than real text — extract_words() then returns nothing for that line at
+            # all (confirmed on a production sheet: pdfplumber found 'NOTES:-' as a
+            # heading but zero words containing FE/STEEL/GRADE for the body text below
+            # it). This list is structurally always non-empty (one entry per note item,
+            # present True or False), so the old unconditional overwrite silently
+            # clobbered an already-correct DXF-confirmed 'present: True' with pdfplumber's
+            # False. Recover anything the DXF-only pass already confirmed present —
+            # same pattern as the sections_from_text patch above.
+            dxf_present_items = {
+                n['item'] for n in drawing_data.get('notes_completeness_from_text', [])
+                if n.get('present')
+            }
+            pdf_ncft = text_data['notes_completeness_from_text']
+            for entry in pdf_ncft:
+                if not entry.get('present') and entry.get('item') in dxf_present_items:
+                    entry['present'] = True
+                    log.info('notes_completeness_from_text: patched %r to present=True via DXF',
+                             entry['item'])
+            drawing_data['notes_completeness_from_text'] = pdf_ncft
 
         # Supplement title block and notes gaps from pdfplumber (belt-and-suspenders)
         for key, val in text_data.get('title_block', {}).items():

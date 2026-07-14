@@ -236,7 +236,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     sv_pos, cut_letters = _extract_section_info(all_text, extents, profile.layout)
     xsec                = _count_cross_section_bars(msp, all_text, schedule, extents, profile, diags, u2mm)
     geometry_from_drawing = _classify_all_dims(msp, all_text, extents, profile, u2mm)
-    multileader_callouts  = _extract_multileader_callouts(msp, extents)
+    multileader_callouts, merged_callouts = _extract_multileader_callouts(msp, extents)
     # Programmatic unlabeled-view and missing-detail detection (runs before del msp).
     unlabeled_circles   = _detect_unlabeled_section_circles(msp, all_text, extents, sv_pos, profile, u2mm)
     missing_detail_refs = _detect_missing_detail_refs(all_text, sv_pos)
@@ -289,6 +289,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
         raw_text=[t['text'] for t in all_text],
         geometry_from_drawing=geometry_from_drawing,
         multileader_callouts=multileader_callouts,
+        merged_callouts=merged_callouts,
         # DXF-derived unlabeled section circles — merged with vision results in __init__.py
         unlabeled_views=unlabeled_circles,
         # DXF-derived missing DETAIL refs — __init__.py appends cut-letter missing sections
@@ -861,6 +862,15 @@ def _aggregate_bar_rows(bar_rows: list, col_map: dict, bm: str,
     }
 
 
+def _schedule_header_idx(rows: list) -> int | None:
+    """Return the index of the first row containing ≥2 of DIA / NOS / LENGTH, or None."""
+    for idx, row in enumerate(rows):
+        row_text = ' '.join(t['text'] for t in row).upper()
+        if sum(1 for k in ('DIA', 'NOS', 'LENGTH') if k in row_text) >= 2:
+            return idx
+    return None
+
+
 def _extract_schedule(msp, all_text: list, extents: tuple,
                       profile: DrawingTypeProfile, u2mm: float, diags: list) -> tuple:
     """
@@ -874,53 +884,74 @@ def _extract_schedule(msp, all_text: list, extents: tuple,
     dw = x_max - x_min
     dh = y_max - y_min
 
-    # The schedule sits in roughly the middle third of CASAD drawings.
-    # Previous threshold of 50% cut through the column headers (DIA/NOS/LENGTH
-    # at 45-49%, bar marks at 38%). Use 30% to capture the full schedule.
-    sched_x_min = x_min + dw * layout.schedule_x_min_frac
     # Schedule cells are author-typed top-level TEXT. Block-derived text in this region
     # is symbol glyphs and annotation fragments (Ø symbols, attribute numbers) that land
     # in bar row ranges and corrupt column assignment — exclude it.
-    in_region = [t for t in all_text if t['x'] >= sched_x_min]
-    sched_text = [t for t in in_region if not t.get('from_block')]
-    n_block_excluded = len(in_region) - len(sched_text)
-    if n_block_excluded > 20 and len(sched_text) < n_block_excluded:
-        # Mostly-block schedule region — a block-based schedule table would be invisible
+    all_noblk = [t for t in all_text if not t.get('from_block')]
+
+    # Fast path: assume schedule occupies the right portion of the sheet (common layout).
+    sched_x_min = x_min + dw * layout.schedule_x_min_frac
+    sched_text = [t for t in all_noblk if t['x'] >= sched_x_min]
+
+    rows = _group_rows(sched_text, tol_frac=layout.sched_row_tol_frac, extents=extents)
+    header_idx = _schedule_header_idx(rows)
+
+    if header_idx is None:
+        # Fallback: scan the full sheet to locate the header wherever it actually is,
+        # then derive the schedule x-region from the header's own position.
+        # This handles drawings where the schedule is placed left of the normal threshold
+        # (e.g. a pier-only schedule starting at ~15% width instead of the usual 30%).
+        full_rows = _group_rows(all_noblk, tol_frac=layout.sched_row_tol_frac, extents=extents)
+        hdr_idx_full = _schedule_header_idx(full_rows)
+        if hdr_idx_full is None:
+            log.warning('Schedule column header row not found')
+            diags.append(diag('schedule_header_not_found',
+                              'The schedule column header row (DIA / NOS / LENGTH) was not found '
+                              'in the DXF. Schedule checks were skipped.'))
+            return {}, info
+
+        # Collect all sub-rows within the multi-line header band to find the true
+        # leftmost column (MK., SHAPE OF BAR etc. sit a few units above DIA/NOS).
+        hdr_y = full_rows[hdr_idx_full][0]['y']
+        hdr_band = dh * layout.header_band_frac
+        hdr_cells = [c for row in full_rows if abs(row[0]['y'] - hdr_y) <= hdr_band
+                     for c in row]
+        actual_x_min = min(c['x'] for c in hdr_cells) - 500.0 / u2mm  # 500 mm safety margin
+        log.info('Schedule found via full-sheet fallback: header at y=%.0f, '
+                 'using x >= %.0f (%.0f%% from left)',
+                 hdr_y, actual_x_min, (actual_x_min - x_min) / dw * 100)
+        sched_text = [t for t in all_noblk if t['x'] >= actual_x_min]
+        rows = _group_rows(sched_text, tol_frac=layout.sched_row_tol_frac, extents=extents)
+        header_idx = _schedule_header_idx(rows)
+        if header_idx is None:
+            # Should not happen since we seeded from the header position, but guard anyway.
+            diags.append(diag('schedule_header_not_found',
+                              'The schedule column header row (DIA / NOS / LENGTH) was not found '
+                              'in the DXF. Schedule checks were skipped.'))
+            return {}, info
+        diags.append(diag('schedule_x_min_adjusted',
+                          f'The schedule was found outside the expected position (x >= '
+                          f'{sched_x_min:.0f}, {layout.schedule_x_min_frac*100:.0f}% from left). '
+                          f'Extraction re-anchored on the actual header position at '
+                          f'{actual_x_min:.0f} ({(actual_x_min-x_min)/dw*100:.0f}% from left).',
+                          severity='info'))
+
+    n_block_in_region = sum(1 for t in all_text
+                            if t['x'] >= sched_text[0]['x'] and t.get('from_block'))
+    if n_block_in_region > 20 and len(sched_text) < n_block_in_region:
         diags.append(diag('schedule_text_mostly_blocks',
-                          f'{n_block_excluded} block-derived text entities in the schedule '
+                          f'{n_block_in_region} block-derived text entities in the schedule '
                           f'region were excluded vs {len(sched_text)} top-level entities kept. '
                           f'If this schedule is drawn as a block, extraction will be '
                           f'incomplete.', severity='info'))
 
     if not sched_text:
-        log.warning('No text found in schedule area (x >= %.1f)', sched_x_min)
+        log.warning('No text found in schedule area')
         diags.append(diag('schedule_area_empty',
-                          'No text found in the schedule area (right portion of the sheet). '
-                          'Schedule checks were skipped. If the schedule is positioned '
-                          'elsewhere on this sheet, the layout assumption needs adjusting.'))
+                          'No text found in the schedule area. Schedule checks were skipped.'))
         return {}, info
 
-    log.info('Schedule area: %d text entities at x >= %.1f (%.0f%% from left)',
-             len(sched_text), sched_x_min, (sched_x_min - x_min) / dw * 100)
-
-    rows = _group_rows(sched_text, tol_frac=layout.sched_row_tol_frac, extents=extents)
-    if not rows:
-        return {}, info
-
-    # Find the column header row: must contain at least 2 of DIA / NOS / LENGTH.
-    header_idx = None
-    for idx, row in enumerate(rows):
-        row_text = ' '.join(t['text'] for t in row).upper()
-        if sum(1 for k in ('DIA', 'NOS', 'LENGTH') if k in row_text) >= 2:
-            header_idx = idx
-            break
-
-    if header_idx is None:
-        log.warning('Schedule column header row not found')
-        diags.append(diag('schedule_header_not_found',
-                          'The schedule column header row (DIA / NOS / LENGTH) was not found '
-                          'in the DXF. Schedule checks were skipped.'))
-        return {}, info
+    log.info('Schedule area: %d text entities', len(sched_text))
 
     # CASAD schedule headers span multiple Y-lines. Collect all sub-rows
     # within the header band of the identified header row.
@@ -1482,19 +1513,33 @@ def _append_section_grade_diagnostics(all_text: list, extents: tuple,
         line = ' '.join(t['text'] for t in sorted(row, key=lambda t: t['x'])).upper().strip()
         if 'SECTION' not in line:
             continue
-        comps_in = [c for c in comps_longest if c.upper() in line]
-        if len(comps_in) != 1:
-            continue  # mixed or unknown component — skip
-        comp = comps_in[0]
-        expected = (notes.get(f'concrete_{comp}') or '').upper()
-        if not expected:
+        comps_in = [c for c in comps_longest
+                    if re.search(r'\b' + re.escape(c.upper()) + r'\b', line)]
+        if not comps_in:
             continue
+        if len(comps_in) == 1:
+            comp = comps_in[0]
+            expected = (notes.get(f'concrete_{comp}') or '').upper()
+            if not expected:
+                continue
+        else:
+            # Combined section (e.g. "FOR PILECAP & PIER"): only check when all
+            # named components agree on grade — ambiguous if they differ.
+            grades = {(notes.get(f'concrete_{c}') or '').upper() for c in comps_in}
+            grades.discard('')
+            if len(grades) != 1:
+                continue
+            expected = grades.pop()
+            comp = ' & '.join(comps_in)
 
         y_label = row[0]['y']         # DXF Y (bottom-up)
-        y_low   = y_label - view_h    # lower bound of view region
+        # Search ±view_h around the label: section views may be above or below their
+        # title label depending on drafter convention.
+        y_low  = y_label - view_h
+        y_high = y_label + view_h
 
         for t in all_text:
-            if not (y_low <= t['y'] <= y_label):
+            if not (y_low <= t['y'] <= y_high):
                 continue
             # Allow from_block items only when they contain a grade keyword —
             # ATTRIB blocks in section annotations carry grade text like "(M35)".
@@ -1871,13 +1916,20 @@ def _classify_all_dims(msp, all_text: list, extents: tuple,
     return result
 
 
-def _extract_multileader_callouts(msp, extents: tuple) -> list:
+_MERGED_CALLOUT_RE = re.compile(r'^([a-z]\d{0,2})[/\s]+([a-z]\d{0,2})$')
+
+
+def _extract_multileader_callouts(msp, extents: tuple) -> tuple:
     """
     Extract bar mark annotations from MULTILEADER entities.
     Text is in the MLeader context MTEXT, via entity.context.mtext.default_content.
-    Returns [{bar_mark, x_pct, y_pct}].
+    Returns (callouts, merged_callouts) where:
+      callouts        = [{bar_mark, x_pct, y_pct}]   — single valid bar marks
+      merged_callouts = [{text, x_pct, y_pct}]        — merged "y/y1"-style callouts
+        that should be two separate leaders, not one combined annotation.
     """
     callouts = []
+    merged_callouts = []
     for e in msp.query('MULTILEADER'):
         try:
             ctx = e.context
@@ -1889,15 +1941,19 @@ def _extract_multileader_callouts(msp, extents: tuple) -> list:
             # Strip MTEXT formatting codes
             bar_mark = re.sub(r'\\[A-Za-z][^;]*;', '', raw)
             bar_mark = re.sub(r'\{[^}]*\}', '', bar_mark).strip().lower()
-            if not re.match(r'^[a-z]\d{0,2}$', bar_mark):
-                continue
             pos = ctx.mtext.insert
             x_pct, y_pct = _pos_to_pct(float(pos[0]), float(pos[1]), extents)
-            callouts.append({'bar_mark': bar_mark, 'x_pct': x_pct, 'y_pct': y_pct})
+            if re.match(r'^[a-z]\d{0,2}$', bar_mark):
+                callouts.append({'bar_mark': bar_mark, 'x_pct': x_pct, 'y_pct': y_pct})
+            elif _MERGED_CALLOUT_RE.match(bar_mark):
+                # Two bar marks fused into one callout (e.g. "y/y1") — each zone
+                # should have its own separate leader so the checker can verify them
+                # independently; flag for the drafter to split into two leaders.
+                merged_callouts.append({'text': bar_mark, 'x_pct': x_pct, 'y_pct': y_pct})
         except Exception as ex:
             log.debug('MULTILEADER parse error: %s', ex)
-    log.info('MULTILEADER callouts: %d extracted', len(callouts))
-    return callouts
+    log.info('MULTILEADER callouts: %d extracted, %d merged', len(callouts), len(merged_callouts))
+    return callouts, merged_callouts
 
 
 # ── DIMENSION entity extraction ───────────────────────────────────────────────
@@ -2937,17 +2993,34 @@ def _detect_missing_detail_refs(all_text: list,
 
 def _check_required_sections(section_view_positions: dict,
                              profile: DrawingTypeProfile = PPP_PROFILE) -> list:
-    """Return presence status for each profile-required section view."""
-    all_labels = ' '.join(section_view_positions.keys()).upper()
+    """Return presence status for each profile-required section view.
+
+    Uses longest-match priority: a label L only satisfies required section S if
+    no OTHER section's keyword (that is longer than S's keyword) also matches L.
+    This prevents "REINFORCEMENT PLAN OF PILECAP" from satisfying the shorter
+    "PLAN OF PILECAP" requirement via substring containment.
+    """
+    entries = list(profile.required_sections)
     result = []
-    for name, keywords in profile.required_sections:
-        present = any(kw.upper() in all_labels for kw in keywords)
+    for name, keywords in entries:
+        present = False
         bbox = None
-        if present:
-            for label, pos in section_view_positions.items():
-                if any(kw.upper() in label for kw in keywords):
-                    bbox = pos
-                    break
+        for label, pos in section_view_positions.items():
+            lu = label.upper()
+            matched_kw = next((kw for kw in keywords if kw.upper() in lu), None)
+            if matched_kw is None:
+                continue
+            # Reject this label if another required section's keyword is longer and
+            # also matches — that other section owns this label more specifically.
+            longer_sibling = any(
+                ok.upper() in lu and len(ok) > len(matched_kw)
+                for oname, okws in entries if oname != name
+                for ok in okws
+            )
+            if not longer_sibling:
+                present = True
+                bbox = pos
+                break
         result.append({'name': name, 'present': present, 'bbox': bbox})
     return result
 

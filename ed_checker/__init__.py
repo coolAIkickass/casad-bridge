@@ -221,10 +221,25 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
                                  '(required_sections keyword match)', entry['name'])
                         continue
                     name_u = entry['name'].upper()
-                    # Check if any keyword from this section appears in merged sv keys
-                    if any(name_u in sv_key or sv_key in name_u for sv_key in sv_upper):
-                        entry['present'] = True
-                        log.info('sections_from_text: patched %r to present=True via DXF', entry['name'])
+                    # Check if any keyword from this section appears in merged sv keys.
+                    # Longest-match guard: skip sv_key if another section's display name
+                    # is also a substring of sv_key AND is longer than name_u — that
+                    # other section owns the label more specifically (e.g. prevents
+                    # "PLAN OF PILECAP" from being satisfied by a label that actually
+                    # contains the longer "REINFORCEMENT PLAN OF PILECAP").
+                    other_names_u = [e['name'].upper() for e in sft if e['name'].upper() != name_u]
+                    for sv_key in sv_upper:
+                        if name_u not in sv_key and sv_key not in name_u:
+                            continue
+                        dominated = any(
+                            oname in sv_key and name_u in oname and len(oname) > len(name_u)
+                            for oname in other_names_u
+                        )
+                        if not dominated:
+                            entry['present'] = True
+                            log.info('sections_from_text: patched %r to present=True via DXF',
+                                     entry['name'])
+                            break
             drawing_data['sections_from_text'] = sft
         if text_data.get('notes_completeness_from_text'):
             # DXF TEXT entities are exact; pdfplumber can miss a whole note line when

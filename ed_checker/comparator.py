@@ -504,6 +504,8 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
         sorted_bms = list(drawing_comp.keys())
         total = max(len(sorted_bms), 1)
 
+        issues += _check_companion_bar_order(drawing_comp, comp)
+
         for bm, design_bar in design_bbs.items():
             if isinstance(design_bar, list):
                 design_bars = design_bar
@@ -1371,9 +1373,13 @@ def _check_bar_mark_callouts(drawing_data: dict, design_data: dict) -> list:
     Check that every bar mark expected from the design schedule appears as a
     MULTILEADER callout in the drawing. Flags marks that are in the schedule
     but have no visible leader annotation in any section view.
+    Also flags merged callouts like "y/y1" — each bar mark zone must have its
+    own separate leader so checkers and reviewers can trace them independently.
     """
     callouts = {c['bar_mark'] for c in (drawing_data.get('multileader_callouts') or [])}
-    if not callouts:
+    merged  = drawing_data.get('merged_callouts') or []
+
+    if not callouts and not merged:
         return []   # no callout data — drawing may not use MULTILEADER; skip silently
 
     schedule = drawing_data.get('schedule') or {}
@@ -1384,10 +1390,33 @@ def _check_bar_mark_callouts(drawing_data: dict, design_data: dict) -> list:
                 design_schedule[bm] = comp.replace('_bbs', '')
 
     issues = []
+
+    # Merged callouts: two bar marks fused into one leader (e.g. "y/y1").
+    for mc in merged:
+        txt = mc.get('text', '')
+        x, y = mc.get('x_pct', 50.0), mc.get('y_pct', 50.0)
+        issues.append({
+            'category':    'Bar Mark Callouts',
+            'title':       f"Merged bar-mark callout '{txt}' — should be two separate leaders",
+            'description': (
+                f"The section view shows a single leader annotated '{txt}'. Each bar mark "
+                f"zone must have its own separate leader so the checker and reviewers can "
+                f"trace each zone independently. Combined annotations hide zone-specific "
+                f"errors."
+            ),
+            'suggestion':  (
+                f"Replace the '{txt}' leader with two separate MULTILEADER annotations, "
+                f"one per zone."
+            ),
+            'severity':    'error',
+            'page_num':    1,
+            'x': x, 'y': y, 'width': 5.0, 'height': 2.0,
+        })
+
     for bm in sorted(design_schedule):
         if bm not in schedule:
             continue   # not in drawing schedule — flagged elsewhere
-        if bm not in callouts:
+        if callouts and bm not in callouts:
             issues.append({
                 'category':    'Bar Mark Callouts',
                 'title':       f"Bar mark '{bm}' not called out in section view",
@@ -1403,5 +1432,37 @@ def _check_bar_mark_callouts(drawing_data: dict, design_data: dict) -> list:
                 'severity':    'error',
                 'page_num':    1,
                 'x': 50.0, 'y': 50.0, 'width': 5.0, 'height': 2.0,
+            })
+    return issues
+
+
+def _check_companion_bar_order(drawing_comp: dict, comp: str) -> list:
+    """
+    In CASAD convention, companion bar-mark pairs (e.g. y/y1, i/i1, f/f1) must
+    appear in the schedule with the base mark physically above (earlier in) the
+    suffixed mark. Flag when the suffix row appears before the base row.
+    """
+    bm_list = list(drawing_comp.keys())
+    issues = []
+    for idx, bm in enumerate(bm_list):
+        if not re.match(r'^[a-z]\d+$', bm):
+            continue   # not a suffixed mark
+        base = re.match(r'^([a-z])', bm).group(1)
+        if base not in bm_list:
+            continue
+        base_idx = bm_list.index(base)
+        if base_idx > idx:
+            issues.append({
+                'category':    'Reinforcement',
+                'title':       f"Bar mark '{bm}' listed before '{base}' in {comp} schedule",
+                'description': (
+                    f"In the {comp} schedule, '{bm}' appears above '{base}'. CASAD "
+                    f"convention requires the base mark ('{base}') to be listed first, "
+                    f"with its confinement-zone variant ('{bm}') below it."
+                ),
+                'suggestion':  f"Move the '{base}' row above '{bm}' in the schedule.",
+                'severity':    'error',
+                'page_num':    1,
+                'x': None, 'y': None, 'width': None, 'height': None,
             })
     return issues

@@ -65,6 +65,7 @@ def new_drawing_data(**overrides) -> dict:
         # Geometric dimension checking (DXF spatial routing — Tier 2)
         'geometry_from_drawing':        {},     # param → [{val_mm, x_pct, y_pct, component, source}, ...]
         'multileader_callouts':         [],     # [{bar_mark, x_pct, y_pct}] from MULTILEADER entities
+        'merged_callouts':              [],     # [{text, x_pct, y_pct}] merged bar-mark callouts like "y/y1"
     }
     unknown = set(overrides) - set(data)
     if unknown:

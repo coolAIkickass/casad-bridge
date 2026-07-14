@@ -2459,7 +2459,14 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
         units = _collapse_bundle_pairs(cluster) if is_bundle else cluster
 
         bar_count = len(units)
-        spacing_issues = _compute_spacing_issues(units) if bar_count >= 3 else []
+        # Pilecap bars are distributed across the section face in a grid, not arranged
+        # around a perimeter ring — the ring-order chord algorithm produces false positives.
+        # Spacing for pilecap is verified via the schedule c/c column instead.
+        spacing_issues = (
+            _compute_spacing_issues(units)
+            if bar_count >= 3 and comp != 'pilecap'
+            else []
+        )
 
         # Reliability guard: a single ring of exact DXF positions should be near-uniform.
         # Heavy irregularity means the cluster is not one bar group (e.g. a plan view

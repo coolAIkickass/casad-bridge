@@ -81,39 +81,53 @@ def _find_section_bbox(text: str, sections: list,
                         section_view_positions: dict = None) -> dict | None:
     """
     Look for a view/section name in the issue text.
-    Priority: 1) pdfplumber section_view_positions (exact coords from PDF text)
-              2) Claude's sections list (estimated)
+    Priority:
+      1) pdfplumber section_view_positions tagged '_space':'pdf' (exact PDF coordinates)
+      2) Claude's sections list (estimated)
+      3) DXF section_view_positions tagged '_space':'dxf' (approximate — DXF-extent-%
+         ≈ PDF-page-%, used when pdfplumber can't extract section label text at all)
     """
     if not text:
         return None
     text_upper = text.upper()
 
-    # 1. pdfplumber exact positions — keys are upper-cased line text (up to 60 chars).
-    # Entries tagged '_space': 'dxf' are percentages of the DXF drawing extents, not the
-    # PDF page — never return one of those as if it were a page-space bbox (see the
-    # provenance-tagging comment in __init__.py's _run_dxf_extraction).
+    def _matches(name, bbox):
+        parts = [p for p in name.split() if len(p) >= 5]
+        if (name in text_upper or any(p in text_upper for p in parts)):
+            if bbox and all(k in bbox for k in ('x', 'y', 'w', 'h')):
+                return True
+        return False
+
+    # 1. pdfplumber PDF-space (exact)
     for name, bbox in (section_view_positions or {}).items():
         if (bbox or {}).get('_space') == 'dxf':
             continue
-        parts = [p for p in name.split() if len(p) >= 5]
-        if name in text_upper or any(p in text_upper for p in parts):
-            if bbox and all(k in bbox for k in ('x', 'y', 'w', 'h')):
-                return bbox
+        if _matches(name, bbox):
+            return bbox
 
-    # 2. Claude's sections list
+    # 2. Claude's sections list (estimated)
     for s in (sections or []):
         name = (s.get('name') or '').upper().strip()
         if not name:
             continue
+        bbox = s.get('bbox')
         if name in text_upper:
-            bbox = s.get('bbox')
             if bbox and all(k in bbox for k in ('x', 'y', 'w', 'h')):
                 return bbox
         short = name.split('(')[0].strip()
         if len(short) >= 6 and short in text_upper:
-            bbox = s.get('bbox')
             if bbox and all(k in bbox for k in ('x', 'y', 'w', 'h')):
                 return bbox
+
+    # 3. DXF-space fallback (approximate — better than None → BBOX_FALLBACK['default'])
+    for name, bbox in (section_view_positions or {}).items():
+        if (bbox or {}).get('_space') != 'dxf':
+            continue
+        if _matches(name, bbox):
+            log.info('_find_section_bbox: using DXF-space fallback for text snippet %r',
+                     text[:60])
+            return bbox
+
     return None
 
 
@@ -540,6 +554,7 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
             # highlight positioning is already best-effort (see CLAUDE.md).
             dxf_row = drawing_bars[0].get('row_bbox')
             if dxf_row and y_transform:
+                # Best path: calibrated DXF-to-PDF transform from pdfplumber anchors.
                 scale, offset = y_transform
                 cal_y = max(0.0, min(99.0, scale * dxf_row['y'] + offset))
                 cal_h = max(0.5, abs(scale) * dxf_row['h'])
@@ -549,7 +564,17 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
                     'w': sect['w'],
                     'h': cal_h,
                 }
+            elif dxf_row:
+                # No calibration (pdfplumber can't read underlined SHX schedule headers
+                # on AutoCAD PDFs — y_transform is always None in that case). Use the
+                # DXF-extent-% row bbox directly: AutoCAD plots the full model-space
+                # extent to fill the PDF page, so DXF-extent-% ≈ PDF-page-% within ~3-5%.
+                # Dramatically better than distributing bars evenly across a static
+                # BBOX_FALLBACK zone, which has no relationship to actual row positions.
+                bar_bbox = dxf_row
             else:
+                # No DXF row data (PDF/vision path only): distribute evenly within the
+                # section bbox — best we can do without per-row position information.
                 try:
                     row_idx = sorted_bms.index(bm)
                 except ValueError:
@@ -1038,19 +1063,39 @@ def _check_label_issues(label_issues: list, sections: list = None,
 # ── Cross-section bar count & quality ────────────────────────────────────────
 
 def _xsec_bbox(section_name: str, drawing_data: dict):
-    """Return a PDF-space bbox for a cross-section view.
+    """Return an approximate PDF-space bbox for a cross-section view.
 
-    Prefers pdfplumber section_view_positions (PDF coordinates). Falls back to
-    BBOX_FALLBACK['default']. Never uses DXF model-space bbox — those coordinates
-    do not map to the PDF page coordinate system.
+    Priority:
+      1. pdfplumber section_view_positions tagged '_space':'pdf' — exact PDF coordinates.
+      2. DXF section_view_positions tagged '_space':'dxf' — DXF-extent-%, approximately
+         equal to PDF-page-% since AutoCAD exports full model-space to fill the PDF page
+         (~3-5% error). Used as fallback when pdfplumber can't read the section label
+         text (SHX font on AutoCAD PDFs). Dramatically better than BBOX_FALLBACK['default']
+         which has no relationship to actual section position.
+      3. None → caller falls back to BBOX_FALLBACK['default'].
+
+    The _space:'dxf' filtering that prevented the original C-C coordinate-mix bug still
+    applies on the first pass — we only use DXF-space when PDF-space genuinely not found.
     """
     svp = drawing_data.get('section_view_positions') or {}
-    needle = section_name.upper()   # e.g. "A-A"
+    needle = section_name.upper()
+
+    # Pass 1: PDF-space only (exact)
     for label, pos in svp.items():
         if (pos or {}).get('_space') == 'dxf':
-            continue   # DXF-extent-% — not a PDF-page-% bbox, would mis-place the marker
+            continue
         if needle in label.upper() and pos and all(k in pos for k in ('x', 'y', 'w', 'h')):
             return pos
+
+    # Pass 2: DXF-space fallback (approximate — better than static BBOX_FALLBACK)
+    for label, pos in svp.items():
+        if (pos or {}).get('_space') != 'dxf':
+            continue
+        if needle in label.upper() and pos and all(k in pos for k in ('x', 'y', 'w', 'h')):
+            log.info('_xsec_bbox: using DXF-space fallback for %r (no PDF-space entry found)',
+                     section_name)
+            return pos
+
     return None   # triggers BBOX_FALLBACK['default'] in _bbox()
 
 

@@ -48,6 +48,14 @@ const pdfPanel = document.querySelector('.pdf-panel');
   }, { passive: false });
 });
 
+// Re-render highlights when the window is resized so boxes stay in sync with
+// the canvas pixel dimensions (canvas.width/height change with the viewport).
+let _resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(() => renderPage(currentPage), 120);
+});
+
 // ── PDF rendering ────────────────────────────────────
 
 async function renderPage(num) {

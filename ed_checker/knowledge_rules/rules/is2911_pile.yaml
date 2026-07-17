@@ -74,6 +74,206 @@
   # parser gap is closed — no rule-content change needed then, only the
   # extractor fix.
 
+- rule_id: IS2911-6.11.4-PILE-LONGITUDINAL-MIN-DIAMETER
+  title: Pile longitudinal (vertical) bar minimum diameter
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile]
+  required_entities: [schedule.pile.x.bar_dia_mm]
+  rule_type: deterministic
+  formula: {type: min_threshold, field: schedule.pile.x.bar_dia_mm, min_value: 12}
+  unit: mm
+  severity: error
+  category: "Reinforcement"
+  message_template: >
+    Pile longitudinal bar diameter {value}mm is below the minimum
+    permissible per IS 2911 (Part 1/Sec 2):2010 Cl. 6.11.4, which requires
+    at least {min_value}mm diameter for a cast-in-situ pile's vertical bars.
+  engineering_rationale: >
+    A thin longitudinal bar is disproportionately prone to buckling,
+    corrosion-driven section loss over the design life, and handling damage
+    during cage fabrication/lowering — the same clause that sets the 8mm
+    lateral-tie floor and the 6-bar minimum count also sets this floor for
+    the vertical bars themselves.
+  source_reference: "IS 2911 (Part 1/Sec 2):2010, Cl. 6.11.4"
+  validation_status: implemented
+  # Scoped to bar mark 'x' (CASAD's primary longitudinal mark — see
+  # casad_design_philosophy_notes.md), reliably a flat dict across every
+  # real production fixture surveyed this session (unlike the confinement
+  # tie marks y/y1/y2, which are frequently list-shaped due to CASAD's
+  # multi-zone-row convention). Verified: 12mm-diameter floor never violated
+  # on any real production pile schedule surveyed (all use 25mm).
+
+- rule_id: IS2911-6.11.4-PILE-MIN-VERTICAL-BAR-COUNT
+  title: Pile minimum number of vertical bars
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile]
+  required_entities: [schedule.pile.x.count]
+  rule_type: deterministic
+  formula: {type: min_threshold, field: schedule.pile.x.count, min_value: 6}
+  unit: nos
+  severity: error
+  category: "Reinforcement"
+  message_template: >
+    Pile has {value} longitudinal bars — below the minimum permissible per
+    IS 2911 (Part 1/Sec 2):2010 Cl. 6.11.4, which requires at least
+    {min_value} vertical bars for a circular cast-in-situ pile.
+  engineering_rationale: >
+    A minimum bar count independent of the pile's actual computed steel
+    area requirement — too few bars, even if individually large enough to
+    meet the area requirement, leaves large unreinforced arcs around the
+    pile's circumference, weak against biaxial bending and unable to form a
+    proper confinement cage with the lateral ties.
+  source_reference: "IS 2911 (Part 1/Sec 2):2010, Cl. 6.11.4"
+  validation_status: implemented
+  # Same field reliability basis as IS2911-6.11.4-PILE-LONGITUDINAL-MIN-DIAMETER
+  # above (schedule.pile.x, flat dict, reliably populated). Verified: 6-bar
+  # floor never violated on any real production pile schedule surveyed
+  # (48-168 bars observed, reflecting CASAD's actual per-pile-group totals).
+
+- rule_id: IS2911-6.11.1-PILE-MAX-LONGITUDINAL-STEEL-PCT
+  title: Pile maximum longitudinal reinforcement percentage
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile]
+  required_entities: [geometry_from_drawing.pile_longitudinal_steel_pct]
+  rule_type: deterministic
+  formula: {type: max_threshold, field: geometry_from_drawing.pile_longitudinal_steel_pct, max_value: 2.5}
+  unit: "%"
+  severity: error
+  category: "Reinforcement"
+  message_template: >
+    Pile longitudinal reinforcement is {value}% of shaft cross-sectional
+    area — above the maximum permissible per IS 2911 (Part 1/Sec 1 & Sec
+    2):2010 Cl. 6.11.1 / IRC:78 Cl. 709.4.4, which caps longitudinal steel
+    at {max_value}%.
+  engineering_rationale: >
+    Companion ceiling to IS2911-6.11.1-PILE-MIN-LONGITUDINAL-STEEL-PCT's
+    0.4% floor — excess steel in a cast-in-situ shaft causes reinforcement
+    congestion that impairs tremie concrete flow around and between bars,
+    risking honeycombing/voids in a shaft that (unlike a pier or beam) can
+    never be visually inspected or repaired after casting.
+  source_reference: "IS 2911 (Part 1/Sec 1):2010 Cl. 6.11.1; IRC:78 (Part-1)-2024 Cl. 709.4.4"
+  validation_status: pending_pilot_validation
+  # Same entity gap as the 0.4% minimum rule above (both need
+  # geometry_from_drawing.pile_longitudinal_steel_pct, which doesn't exist
+  # yet) — registered as a companion so both bounds activate together once
+  # that entity is added, rather than only the minimum being remembered.
+
+- rule_id: IS2911-6.6-PILE-SPACING-MIN-RATIO
+  title: Pile minimum centre-to-centre spacing
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile]
+  required_entities: [geometry_from_drawing.pile_spacing, geometry_from_drawing.pile_diameter_mm]
+  rule_type: deterministic
+  formula:
+    type: formula_ratio
+    field: geometry_from_drawing.pile_diameter_mm
+    expression: "3 * pile_diameter_mm"
+    tolerance_pct: 0
+    comparison: min
+    compare_field: geometry_from_drawing.pile_spacing
+  unit: mm
+  severity: error
+  category: "Geometric Dimensions"
+  message_template: >
+    Pile centre-to-centre spacing is less than 3x pile diameter per IS 2911
+    (Part 1):2010 Cl. 6.6 (friction piles — the general case for CASAD's
+    bored cast-in-situ piles; the floor relaxes to 2.5x for end-bearing on
+    hard stratum, or 2.0x resting on rock).
+  engineering_rationale: >
+    Piles spaced too closely have overlapping zones of soil stress
+    influence, reducing each pile's effective load-bearing capacity below
+    what an isolated-pile calculation assumes — group efficiency drops
+    below the design's implicit assumption of full individual capacity.
+  source_reference: "IS 2911 (Part 1):2010, Cl. 6.6"
+  validation_status: pending_pilot_validation
+  # Blocked on two fronts: formula_ratio is unimplemented in the evaluator
+  # (same limitation as every other formula_ratio rule in this registry),
+  # and geometry_from_drawing.pile_diameter_mm doesn't exist as a clean
+  # entity yet (Tier-2 spatial dimension routing classifies pile_spacing
+  # but not pile diameter specifically — see profiles.py's geometry_checks,
+  # which has a 'pile_dia' param compared against design input but no
+  # equivalent standalone drawing-only entity). Also worth noting: the
+  # applicable ratio (3.0x/2.5x/2.0x) depends on end-bearing vs friction vs
+  # rock-bearing pile behaviour, which isn't something a drawing states
+  # directly — this rule assumes the friction-pile case (3.0x, the most
+  # restrictive/common for CASAD's bridge piles) rather than trying to
+  # infer bearing type, which could produce a false positive for a
+  # genuinely rock-socketed pile design.
+
+- rule_id: IS2911-6.12-PILECAP-DEPTH-MIN-RATIO
+  title: Pile cap minimum depth relative to pile diameter
+  applicable_drawing_types: [ppp]
+  applicable_components: [pilecap]
+  required_entities: [geometry_from_drawing.pilecap_depth, geometry_from_drawing.pile_diameter_mm]
+  rule_type: deterministic
+  formula:
+    type: formula_ratio
+    field: geometry_from_drawing.pile_diameter_mm
+    expression: "1.5 * pile_diameter_mm"
+    tolerance_pct: 0
+    comparison: min
+    compare_field: geometry_from_drawing.pilecap_depth
+  unit: mm
+  severity: error
+  category: "Geometric Dimensions"
+  message_template: >
+    Pile cap depth is less than 1.5x pile diameter per IS 2911 (Part
+    1):2010 (or the drawing's own governing shear-design requirement,
+    whichever is more restrictive).
+  engineering_rationale: >
+    A pile cap thinner than this relative to the pile diameter it's
+    transferring load through risks a punching-shear failure cone around
+    an individual pile intersecting the cap's own edge or an adjacent
+    pile's cone before the cap's shear capacity is otherwise exhausted —
+    the 1.5x ratio is a rule-of-thumb geometric floor, not a substitute for
+    an actual punching-shear calculation (which may require more depth than
+    this ratio alone).
+  source_reference: "IS 2911 (Part 1):2010, referenced via CASAD Design Philosophy p.101"
+  validation_status: pending_pilot_validation
+  # Same formula_ratio + pile_diameter_mm entity gaps as
+  # IS2911-6.6-PILE-SPACING-MIN-RATIO above. Note this is explicitly a
+  # geometric rule-of-thumb, not a full shear check — CASAD's own design
+  # philosophy document frames it as "or as governed by shear requirement,
+  # whichever governs," so even once evaluable this rule can only ever be a
+  # necessary-but-not-sufficient check (passing it doesn't guarantee the
+  # cap is adequate; failing it is unambiguously a defect).
+
+- rule_id: IS2911-CONCRETE-GRADE-MIN
+  title: Pile minimum concrete grade
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile]
+  required_entities: [notes.concrete_pile]
+  rule_type: deterministic
+  formula: {type: min_threshold, field: notes.concrete_pile, min_value: 25}
+  unit: "MPa grade (M-number)"
+  severity: error
+  category: "Notes"
+  message_template: >
+    Pile concrete grade is below M{min_value} — the minimum permissible per
+    IS 2911 (Part 1/Sec 2):2010 (M30 minimum for marine piles specifically,
+    per Annex E-2.5).
+  engineering_rationale: >
+    A 2010-edition floor (raised from a lower value in earlier editions per
+    the code's own Foreword) reflecting accumulated field experience with
+    durability and constructability of cast-in-situ concrete placed by
+    tremie below ground/water — M25 is IS 2911's absolute minimum
+    regardless of exposure; CASAD's own drawings typically specify well
+    above this (M40 observed in every real fixture this session).
+  source_reference: "IS 2911 (Part 1/Sec 2):2010, Cl. 7.3.3"
+  validation_status: pending_pilot_validation
+  # NOT currently evaluable: notes.concrete_pile is stored as a STRING grade
+  # label (e.g. "M40"), not a number — dxf_extractor.py's note extraction
+  # (profiles.py's concrete_grade_keywords matching) was never designed to
+  # feed a numeric comparison, and the Phase 1/2 evaluator's
+  # evaluate_deterministic() does float(value) on the resolved field, which
+  # would raise/fail-safe (logged and skipped, not crash — see
+  # evaluator.py's numeric-conversion guard) on a string like "M40" rather
+  # than parse the grade number out of it. Needs a new evaluator capability
+  # (e.g. a `grade_min_threshold` formula type that strips the leading "M"
+  # and parses the remainder) before this can activate — a real, but
+  # narrowly-scoped, engine enhancement rather than a parser gap like most
+  # other dormant rules in this registry.
+
 - rule_id: IS2911-6.11.1-PILE-MIN-LONGITUDINAL-STEEL-PCT
   title: Pile minimum longitudinal reinforcement percentage
   applicable_drawing_types: [ppp]

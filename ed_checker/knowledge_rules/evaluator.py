@@ -65,8 +65,14 @@ def evaluate_deterministic(rule: Rule, drawing_data: dict) -> dict | None:
     try:
         value = float(value)
     except (TypeError, ValueError):
-        log.warning('Rule %s: field %s = %r is not numeric — skipping',
-                    rule.rule_id, formula['field'], value)
+        # INFO not WARNING: a non-numeric field (e.g. a concrete grade stored as
+        # "M40") is a known, permanent limitation for some registered rules — see
+        # IS2911-CONCRETE-GRADE-MIN's own comments — not an anomaly. It's
+        # retrieved (required_entities presence-check passes on the string) but
+        # can never evaluate until a grade-aware formula type exists; logging it
+        # at WARNING on every single check would be noise, not signal.
+        log.info('Rule %s: field %s = %r is not numeric — skipping',
+                 rule.rule_id, formula['field'], value)
         return None
 
     violated = False

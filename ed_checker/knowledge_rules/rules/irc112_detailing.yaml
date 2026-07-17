@@ -64,6 +64,149 @@
   source_reference: "IRC:112-2020, Cl. 17.3.2(3), p.167"
   validation_status: pending_pilot_validation
 
+- rule_id: IRC112-16.2.3-PIER-TIE-MIN-DIAMETER
+  title: Pier tie/link minimum diameter
+  applicable_drawing_types: [ppp]
+  applicable_components: [pier]
+  required_entities: [schedule.pier.i.bar_dia_mm]
+  rule_type: deterministic
+  formula: {type: min_threshold, field: schedule.pier.i.bar_dia_mm, min_value: 8}
+  unit: mm
+  severity: error
+  category: "Reinforcement"
+  message_template: >
+    Pier tie/link diameter {value}mm is below the minimum permissible per
+    IRC:112-2020 Cl. 16.2.3, which requires tie/link diameter to be at least
+    max(8mm, 1/4 of the largest longitudinal bar diameter) — {min_value}mm
+    is the absolute floor regardless of longitudinal bar size.
+  engineering_rationale: >
+    Transverse reinforcement (ties/links) confines the concrete core and
+    restrains longitudinal bars against buckling under compression; an
+    8mm absolute floor exists independent of the 1/4-longitudinal-diameter
+    rule (which this rule does not check — that portion needs both the tie
+    and longitudinal bar diameters compared as a ratio, not a single
+    threshold; see the note on this rule's narrower scope below).
+  source_reference: "IRC:112-2020, Cl. 16.2.3, p.143"
+  validation_status: implemented
+  # Only checks the flat 8mm absolute floor, not the "1/4 x largest
+  # longitudinal bar diameter" alternative (whichever is larger governs per
+  # the clause) — that portion needs a ratio between two schedule fields
+  # (schedule.pier.i.bar_dia_mm vs schedule.pier.g.bar_dia_mm), which the
+  # Phase 1/2 evaluator's min_threshold/max_threshold/exact_match formula
+  # types can't express (only formula_ratio could, and it remains
+  # unimplemented — see IRC112-17.3.2-PILE-HEAD-CONFINEMENT-ZONE above for
+  # the same limitation). Verified this session: schedule.pier.i.bar_dia_mm
+  # is a reliably flat (non-list) field across every real production
+  # fixture surveyed with pier data, all well above 8mm (12-20mm observed).
+
+- rule_id: IRC112-16.2.3-PIER-TIE-MAX-SPACING
+  title: Pier tie/link maximum spacing
+  applicable_drawing_types: [ppp]
+  applicable_components: [pier]
+  required_entities: [schedule.pier.i.spacing_mm]
+  rule_type: deterministic
+  formula: {type: max_threshold, field: schedule.pier.i.spacing_mm, max_value: 200}
+  unit: mm
+  severity: error
+  category: "Reinforcement"
+  message_template: >
+    Pier tie/link spacing {value}mm exceeds the maximum permissible per
+    IRC:112-2020 Cl. 16.2.3, which caps spacing at the least of
+    12x smallest longitudinal bar diameter, least column dimension, or
+    {max_value}mm — {max_value}mm is the absolute ceiling regardless of the
+    other two (typically-larger) limits.
+  engineering_rationale: >
+    Wider tie spacing reduces confinement effectiveness and increases
+    unsupported longitudinal-bar buckling length; the 200mm absolute
+    ceiling exists independent of the other two (usually less restrictive)
+    limits in the clause.
+  source_reference: "IRC:112-2020, Cl. 16.2.3, p.143"
+  validation_status: pending_pilot_validation
+  # NOT currently evaluable: surveyed every real production fixture this
+  # session (same finding as IS2911-6.11.4-PILE-TIE-MIN-SPACING in
+  # is2911_pile.yaml) — dxf_extractor.py's schedule extraction never
+  # populates spacing_mm for ANY bar mark, pile or pier (always None). This
+  # is a systemic gap in one place (the schedule parser), not specific to
+  # this rule — fixing it once would unblock both dormant spacing rules in
+  # this registry simultaneously.
+
+- rule_id: IRC112-16.2.2-PIER-MAX-LONGITUDINAL-STEEL-RATIO
+  title: Pier maximum longitudinal reinforcement ratio
+  applicable_drawing_types: [ppp]
+  applicable_components: [pier]
+  required_entities: [geometry_from_drawing.pier_longitudinal_steel_pct]
+  rule_type: deterministic
+  formula: {type: max_threshold, field: geometry_from_drawing.pier_longitudinal_steel_pct, max_value: 4.0}
+  unit: "%"
+  severity: error
+  category: "Reinforcement"
+  message_template: >
+    Pier longitudinal reinforcement is {value}% of gross cross-section area
+    — above the maximum permissible per IRC:112-2020 Cl. 16.2.2, which caps
+    longitudinal steel at {max_value}% of Ac outside lap zones (8% is
+    permitted at lap sections specifically).
+  engineering_rationale: >
+    Excess longitudinal steel causes congestion that impairs concrete
+    placement/compaction around bars and increases the section's flexural
+    over-strength beyond what capacity design assumed for the pier (the
+    intended ductile, energy-dissipating element) — undermining the
+    capacity-design hierarchy the whole substructure design depends on.
+  source_reference: "IRC:112-2020, Cl. 16.2.2, p.142"
+  validation_status: pending_pilot_validation
+  # NOT currently evaluable: this is a computed ratio (total longitudinal
+  # bar area from schedule.pier.g / gross pier cross-section area), not a
+  # single field dxf_extractor.py produces directly — same category of gap
+  # as IS2911-6.11.1-PILE-MIN-LONGITUDINAL-STEEL-PCT in is2911_pile.yaml
+  # (needs either a new evaluator formula type for cross-schedule ratios, or
+  # dxf_extractor.py pre-computing and exposing this percentage directly).
+  # As.min = max(0.10*NEd/fyd, 0.002*Ac) (the companion minimum-reinforcement
+  # rule in the same clause) is NOT registered here at all — it depends on
+  # NEd (design axial force), which is a design-calculation output no
+  # drawing shows, so it can never be a pure drawing-vs-code check the way
+  # this maximum can.
+
+- rule_id: IRC112-17.2.1.3-PIER-CONFINEMENT-TIE-SPACING-RATIO
+  title: Pier confinement-zone tie spacing (ductile detailing)
+  applicable_drawing_types: [ppp]
+  applicable_components: [pier]
+  required_entities: [schedule.pier.i.spacing_mm, schedule.pier.g.bar_dia_mm]
+  rule_type: deterministic
+  formula:
+    type: formula_ratio
+    field: schedule.pier.g.bar_dia_mm
+    expression: "5 * bar_dia_mm"
+    tolerance_pct: 0
+    comparison: max
+    compare_field: schedule.pier.i.spacing_mm
+  unit: mm
+  severity: error
+  category: "Reinforcement"
+  message_template: >
+    Confinement-zone tie spacing exceeds 5x the smallest longitudinal bar
+    diameter per IRC:112-2020 Cl. 17.2.1.3 (within the plastic hinge
+    region specifically — this rule cannot currently distinguish hinge-zone
+    ties from ordinary-zone ties, see note below).
+  engineering_rationale: >
+    Inside a confirmed plastic hinge region, tie spacing must be tight
+    enough (<=5x the smallest longitudinal bar diameter, and also
+    <=1/5 of the confined core dimension, whichever governs) to
+    effectively confine the core concrete and restrain longitudinal bars
+    against buckling during cyclic post-yield deformation — ordinary
+    (non-seismic) tie spacing is inadequate for this purpose.
+  source_reference: "IRC:112-2020, Cl. 17.2.1.3, p.162"
+  validation_status: pending_pilot_validation
+  # Doubly blocked: (1) formula_ratio is unimplemented in the evaluator
+  # (same limitation noted on every other formula_ratio rule in this
+  # registry), and (2) even once implemented, this specific clause only
+  # applies WITHIN the confirmed plastic hinge region — the schedule doesn't
+  # currently distinguish "this tie mark's zone is the hinge zone" from
+  # "this tie mark's zone is elsewhere on the pier," so applying this
+  # formula to schedule.pier.i (whichever zone that happens to be) risks
+  # checking the wrong zone entirely, or the right zone under the wrong
+  # name if a pier uses i/i1/i2 zone marks. A hinge-zone-identification
+  # entity would be needed first. Registered for traceability, not close to
+  # ready.
+
 - rule_id: IRC112-17.2.3-NO-LAP-IN-PLASTIC-HINGE
   title: No lap/weld splices within a plastic hinge region
   applicable_drawing_types: [ppp]

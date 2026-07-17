@@ -129,6 +129,29 @@ def evaluate_rules(rules: list[Rule], drawing_data: dict) -> list[dict]:
     return issues
 
 
+# Despite the review prompt explicitly saying knowledge_rule_findings is for
+# confirmed violations only, Claude (Haiku) has been observed including an
+# entry for a rule it checked and found NO problem with — the description
+# itself says so ("No violation detected", "appear to be within acceptable
+# ratios", etc.). That's a mechanical misuse of the output schema, not a
+# judgment call about the drawing, so it's filtered here rather than left to
+# prompt wording alone. Deliberately narrow (only unambiguous negative-result
+# phrasing) — the goal is to catch "I said this looks fine" being surfaced as
+# an error, not to second-guess genuine (if occasionally wrong) violation
+# claims, which is what needs_real_example / the CHECK 7 preamble's "flag
+# only if confident" framing already exists to caveat.
+_NEGATIVE_RESULT_PATTERNS = (
+    'no violation', 'no issue', 'no problem', 'not violated', 'not a violation',
+    'appears compliant', 'appears to comply', 'complies with', 'compliant with',
+    'within acceptable', 'no unwarranted', 'does not violate', "doesn't violate",
+)
+
+
+def _is_negative_result(description: str) -> bool:
+    d = description.lower()
+    return any(p in d for p in _NEGATIVE_RESULT_PATTERNS)
+
+
 def build_judgment_issues(findings: list[dict], rules: list[Rule]) -> list[dict]:
     """
     Turn Claude's raw CHECK 7 findings (`[{rule_id, description, bbox}]`, from
@@ -148,6 +171,10 @@ def build_judgment_issues(findings: list[dict], rules: list[Rule]) -> list[dict]
                         finding.get('rule_id'))
             continue
         description = finding.get('description') or rule.title
+        if _is_negative_result(description):
+            log.info('Judgment finding for %s reads as a negative/compliant result — dropping: %r',
+                      rule.rule_id, description[:200])
+            continue
         bbox = finding.get('bbox') or _DEFAULT_BBOX
         issues.append({
             'category':    rule.category,

@@ -262,3 +262,97 @@
   # otherwise" mode, which is the right confidence regime for an inexact,
   # unvalidated rule like this one — it doesn't need the same "proven
   # against a real case or don't ship" bar a hard deterministic check does.
+
+- rule_id: IRC112-15.2.7-BUNDLED-BAR-DIAMETER-RATIO
+  title: Bundled longitudinal bar diameter ratio
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile, pier]
+  required_entities: [schedule.pile]
+  rule_type: judgment
+  category: "Reinforcement"
+  reasoning_prompt: >
+    CASAD sometimes bundles two longitudinal bar marks together (e.g. a
+    pile's "x" and "x1" bars shown as "x+x1 (BUNDLED BAR)" in a
+    cross-section, or similarly for pier longitudinal bars). Where the
+    drawing explicitly shows two different bar marks bundled together, read
+    BOTH diameters as printed numeric text in the reinforcement schedule
+    (e.g. "25" or "25 O" in the bar-diameter column) — do not estimate or
+    infer a diameter from the bar's drawn size. Only flag if you can read
+    both printed diameter values with certainty AND their ratio (larger
+    divided by smaller) is clearly above 1.7. If either value is illegible,
+    or the two marks turn out to have the same diameter, do not flag.
+  engineering_rationale: >
+    Bundled bars are treated in design as one equivalent bar of diameter
+    phi_n = phi*sqrt(nb); mixing diameters that differ too much breaks the
+    assumption that the bundle acts compositely and shares bond stress
+    evenly, so IRC:112 caps the ratio between bundled bar diameters at 1.7.
+  source_reference: "IRC:112-2020, Cl. 15.2.7, p.134"
+  validation_status: needs_real_example
+  # Not made deterministic: identifying WHICH two schedule marks are
+  # bundled together on a given drawing is itself a visual/textual
+  # judgment call (CASAD's own convention isn't a fixed mark-name pair —
+  # see casad_design_philosophy_notes.md's finding that pile bundling uses
+  # x+x1 in one worked example with no guarantee that's universal), not
+  # something the schema's formula vocabulary can express generically.
+  #
+  # Observed false positive during Phase 3 verification (against the
+  # capsule-pier "With Errors" pile fixture, ground truth via direct
+  # dxf_extractor schedule read: x=25mm, x1=25mm, ratio=1.0): the vision
+  # model claimed "the ratio exceeds 1.7x threshold" with no such mismatch
+  # actually present. Tightened reasoning_prompt in response (require
+  # reading both diameters as printed text, omit on any uncertainty) —
+  # re-ran 1x after the fix, finding did not reappear, but this rule
+  # remains the highest hallucination-risk one in the registry (it asks
+  # for a precise two-number numeric comparison from a compressed/rendered
+  # image, unlike the more qualitative "does this pattern look off" rules)
+  # and should get extra scrutiny in any future pilot-validation pass.
+
+- rule_id: IRC112-16.2.3-PIER-TIE-CORNER-RESTRAINT
+  title: Pier longitudinal bars must be individually restrained by ties
+  applicable_drawing_types: [ppp]
+  applicable_components: [pier]
+  required_entities: [schedule.pier]
+  rule_type: judgment
+  category: "Reinforcement"
+  reasoning_prompt: >
+    Look at the pier cross-section showing the tie/link layout around the
+    longitudinal bar ring. Only flag a clear, unambiguous violation, not a
+    borderline case: (a) a corner bar with no tie leg or cross-tie
+    engaging it at all, or (b) more than 5 longitudinal bars secured at
+    one corner by a single set of ties across two meeting faces (or more
+    than 3 bars on one face), or (c) a longitudinal bar that is obviously
+    far — much further than the spacing of its neighbours — from any
+    restrained bar.
+  engineering_rationale: >
+    Every longitudinal bar in a column/pier must be individually
+    restrained against outward buckling under compression; IRC:112
+    Cl. 16.2.3 caps how many bars a single tie-corner may secure (3 on one
+    face / 5 on two faces) and requires no compression bar be more than
+    150mm from a restrained bar — an unrestrained bar can buckle outward
+    and spall its cover under load.
+  source_reference: "IRC:112-2020, Cl. 16.2.3, p.143"
+  validation_status: needs_real_example
+
+- rule_id: IRC112-15.2.6-LARGE-DIA-BAR-LAP-RESTRICTION
+  title: Large-diameter bars (>32mm) restricted from lap splicing
+  applicable_drawing_types: [ppp]
+  applicable_components: [pier, pile]
+  required_entities: [schedule.pier]
+  rule_type: judgment
+  category: "Reinforcement"
+  reasoning_prompt: >
+    Check the reinforcement schedule for any pier or pile longitudinal
+    bar mark with a diameter greater than 32mm. If such a bar is shown
+    with a lap splice (in the schedule's shape/notes column, or visible
+    in an elevation/section view), check whether the member's minimum
+    cross-sectional dimension (pier diameter/width, or pile diameter) is
+    at least 1.0m. If the member is smaller than 1.0m and a lap splice is
+    shown on a >32mm bar, flag it.
+  engineering_rationale: >
+    Bars thicker than 32mm develop much higher bond-transfer forces over a
+    lap length than the code's general lap-length formula safely covers;
+    IRC:112 Cl. 15.2.6 disallows lap splicing such bars unless the member
+    is large enough (>=1.0m least dimension) or the bar stress is kept
+    below 80% of design ultimate strength.
+  source_reference: "IRC:112-2020, Cl. 15.2.6, p.133"
+  validation_status: needs_real_example

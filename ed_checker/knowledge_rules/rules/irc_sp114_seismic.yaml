@@ -2,9 +2,9 @@
 # notes: ED checker/dwg_checker_contents/03_Data for Claude Model/Knowledge
 # documents/extracted_notes/irc_sp114_seismic_detailing_notes.md
 #
-# No Phase-1 rule extracted from this document specifically. Confirmed this
-# session (see the notes file's own "HEADLINE FINDING"): SP:114 establishes
-# *why* ductile detailing is mandated and *when* (capacity design, hinge
+# Phase 1/2: no rule extracted from this document specifically. Confirmed
+# (see the notes file's own "HEADLINE FINDING"): SP:114 establishes *why*
+# ductile detailing is mandated and *when* (capacity design, hinge
 # locations, seismic-zone triggers) but defers every actual numeric
 # confinement-zone-length/spacing formula to IRC:112 Section 17 — see
 # irc112_detailing.yaml for the rules built from those numbers. The one
@@ -14,7 +14,30 @@
 # IRC112-17.2.3-NO-LAP-IN-PLASTIC-HINGE in irc112_detailing.yaml rather than
 # duplicated here.
 #
-# Left as an empty rule file (not omitted) so a future session can see this
-# document was processed and deliberately yielded no standalone rule, rather
-# than looking unprocessed.
-[]
+# Phase 3: one clause IS standalone and drawing-checkable — Cl. 9.1.2.1's
+# M30 minimum concrete grade in the plastic hinge zone — added below as a
+# judgment rule (not deterministic: it requires locating which component/
+# region is the hinge zone and reading the nearby grade note, both visual/
+# positional reasoning, not a single drawing_data field comparison).
+
+- rule_id: SP114-9.1.2.1-MIN-GRADE-PLASTIC-HINGE-ZONE
+  title: Minimum concrete grade in plastic hinge zone
+  applicable_drawing_types: [ppp]
+  applicable_components: [pier, pile]
+  required_entities: [notes.concrete_pier]
+  rule_type: judgment
+  category: "Notes"
+  reasoning_prompt: >
+    Identify the pier base region (or pile head, just below the pile cap)
+    — the location where a plastic hinge is expected to form under seismic
+    action, typically shown with tighter tie/confinement spacing. Check
+    the concrete grade note that applies to that component (e.g. "M35",
+    "CONCRETE MIX (M40)"). If the grade shown there is below M30, flag it.
+  engineering_rationale: >
+    IRC:SP:114-2018 Cl. 9.1.2.1 sets a minimum concrete grade of M30
+    specifically for locations where a plastic hinge can form — a weaker
+    mix there risks premature concrete crushing before the reinforcement
+    reaches its intended ductile capacity, undermining the capacity-design
+    hierarchy the whole substructure depends on.
+  source_reference: "IRC:SP:114-2018, Cl. 9.1.2.1, p.76"
+  validation_status: needs_real_example

@@ -266,6 +266,13 @@ separately from the DXF/schedule data) — a rule listed here could not be reduc
 formula/threshold, or has not yet been validated against enough real drawings to be enforced as
 a hard check. Only flag a finding if you are CONFIDENT the drawing shows the described issue —
 these are exploratory/lower-confidence checks by design; omit rather than guess.
+knowledge_rule_findings is a list of CONFIRMED VIOLATIONS ONLY — never add an entry to report
+that you checked a rule and it passed, to share your reasoning about a rule you couldn't fully
+verify, or to note "no issue found" / "appears compliant" / "no violation detected". Treat each
+rule below exactly like every other check in this prompt: either you found a specific, concrete
+defect (report it), or you didn't (say nothing about that rule at all). If no rule below is
+violated, knowledge_rule_findings must be an empty array — do not populate it with your analysis
+notes on rules you found no problem with.
 {KNOWLEDGE_RULES}
 
 Return ONLY valid JSON (no markdown):

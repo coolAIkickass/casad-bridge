@@ -546,10 +546,34 @@ def _strip_mtext_codes(text: str) -> str:
     bar-count callout written as {\\W1;32 -15 NOS} must yield "32 -15 NOS", not ''.
     Strip the \\code; prefix, then strip the brace delimiters themselves, but never
     delete the text they enclose.
+
+    \\P (uppercase only) is a STANDALONE paragraph-break code — no ';'-terminated
+    parameter. \\L/\\l (underline), \\O/\\o (overline), \\K/\\k (strikethrough) are
+    likewise standalone toggles. These must be stripped separately from
+    parameterized codes (\\C, \\F, \\A, \\Q, \\H, \\W, \\T, \\S — always followed by
+    a short argument then ';') — a single regex treating all codes alike as
+    `\\[code][^;]*;` greedily consumes from a standalone code all the way to the
+    NEXT unrelated ';'-terminated code anywhere later in the string, confirmed on a
+    real drawing where a lone \\P was followed several words later by an unrelated
+    \\C4; color code, silently swallowing the entire "CLEAR COVER TO ANY
+    REINFORCEMENT" note phrase in between (and every other note in that gap).
+
+    \\p (LOWERCASE) is a different, parameterized code — paragraph *properties*
+    (e.g. `\\pxqc;` = centered alignment), always ';'-terminated — it must NOT be
+    folded into the \\P handling above; doing so leaves its own parameter fragment
+    (e.g. `xqc;`) stuck in the output, confirmed on a real drawing's "TOP OF PIER"
+    section-view label (stored as `\\pxqc;{\\W0.9;TOP OF PIER}`) which came out as
+    "XQC;TOP OF PIER" instead of "TOP OF PIER" when \\p was wrongly treated as \\P.
+
+    Handle \\P first (→ newline, preserving the line-break structure notes/
+    lap-length parsing already depends on), then the remaining standalone toggles
+    (deleted, no replacement), then the parameterized codes including \\p.
     """
-    text = re.sub(r'\\[PpLlOoKkCcFfAaQqHhWwBbIiTtSs][^;]*;', '', text)
+    text = text.replace('\\P', '\n')
+    text = re.sub(r'\\[LlOoKk]', '', text)
+    text = re.sub(r'\\[pCcFfAaQqHhWwBbIiTtSs][^;]*;', '', text)
     text = text.replace('{', '').replace('}', '')
-    text = text.replace('\\~', ' ').replace('\\P', '\n').replace('\\p', '\n')
+    text = text.replace('\\~', ' ')
     return text.strip()
 
 
@@ -2125,65 +2149,110 @@ def _check_table1_duplicate_headers(all_text: list, extents: tuple,
     whether the values beneath it can be verified — this check needs no design
     input and produces nothing when the header row isn't real text (the OLE case).
     Block-derived text is excluded — same reason schedule parsing excludes it.
+
+    Handles multiple TABLE-1 instances on one sheet (e.g. a combined multi-pier
+    drawing with a separate pier/pile-level table per pier) — each instance is
+    checked independently. Confirmed necessary on a real production sheet
+    (`12_DETAILS OF PILECAP & PIER_P27B_R0-PPCP.dxf`): two side-by-side TABLE-1
+    instances each have entirely distinct headers, but scanning by Y-position
+    alone (ignoring which table a cell's X position belongs to) pooled both
+    tables' header cells together and reported every header as "duplicated"
+    even though neither table individually repeats a header. Labels are sorted
+    by X and the midpoint between adjacent labels forms the x-window boundary
+    for each — safe as long as side-by-side tables don't overlap in X, which
+    they don't by construction (they'd visually collide on the sheet otherwise).
+    A single-TABLE-1 sheet (the common case) gets one window spanning the full
+    sheet width, identical to the prior behaviour.
+
     Returns [{description, bbox}] suitable for drawing_data['dimension_issues'].
     """
     noblk = [t for t in all_text if not t.get('from_block')]
     label_cells = [t for t in noblk if _TABLE1_LABEL_RE.search(t['text'])]
     if not label_cells:
         return []
-    label_y = max(t['y'] for t in label_cells)  # topmost occurrence (DXF Y is bottom-up)
+
+    x_min, y_min, x_max, y_max = extents
+    labels_by_x = sorted(label_cells, key=lambda t: t['x'])
+    windows = []
+    for i, label in enumerate(labels_by_x):
+        left = x_min if i == 0 else (labels_by_x[i - 1]['x'] + label['x']) / 2
+        right = x_max if i == len(labels_by_x) - 1 else (label['x'] + labels_by_x[i + 1]['x']) / 2
+        windows.append((label, left, right))
 
     rows = _group_rows(noblk, tol_frac=layout.sched_row_tol_frac, extents=extents)
-    header_cells = []
-    for row in rows:
-        row_y = row[0]['y']
-        if row_y >= label_y - 1e-6:
-            continue  # at/above the TABLE-1 label itself
-        row_text = ' '.join(c['text'] for c in row).strip()
-        if _TABLE1_DATA_ROW_RE.match(row_text):
-            break  # reached the first data row (e.g. "LP4 110.151 ...")
-        header_cells.extend(row)
-        if len(header_cells) > 40:  # safety cap
-            break
-
-    seen: dict = {}
-    for c in header_cells:
-        txt = c['text'].strip()
-        if not _TABLE1_HEADER_WORD_RE.search(txt):
-            continue  # only compare cells that look like real column-header phrases
-        key = re.sub(r'\s+', ' ', txt).upper()
-        seen.setdefault(key, []).append(c)
 
     issues = []
-    for key, cells in seen.items():
-        if len(cells) < 2:
-            continue
-        cx = sum(c['x'] for c in cells) / len(cells)
-        cy = sum(c['y'] for c in cells) / len(cells)
-        x_pct, y_pct = _pos_to_pct(cx, cy, extents)
-        issues.append({
-            'description': (
-                f'TABLE-1 has {len(cells)} columns both labelled "{key}" — a header '
-                f'was likely copy-pasted without updating it. Verify each column '
-                f'heading is correct and distinct.'
-            ),
-            'bbox': {'x': x_pct, 'y': y_pct, 'width': 10.0, 'height': 3.0},
-        })
+    for label, left, right in windows:
+        label_y = label['y']
+        header_cells = []
+        for row in rows:
+            row_y = row[0]['y']
+            if row_y >= label_y - 1e-6:
+                continue  # at/above this TABLE-1 label itself
+            windowed = [c for c in row if left <= c['x'] < right]
+            if not windowed:
+                continue
+            windowed_sorted = sorted(windowed, key=lambda c: c['x'])
+            row_text = ' '.join(c['text'] for c in windowed_sorted).strip()
+            if _TABLE1_DATA_ROW_RE.match(row_text):
+                break  # reached this table's first data row (e.g. "LP4 110.151 ...")
+            header_cells.extend(windowed_sorted)
+            if len(header_cells) > 40:  # safety cap
+                break
+
+        seen: dict = {}
+        for c in header_cells:
+            txt = c['text'].strip()
+            if not _TABLE1_HEADER_WORD_RE.search(txt):
+                continue  # only compare cells that look like real column-header phrases
+            key = re.sub(r'\s+', ' ', txt).upper()
+            seen.setdefault(key, []).append(c)
+
+        for key, cells in seen.items():
+            if len(cells) < 2:
+                continue
+            cx = sum(c['x'] for c in cells) / len(cells)
+            cy = sum(c['y'] for c in cells) / len(cells)
+            x_pct, y_pct = _pos_to_pct(cx, cy, extents)
+            issues.append({
+                'description': (
+                    f'TABLE-1 has {len(cells)} columns both labelled "{key}" — a header '
+                    f'was likely copy-pasted without updating it. Verify each column '
+                    f'heading is correct and distinct.'
+                ),
+                'bbox': {'x': x_pct, 'y': y_pct, 'width': 10.0, 'height': 3.0},
+            })
     return issues
 
 
 _LINER_THK_RE = re.compile(r'(\d+(?:\.\d+)?)\s*\bM\b\s*THK')
+_LINER_THK_MM_RE = re.compile(r'(\d+(?:\.\d+)?)\s*MM\s*THK', re.IGNORECASE)
+
+# IRC:78 (Part-1)-2024 Cl. 709.1.4: "The minimum thickness of liner should be 6 mm"
+# — applies to both marine/aggressive-soil piles (full strata depth) and land-bridge
+# piles in soft clay/loose sand/bouldery/artesian/aggressive-soil conditions. Verified
+# against a rendered page image of the source PDF (this document has no text layer).
+_LINER_MIN_THK_MM = 6.0
 
 
 def _check_liner_thickness_units(msp, extents: tuple) -> list:
     """
-    Flag a pile-liner thickness callout written in metres ("6 M THK.") instead of
-    millimetres ("6 MM THK."). A steel casing liner is physically a few millimetres
-    thick — a bare "M" here is a dropped letter, not a genuine multi-metre design.
-    Scoped to MULTILEADER callouts that also mention "LINER", so a legitimate "M"
-    used elsewhere in dimension text is never touched. `\\bM\\b` requires "M" as its
-    own token — "MM THK." (the correct form) has no word boundary between the two
-    M's and is never matched.
+    Two checks on a pile-liner thickness callout, both scoped to MULTILEADER
+    callouts that mention "LINER" so a legitimate "M"/"MM" used elsewhere in
+    dimension text is never touched:
+
+    1. Units typo — thickness written in metres ("6 M THK.") instead of
+       millimetres ("6 MM THK."). A steel casing liner is physically a few
+       millimetres thick — a bare "M" here is a dropped letter, not a genuine
+       multi-metre design. `\\bM\\b` requires "M" as its own token — "MM THK."
+       (the correct form) has no word boundary between the two M's and is
+       never matched by this pattern.
+    2. Below-code-minimum thickness — a correctly-formatted "N MM THK." value
+       below IRC:78 Cl. 709.1.4's 6mm floor. Only runs when pattern 1 did NOT
+       match (i.e. the callout is already in the correct MM form), so the two
+       checks are mutually exclusive per callout — a units typo isn't also
+       reported as a below-minimum thickness.
+
     Returns [{description, bbox}] suitable for drawing_data['dimension_issues'].
     """
     issues = []
@@ -2198,23 +2267,38 @@ def _check_liner_thickness_units(msp, extents: tuple) -> list:
         text = _strip_dim_override(raw)
         if 'LINER' not in text.upper():
             continue
-        m = _LINER_THK_RE.search(text.upper())
-        if not m:
-            continue
+
         try:
             pos = ctx.mtext.insert
             x_pct, y_pct = _pos_to_pct(float(pos[0]), float(pos[1]), extents)
         except Exception:
             x_pct, y_pct = 50.0, 50.0
-        issues.append({
-            'description': (
-                f'The liner thickness callout reads "{m.group(1)} M THK." '
-                f'({m.group(1)} metres) — this is almost certainly a missing "M" and '
-                f'should read "{m.group(1)} MM THK." (millimetres). A steel casing '
-                f'liner {m.group(1)} metres thick is not physically plausible.'
-            ),
-            'bbox': {'x': x_pct, 'y': y_pct, 'width': 8.0, 'height': 3.0},
-        })
+        bbox = {'x': x_pct, 'y': y_pct, 'width': 8.0, 'height': 3.0}
+
+        m = _LINER_THK_RE.search(text.upper())
+        if m:
+            issues.append({
+                'description': (
+                    f'The liner thickness callout reads "{m.group(1)} M THK." '
+                    f'({m.group(1)} metres) — this is almost certainly a missing "M" and '
+                    f'should read "{m.group(1)} MM THK." (millimetres). A steel casing '
+                    f'liner {m.group(1)} metres thick is not physically plausible.'
+                ),
+                'bbox': bbox,
+            })
+            continue
+
+        m_mm = _LINER_THK_MM_RE.search(text)
+        if m_mm and float(m_mm.group(1)) < _LINER_MIN_THK_MM:
+            issues.append({
+                'description': (
+                    f'The liner thickness callout reads "{m_mm.group(1)} MM THK." — '
+                    f'below the minimum permissible per IRC:78 (Part-1)-2024 Cl. 709.1.4, '
+                    f'which requires steel pile liners to be at least {_LINER_MIN_THK_MM:g} mm '
+                    f'thick.'
+                ),
+                'bbox': bbox,
+            })
     return issues
 
 
@@ -2308,9 +2392,22 @@ def _extract_dimensions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
                 # defpoint-to-defpoint distance: "LENGTH OF PILE = 18000" (compressed
                 # break-line dimension), "3000\Xy" (DETAIL zone label), "840 DIA"
                 # (diameter callout), "i1+j1+k1\X2400" (bar-mark-sum label).
+                #
+                # Relative threshold is 25%, not a tight tolerance — CASAD's own
+                # standing drawing note states "THIS DRAWING IS NOT TO SCALE & WRITTEN
+                # DIMENSION SHALL BE FOLLOWED", i.e. the override text is the
+                # authoritative design value by convention and the underlying geometry
+                # is explicitly permitted to be schematic rather than exact. Confirmed
+                # on a real production "Without Errors" sheet
+                # (`12_DETAILS OF PILECAP & PIER_P27B_R0-PPCP.dxf`) with legitimate
+                # override/geometry gaps up to ~20% (round-pier radial dimensions,
+                # inherently imprecise chord geometry) that must NOT be flagged. The
+                # two confirmed seeded errors in the training set (1300 vs 2300mm,
+                # 200 vs 150mm) sit at 43% and 33% respectively — comfortably clear of
+                # this floor on the other side.
                 if re.match(r'^-?\d+(\.\d+)?$', override.strip()):
                     override_val = float(override.strip())
-                    if abs(override_val - val) > max(2.0, val * 0.02):
+                    if abs(override_val - val) > max(2.0, val * 0.25):
                         margin = 400.0 / u2mm
                         bbox = _to_bbox(tx - margin, ty + margin, tx + margin, ty - margin, extents)
                         result['text_override_mismatches'].append({

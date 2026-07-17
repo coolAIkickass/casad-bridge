@@ -128,6 +128,8 @@ PPP_PROFILE = DrawingTypeProfile(
         'pile_fixity_m':   r'FIXITY\s*[=:]\s*([\d.]+)\s*M?|FIX\.?\s*LENGTH\s*[=:]\s*([\d.]+)',
         'pile_dia_m':      r'PILE\s+DIA\.?\s*[=:]\s*([\d.]+)\s*M?',
         'max_pile_load_t': r'MAX\.?\s+(?:SAFE\s+)?PILE\s+LOAD\s*[=:]\s*([\d.]+)\s*T',
+        # CASAD's standing general-note wording: "CLEAR COVER TO ANY REINFORCEMENT : 75MM".
+        'clear_cover_mm':  r'CLEAR\s+COVER\s+TO\s+ANY\s+REINFORCEMENT\s*[=:]\s*([\d.]+)\s*MM',
     },
     note_string_patterns={
         'steel_grade':               r'\b(Fe\s*-?\s*\d+[A-Z]*|FE\s*-?\s*\d+[A-Z]*|HYSD|TMT)\b',

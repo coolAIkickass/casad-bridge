@@ -46,6 +46,7 @@ def new_drawing_data(**overrides) -> dict:
         'unlabeled_views':              [],
         'erroneous_boxes':              [],
         'missing_referenced_sections':  [],
+        'unreferenced_section_views':   [],
         'sections_from_text':           [],
         'notes_completeness_from_text': [],
         # Position data (PDF coordinates, for review-UI marker placement)

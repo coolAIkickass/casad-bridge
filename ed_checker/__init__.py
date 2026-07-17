@@ -329,7 +329,13 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
                      len(review_data.get('erroneous_boxes') or []),
                      len(review_data.get('cross_section_checks') or []))
             drawing_data['label_issues']         = review_data.get('label_issues')         or []
-            drawing_data['dimension_issues']     = review_data.get('dimension_issues')     or []
+            # Merge DXF-detected dimension issues (text-override mismatches, liner
+            # thickness units, TABLE-1 duplicate headers — all exact, no vision needed)
+            # with vision-detected ones (CHECK 4's absent-only rule) — do not overwrite.
+            drawing_data['dimension_issues'] = (
+                (drawing_data.get('dimension_issues') or []) +
+                (review_data.get('dimension_issues') or [])
+            )
             drawing_data['cross_section_checks'] = (
                 drawing_data.get('cross_section_checks') or
                 review_data.get('cross_section_checks') or []

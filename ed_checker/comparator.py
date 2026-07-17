@@ -284,6 +284,7 @@ def compare(design_data: dict, drawing_data: dict) -> list:
         drawing_data.get('dimension_issues') or [], [], section_view_positions)
     issues += _check_cross_sections(drawing_data, design_data or {})
     issues += _check_cut_mark_references(drawing_data)
+    issues += _check_unreferenced_section_views(drawing_data)
     issues += _check_unlabeled_views(drawing_data)
     issues += _compare_geometry_dims(drawing_data, design_data)
     issues += _check_bar_mark_callouts(drawing_data, design_data)
@@ -1281,6 +1282,38 @@ def _check_cut_mark_references(drawing_data: dict) -> list:
     return issues
 
 
+def _check_unreferenced_section_views(drawing_data: dict) -> list:
+    """
+    Reverse of _check_cut_mark_references above: a titled SECTION view with a
+    compound zone mark (e.g. "SECTION Z1-Z1") whose own cut-arrow ("Z1") was
+    never found anywhere in the drawing — the reader has no way to tell where
+    that cut is actually taken from in the elevation.
+    """
+    issues = []
+    for item in (drawing_data.get('unreferenced_section_views') or []):
+        mark  = item.get('missing_mark', '?')
+        view  = item.get('view_label', '?')
+        bbox  = item.get('bbox')
+        x, y, w, h = _bbox('default', bbox)
+        issues.append({
+            'category':    'Missing Views',
+            'title':       f'Missing cut-mark arrow: {mark}',
+            'description': (
+                f'"{view}" is drawn and titled, but no "{mark}" cut-mark arrow '
+                f'was found anywhere in the drawing showing where this section is '
+                f'taken from.'
+            ),
+            'suggestion':  (
+                f'Add the "{mark}" cut-arrow to the elevation/detail view it is '
+                f'taken from, or remove the "{view}" view if it is not required.'
+            ),
+            'severity':    'error',
+            'page_num':    1,
+            'x': x, 'y': y, 'width': w, 'height': h,
+        })
+    return issues
+
+
 # ── Unlabeled views ───────────────────────────────────────────────────────────
 
 def _check_unlabeled_views(drawing_data: dict) -> list:
@@ -1356,13 +1389,42 @@ def _compare_geometry_dims(drawing_data: dict, design_data: dict,
             closest_key = min(candidates, key=lambda kv: abs(pier_dims[0]['val_mm'] - kv[1] * 1000.0))[0]
             checks.append(('pier_plan_dim', closest_key, 5.0, 'Pier plan dimension', 'm'))
 
+    # Params where DXF Tier-2 spatial routing reliably finds a match whenever the
+    # dimension genuinely exists — safe to flag as "missing from drawing" when the
+    # design specifies a value but none was found. Validated by sweeping ~17
+    # production DXF fixtures: 'pilecap_depth' was found in 16/17 (the 2 misses are
+    # narrow section-only cutout fixtures with no full sheet to detect from at
+    # all — not a real omission). 'pile_dia' / 'pilecap_width' were never once
+    # classified across that same sweep, so flagging their absence would be a
+    # guaranteed false positive on every drawing — deliberately excluded.
+    # 'pile_spacing' / 'pile_overhang' are usually only dimensioned in a "PLAN OF
+    # PILECAP" view, which Tier-2 deliberately excludes (a plan-view footprint
+    # isn't a reliable proxy for these elevation-style measurements) — a
+    # pile-only sheet with no elevation view showing them would false-positive
+    # if included here.
+    _RELIABLY_DETECTED = {'pilecap_depth'}
+
     issues = []
     for param, design_key, tol_pct, label, design_unit in checks:
         drawn_list = geo_drawing.get(param)
+        design_val = geo_design.get(design_key)
+
         if not drawn_list:
+            if param in _RELIABLY_DETECTED and design_val is not None:
+                issues.append({
+                    'category':    'Geometric Dimensions',
+                    'title':       f'{label}: not found in drawing',
+                    'description': (
+                        f'{label} is specified in the design input ({design_val}{design_unit}) '
+                        f'but no matching dimension was found in the drawing.'
+                    ),
+                    'suggestion':  f'Add a dimension for {label.lower()}.',
+                    'severity':    'error',
+                    'page_num':    1,
+                    'x': 50, 'y': 50, 'width': 5.0, 'height': 2.0,
+                })
             continue
 
-        design_val = geo_design.get(design_key)
         if design_val is None:
             continue
 

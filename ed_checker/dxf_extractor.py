@@ -233,13 +233,16 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     notes               = _extract_notes(all_text, extents, profile)
     _append_section_grade_diagnostics(all_text, extents, profile, notes, diags)
     dim_data            = _extract_dimensions(msp, extents, u2mm)
-    sv_pos, cut_letters = _extract_section_info(all_text, extents, profile.layout)
+    sv_pos, cut_letters, zone_cut_marks = _extract_section_info(all_text, extents, profile.layout)
     xsec                = _count_cross_section_bars(msp, all_text, schedule, extents, profile, diags, u2mm)
     geometry_from_drawing = _classify_all_dims(msp, all_text, extents, profile, u2mm)
     multileader_callouts, merged_callouts = _extract_multileader_callouts(msp, extents)
     # Programmatic unlabeled-view and missing-detail detection (runs before del msp).
     unlabeled_circles   = _detect_unlabeled_section_circles(msp, all_text, extents, sv_pos, profile, u2mm)
     missing_detail_refs = _detect_missing_detail_refs(all_text, sv_pos)
+    liner_thk_issues    = _check_liner_thickness_units(msp, extents)
+    table1_hdr_issues   = _check_table1_duplicate_headers(all_text, extents, profile.layout)
+    unreferenced_views  = _detect_unreferenced_section_views(sv_pos, zone_cut_marks)
 
     # ezdxf doc and modelspace are done — all data now lives in plain Python dicts.
     # Delete explicitly and gc to break cyclic entity refs (~100-200 MB) before returning.
@@ -254,6 +257,14 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     if dim_data.get('pile_dia_mm') and notes.get('pile_dia_m') is None:
         notes['pile_dia_m'] = round(dim_data['pile_dia_mm'] / 1000.0, 3)
         log.info('Notes: pile_dia_m set from DIMENSION entity: %.3fm', notes['pile_dia_m'])
+
+    dimension_issues = (
+        (dim_data.get('text_override_mismatches') or [])
+        + liner_thk_issues
+        + table1_hdr_issues
+    )
+    if dimension_issues:
+        log.info('Dimension text/geometry mismatches: %d', len(dimension_issues))
 
     # What this extraction can vouch for (consumed by the comparator instead of
     # source flags). Spacing is only checkable if the schedule has a C/C column.
@@ -275,6 +286,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
         title_block=title_block,
         notes=notes,
         dim_data=dim_data,
+        dimension_issues=dimension_issues,
         cross_section_checks=xsec,
         section_view_positions=sv_pos,
         cut_letters=cut_letters,
@@ -294,6 +306,9 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
         unlabeled_views=unlabeled_circles,
         # DXF-derived missing DETAIL refs — __init__.py appends cut-letter missing sections
         missing_referenced_sections=missing_detail_refs,
+        # Titled SECTION views whose own zone cut-arrow (e.g. "Z1") is missing —
+        # the reverse direction of missing_referenced_sections above.
+        unreferenced_section_views=unreferenced_views,
     )
 
 
@@ -1621,7 +1636,8 @@ def _suppress_nested_pilecap_candidates(candidates: list, u2mm: float = 1.0) -> 
 
 
 def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0,
-                               view_labels: list | None = None) -> dict:
+                               view_labels: list | None = None,
+                               profile: DrawingTypeProfile = PPP_PROFILE) -> dict:
     """
     Infer structural component bounding boxes from LWPOLYLINE and ARC geometry.
     Returns {name: {type, bbox=(xmin,ymin,xmax,ymax), center?, radius?, width?, height?}}.
@@ -1649,6 +1665,13 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0,
     a bar-shape sketch in the schedule table, which would otherwise nearest-match
     whichever named view happens to be least far away even when that's 10+m off.
     None/empty view_labels → no gating (preserves behavior on label-less cropped DXFs).
+
+    After the polyline/arc pass above, also runs a rebar-dot-ring fallback
+    (_add_dot_ring_regions) for components whose true outline isn't one closed
+    polyline our bbox+aspect heuristic can bound — e.g. a capsule-shaped pier
+    drawn as several curve fragments, no single one of which is pier-sized on
+    its own. See that function's docstring for how it avoids ever overriding a
+    polyline-based detection.
     """
     x_min, y_min, x_max, y_max = extents
     dw = (x_max - x_min) or 1.0
@@ -1668,9 +1691,6 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0,
             h = max(ys) - min(ys)
             if w <= 0 or h <= 0:
                 continue
-            layer = str(poly.dxf.get('layer', ''))
-            if _layer_excluded(layer):
-                continue
             # Sheet border / extents rectangle — exact match to whole-sheet size.
             if w > dw * 0.95 and h > dh * 0.95:
                 continue
@@ -1680,6 +1700,25 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0,
             cx = (min(xs) + max(xs)) / 2
             cy = (min(ys) + max(ys)) / 2
             aspect = w / h if h > 0 else 0
+
+            # Layer exclusion only applies to candidates NOT already meter-scale
+            # pilecap-sized — CASAD sometimes draws the concrete outline of a
+            # pilecap itself on a layer named e.g. "S_REINF" (confirmed on a real
+            # capsule-pier sheet), and a blanket layer exclusion would throw away
+            # the only closed polyline marking that component's boundary, breaking
+            # Tier-2 dimension routing for it entirely.
+            # Deliberately NOT extended to the pier-sized bypass below: a real
+            # stirrup bent-bar shape sketch (confirmed on the same sheet, layer
+            # "S_REINF STIRRUPS", ~315×503mm) sits *inside* the pier's 300–6000mm /
+            # 0.6–1.6-aspect bounds and would leak through as a spurious pier
+            # region if the bypass applied there too. The pilecap bypass is safe
+            # because it additionally requires aspect > 1.5 and width ≥1000mm —
+            # far outside any single bar's bend-shape footprint.
+            layer = str(poly.dxf.get('layer', ''))
+            is_pilecap_sized = (aspect > 1.5 and _PILECAP_MIN_W_MM <= w_mm <= _PILECAP_MAX_W_MM
+                                and h_mm >= _PILECAP_MIN_H_MM)
+            if not is_pilecap_sized and _layer_excluded(layer):
+                continue
 
             # Wide flat shape → pilecap.
             if (aspect > 1.5 and _PILECAP_MIN_W_MM <= w_mm <= _PILECAP_MAX_W_MM
@@ -1732,8 +1771,119 @@ def _detect_component_regions(msp, extents: tuple, u2mm: float = 1.0,
         except Exception:
             pass
 
+    if view_labels:
+        _add_dot_ring_regions(msp, regions, view_labels, profile, u2mm)
+
     log.info('Component regions detected: %s', {k: v['type'] for k, v in regions.items()})
     return regions
+
+
+_DOT_RING_MIN_COUNT = 8   # mirrors _count_cross_section_bars' "inserted often enough to be
+                          # a per-bar symbol" fallback threshold
+
+
+def _add_dot_ring_regions(msp, regions: dict, view_labels: list,
+                           profile: DrawingTypeProfile, u2mm: float) -> None:
+    """
+    Fallback component-region detection via rebar-dot ring bounding box, for
+    components whose true outline isn't one closed polyline the boundary-based
+    pass above can bound. Confirmed on a real capsule-shaped pier sheet: the
+    pier's oval outline is drawn as several small curve fragments (the largest
+    single fragment found was ~500×1800mm — nowhere near pier-sized on its
+    own), so the polyline pass finds nothing there at all, even though the
+    component clearly exists and is clearly sized correctly once you look at
+    where its 50 individual "REIN.DOT" rebar markers actually sit (bounding
+    box ≈2135×1640mm — matching the design pier's 2300×1800mm to within
+    concrete cover). CASAD places one such dot block per bar around a
+    section's perimeter, so that ring's own bounding box is a reliable stand-in
+    for the component's true footprint.
+
+    Anchored to 'section'-type view labels that name exactly one component
+    (e.g. "CROSS SECTION OF PIER") so this can't be spuriously triggered by an
+    unrelated dot cluster elsewhere on the sheet, and skips any label whose
+    component already has a polyline-based region nearby — this fallback must
+    never override a more precise detection, only fill a gap.
+    """
+    section_labels = [vl for vl in view_labels
+                       if vl['view_type'] == 'section' and len(vl['components']) == 1]
+    if not section_labels:
+        return
+
+    insert_points = _collect_dot_insert_points(msp)
+    name_res = [re.compile(p, re.IGNORECASE) for p in profile.dot_block_patterns]
+    named_dots = {n: pts for n, pts in insert_points.items()
+                  if any(rx.search(n) for rx in name_res)}
+    dot_blocks = named_dots or {n: pts for n, pts in insert_points.items()
+                                 if len(pts) >= _DOT_RING_MIN_COUNT}
+    all_dots = [p for pts in dot_blocks.values() for p in pts]
+    if not all_dots:
+        return
+
+    # Candidate pool per label uses the generous _MAX_LABEL_DIST_MM radius (same
+    # constant the polyline pass above uses for label proximity), but that radius
+    # alone is NOT the ring boundary — on a sheet with several piers shown close
+    # together, dots from two different piers can both land inside one label's
+    # radius. _largest_cluster's gap-based flood fill (the same clustering
+    # _count_cross_section_bars already uses to separate one section's dots from
+    # its neighbours) finds the actual coherent ring; picking the cluster nearest
+    # the label picks the right ring when more than one exists in range.
+    search_r = _MAX_LABEL_DIST_MM / u2mm if u2mm else _MAX_LABEL_DIST_MM
+    cluster_gap = _XSEC_CLUSTER_GAP_MM / u2mm if u2mm else _XSEC_CLUSTER_GAP_MM
+    next_idx: dict = {}
+    for vl in section_labels:
+        comp = next(iter(vl['components']))
+        lx, ly = vl['x'], vl['y']
+
+        already = any(
+            r['type'] == comp and
+            ((r['bbox'][0] + r['bbox'][2]) / 2 - lx) ** 2 +
+            ((r['bbox'][1] + r['bbox'][3]) / 2 - ly) ** 2 < search_r ** 2
+            for r in regions.values()
+        )
+        if already:
+            continue
+
+        candidates = [p for p in all_dots if (p['x'] - lx) ** 2 + (p['y'] - ly) ** 2 < search_r ** 2]
+        if len(candidates) < _DOT_RING_MIN_COUNT:
+            continue
+
+        clusters = _all_clusters(candidates, max_gap=cluster_gap)
+        clusters = [c for c in clusters if len(c) >= _DOT_RING_MIN_COUNT]
+        if not clusters:
+            continue
+
+        def _cluster_dist(c):
+            ccx = sum(p['x'] for p in c) / len(c)
+            ccy = sum(p['y'] for p in c) / len(c)
+            return (ccx - lx) ** 2 + (ccy - ly) ** 2
+        nearby = min(clusters, key=_cluster_dist)
+
+        xs = [p['x'] for p in nearby]
+        ys = [p['y'] for p in nearby]
+        w = max(xs) - min(xs)
+        h = max(ys) - min(ys)
+        if w <= 0 or h <= 0:
+            continue
+        w_mm, h_mm = w * u2mm, h * u2mm
+        aspect = w / h
+
+        is_pilecap_sized = (comp == 'pilecap' and aspect > 1.5
+                            and _PILECAP_MIN_W_MM <= w_mm <= _PILECAP_MAX_W_MM
+                            and h_mm >= _PILECAP_MIN_H_MM)
+        is_pier_sized = (comp == 'pier' and 0.6 <= aspect <= 1.6
+                         and _PIER_MIN_W_MM <= w_mm <= _PIER_MAX_W_MM
+                         and _PIER_MIN_H_MM <= h_mm <= _PIER_MAX_H_MM)
+        if not (is_pilecap_sized or is_pier_sized):
+            continue
+
+        cx = (min(xs) + max(xs)) / 2
+        cy = (min(ys) + max(ys)) / 2
+        idx = next_idx.get(comp, 0)
+        regions[f'{comp}_dotring_{idx}'] = {
+            'type': comp, 'bbox': (min(xs), min(ys), max(xs), max(ys)),
+            'center': (cx, cy), 'width': w, 'height': h,
+        }
+        next_idx[comp] = idx + 1
 
 
 _BUNDLE_TOL_MM = 800.0   # max gap between bundle-pile centers; real distinct piles sit farther apart
@@ -1852,7 +2002,7 @@ def _classify_all_dims(msp, all_text: list, extents: tuple,
     section-profile dimensions.
     """
     view_labels = _extract_view_labels(all_text, profile)
-    regions = _detect_component_regions(msp, extents, u2mm, view_labels)
+    regions = _detect_component_regions(msp, extents, u2mm, view_labels, profile)
     result: dict = {}
     seen_keys: set = set()   # (param, component_key) — dedup repeated dims for the same candidate
     total = 0
@@ -1956,6 +2106,118 @@ def _extract_multileader_callouts(msp, extents: tuple) -> tuple:
     return callouts, merged_callouts
 
 
+_TABLE1_LABEL_RE = re.compile(r'\bTABLE[-\s]?1\b', re.IGNORECASE)
+_TABLE1_DATA_ROW_RE = re.compile(r'^\(?(LP|RP)\d+\b', re.IGNORECASE)
+_TABLE1_HEADER_WORD_RE = re.compile(
+    r'\b(TOP|BOT|BOTTOM|GROUND|LVL|PIERCAP|PILECAP|PIER)\b', re.IGNORECASE)
+
+
+def _check_table1_duplicate_headers(all_text: list, extents: tuple,
+                                     layout: LayoutConfig) -> list:
+    """
+    Flag a TABLE-1 (pier/pile levels table) whose header row has two columns with
+    identical text — a drafter copy-pasted a header cell and forgot to update it
+    (e.g. two columns both labelled "TOP OF PIER" when one should read "TOP OF
+    PILECAP"). TABLE-1's numeric cell VALUES are deliberately not data-checked
+    elsewhere (CASAD usually pastes the table as an embedded OLE Excel object that
+    ezdxf can't read), but the header row is frequently real TEXT/MTEXT even on
+    those sheets, and a duplicated header string is unambiguous regardless of
+    whether the values beneath it can be verified — this check needs no design
+    input and produces nothing when the header row isn't real text (the OLE case).
+    Block-derived text is excluded — same reason schedule parsing excludes it.
+    Returns [{description, bbox}] suitable for drawing_data['dimension_issues'].
+    """
+    noblk = [t for t in all_text if not t.get('from_block')]
+    label_cells = [t for t in noblk if _TABLE1_LABEL_RE.search(t['text'])]
+    if not label_cells:
+        return []
+    label_y = max(t['y'] for t in label_cells)  # topmost occurrence (DXF Y is bottom-up)
+
+    rows = _group_rows(noblk, tol_frac=layout.sched_row_tol_frac, extents=extents)
+    header_cells = []
+    for row in rows:
+        row_y = row[0]['y']
+        if row_y >= label_y - 1e-6:
+            continue  # at/above the TABLE-1 label itself
+        row_text = ' '.join(c['text'] for c in row).strip()
+        if _TABLE1_DATA_ROW_RE.match(row_text):
+            break  # reached the first data row (e.g. "LP4 110.151 ...")
+        header_cells.extend(row)
+        if len(header_cells) > 40:  # safety cap
+            break
+
+    seen: dict = {}
+    for c in header_cells:
+        txt = c['text'].strip()
+        if not _TABLE1_HEADER_WORD_RE.search(txt):
+            continue  # only compare cells that look like real column-header phrases
+        key = re.sub(r'\s+', ' ', txt).upper()
+        seen.setdefault(key, []).append(c)
+
+    issues = []
+    for key, cells in seen.items():
+        if len(cells) < 2:
+            continue
+        cx = sum(c['x'] for c in cells) / len(cells)
+        cy = sum(c['y'] for c in cells) / len(cells)
+        x_pct, y_pct = _pos_to_pct(cx, cy, extents)
+        issues.append({
+            'description': (
+                f'TABLE-1 has {len(cells)} columns both labelled "{key}" — a header '
+                f'was likely copy-pasted without updating it. Verify each column '
+                f'heading is correct and distinct.'
+            ),
+            'bbox': {'x': x_pct, 'y': y_pct, 'width': 10.0, 'height': 3.0},
+        })
+    return issues
+
+
+_LINER_THK_RE = re.compile(r'(\d+(?:\.\d+)?)\s*\bM\b\s*THK')
+
+
+def _check_liner_thickness_units(msp, extents: tuple) -> list:
+    """
+    Flag a pile-liner thickness callout written in metres ("6 M THK.") instead of
+    millimetres ("6 MM THK."). A steel casing liner is physically a few millimetres
+    thick — a bare "M" here is a dropped letter, not a genuine multi-metre design.
+    Scoped to MULTILEADER callouts that also mention "LINER", so a legitimate "M"
+    used elsewhere in dimension text is never touched. `\\bM\\b` requires "M" as its
+    own token — "MM THK." (the correct form) has no word boundary between the two
+    M's and is never matched.
+    Returns [{description, bbox}] suitable for drawing_data['dimension_issues'].
+    """
+    issues = []
+    for e in msp.query('MULTILEADER'):
+        try:
+            ctx = e.context
+            if not ctx or not ctx.mtext:
+                continue
+            raw = ctx.mtext.default_content or ''
+        except Exception:
+            continue
+        text = _strip_dim_override(raw)
+        if 'LINER' not in text.upper():
+            continue
+        m = _LINER_THK_RE.search(text.upper())
+        if not m:
+            continue
+        try:
+            pos = ctx.mtext.insert
+            x_pct, y_pct = _pos_to_pct(float(pos[0]), float(pos[1]), extents)
+        except Exception:
+            x_pct, y_pct = 50.0, 50.0
+        issues.append({
+            'description': (
+                f'The liner thickness callout reads "{m.group(1)} M THK." '
+                f'({m.group(1)} metres) — this is almost certainly a missing "M" and '
+                f'should read "{m.group(1)} MM THK." (millimetres). A steel casing '
+                f'liner {m.group(1)} metres thick is not physically plausible.'
+            ),
+            'bbox': {'x': x_pct, 'y': y_pct, 'width': 8.0, 'height': 3.0},
+        })
+    return issues
+
+
 # ── DIMENSION entity extraction ───────────────────────────────────────────────
 
 def _strip_dim_override(text: str) -> str:
@@ -2007,6 +2269,7 @@ def _extract_dimensions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
         'bar_count_annotations': [],
         'confinement_zones':   [],
         'geometric_dims':      [],
+        'text_override_mismatches': [],
     }
 
     for e in msp.query('DIMENSION'):
@@ -2034,6 +2297,34 @@ def _extract_dimensions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
             override_u = override.upper()
 
             if override:
+                # Pattern 0: bare-numeric override that disagrees with the entity's own
+                # computed measurement — the drafter manually typed/edited the displayed
+                # dimension text and it no longer matches the drawn geometry (e.g. a digit
+                # typo, or a stale override left over from copy-pasted geometry). A pure
+                # DXF self-consistency check — needs no design-input comparison, so it
+                # also runs when no design Excel was uploaded. Only bare numbers are
+                # checked (no letters/backslash codes) to avoid false positives on
+                # legitimate overrides that intentionally differ from the raw
+                # defpoint-to-defpoint distance: "LENGTH OF PILE = 18000" (compressed
+                # break-line dimension), "3000\Xy" (DETAIL zone label), "840 DIA"
+                # (diameter callout), "i1+j1+k1\X2400" (bar-mark-sum label).
+                if re.match(r'^-?\d+(\.\d+)?$', override.strip()):
+                    override_val = float(override.strip())
+                    if abs(override_val - val) > max(2.0, val * 0.02):
+                        margin = 400.0 / u2mm
+                        bbox = _to_bbox(tx - margin, ty + margin, tx + margin, ty - margin, extents)
+                        result['text_override_mismatches'].append({
+                            'description': (
+                                f'A dimension is labelled "{override.strip()}" but the actual '
+                                f'distance measured from the drawing geometry is {val:.0f}mm — '
+                                f'the displayed value was manually overridden and no longer '
+                                f'matches the drawn geometry. Verify which is correct and fix '
+                                f'the mismatch.'
+                            ),
+                            'bbox': bbox,
+                        })
+                    continue
+
                 # Pattern 1: cross-section bar count — "NN -NN NOS" (may appear multiple times)
                 matches = re.findall(r'(\d+)\s*[-–]\s*(\d+)\s*NOS', override_u)
                 if matches:
@@ -2109,7 +2400,8 @@ def _extract_dimensions(msp, extents: tuple, u2mm: float = 1.0) -> dict:
 
 # ── View label extraction (for Tier 2 plan/section disambiguation) ────────────
 
-_VIEW_LABEL_RE = re.compile(r'^(SECTION|PLAN OF|REINFORCEMENT PLAN OF|DETAIL)\b', re.IGNORECASE)
+_VIEW_LABEL_RE = re.compile(
+    r'^(CROSS\s+SECTION|SECTION|PLAN OF|REINFORCEMENT PLAN OF|DETAIL)\b', re.IGNORECASE)
 
 
 def _extract_view_labels(all_text: list, profile: DrawingTypeProfile = PPP_PROFILE) -> list:
@@ -2142,7 +2434,7 @@ def _extract_view_labels(all_text: list, profile: DrawingTypeProfile = PPP_PROFI
             view_type = 'detail'
         elif 'PLAN OF' in upper or 'REINFORCEMENT PLAN' in upper:
             view_type = 'plan'
-        elif upper.startswith('SECTION'):
+        elif upper.startswith('SECTION') or upper.startswith('CROSS SECTION'):
             view_type = 'section'
         else:
             continue
@@ -2187,9 +2479,16 @@ def _nearest_label_view_type(cx: float, cy: float, view_labels: list,
 
 def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
     """
-    Return (section_view_positions, cut_letters).
+    Return (section_view_positions, cut_letters, zone_cut_marks).
     section_view_positions: {label_text: {x,y,w,h}} in PDF-style percentages.
     cut_letters: set of single uppercase letters appearing ≥2 times in left portion.
+    zone_cut_marks: set of compound letter+digit cut marks (e.g. "Z1", "Z2")
+        appearing ≥2 times — the same convention as cut_letters, but for a pile/
+        component with more than one confinement/remaining-length zone, where
+        each zone gets its own cut-arrow (e.g. "SECTION Z1-Z1" alongside plain
+        "SECTION Z-Z"). Consumed by _detect_unreferenced_section_views for the
+        reverse direction of the existing cut-letter cross-check: a titled
+        SECTION view whose own cut-arrow doesn't actually appear anywhere.
     """
     layout = layout or PPP_PROFILE.layout
     x_min, y_min, x_max, y_max = extents
@@ -2201,6 +2500,8 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
     section_view_positions = {}
     single_letter_counts = {}
     single_letter_ys     = {}  # letter → list of y-values, for axis-label filter
+    zone_mark_counts = {}
+    zone_mark_ys     = {}      # same idea as single_letter_ys, for compound marks (e.g. "Z1")
 
     # Cut-letter detection is NOT gated by views_x_max_frac (removed 2026-06-24,
     # found on ALL_SECTIONS-02.dxf): that fraction assumes cut marks always sit in
@@ -2237,6 +2538,13 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
             if len(s) == 1 and s.isupper() and s.isalpha():
                 single_letter_counts[s] = single_letter_counts.get(s, 0) + 1
                 single_letter_ys.setdefault(s, []).append(t['y'])
+            elif re.match(r'^[A-Z]\d{1,2}$', s):
+                # Compound zone cut-mark (e.g. "Z1", "Z2") — a pile with more than
+                # one confinement/remaining-length zone gets its own cut-arrow per
+                # zone, distinct from the plain single-letter cut marks above.
+                # Uppercase-only match excludes lowercase bar-mark callouts (e.g. "z1").
+                zone_mark_counts[s] = zone_mark_counts.get(s, 0) + 1
+                zone_mark_ys.setdefault(s, []).append(t['y'])
 
     # No second raw-entity pass: _group_rows() partitions all_text completely (every
     # item lands in exactly one row), so the loop above already visits each text item
@@ -2259,8 +2567,60 @@ def _extract_section_info(all_text: list, extents: tuple, layout=None) -> tuple:
             continue  # axis label, not a cut mark
         cut_letters.add(letter)
 
-    log.info('Section info: %d labels, cut_letters=%s', len(section_view_positions), sorted(cut_letters))
-    return section_view_positions, cut_letters
+    zone_cut_marks = set()
+    for mark, count in zone_mark_counts.items():
+        if count < 2:
+            continue
+        ys = zone_mark_ys.get(mark, [])
+        if count >= 3 and (max(ys) - min(ys)) <= _y_band:
+            continue  # axis label, not a cut mark
+        zone_cut_marks.add(mark)
+
+    log.info('Section info: %d labels, cut_letters=%s, zone_cut_marks=%s',
+             len(section_view_positions), sorted(cut_letters), sorted(zone_cut_marks))
+    return section_view_positions, cut_letters, zone_cut_marks
+
+
+_SECTION_TITLE_MARK_RE = re.compile(r'SECTION\s+([A-Z]\d{1,2})-\1')
+
+
+def _detect_unreferenced_section_views(section_view_positions: dict,
+                                        zone_cut_marks: set) -> list:
+    """
+    Reverse direction of the existing cut-letter cross-check: instead of "a cut
+    mark exists but its section view is missing", catch "a titled section view
+    exists (e.g. 'SECTION Z1-Z1') but its own originating cut-arrow doesn't
+    appear anywhere in the drawing" — the reader has no way to tell where that
+    cut is actually taken from.
+
+    Scoped to compound zone marks only (letter+digit, e.g. "Z1", "Z2") — a pile
+    or component with more than one confinement/remaining-length zone draws a
+    separate cut-arrow per zone in its DETAIL view. Deliberately NOT extended to
+    plain single-letter sections (e.g. "SECTION A-A") yet: those cut marks are
+    sometimes drawn by conventions this scan doesn't recognise, and a false
+    "missing" flag on a routine A-A/B-B section would be a much noisier mistake
+    than under-flagging here — same conservative bias as the existing cut-mark
+    inference code in this module.
+
+    Returns [{missing_mark, view_label, bbox}] suitable for
+    drawing_data['unreferenced_section_views'].
+    """
+    if not section_view_positions:
+        return []
+    missing = []
+    for label, bbox in section_view_positions.items():
+        m = _SECTION_TITLE_MARK_RE.search(label.upper())
+        if not m:
+            continue
+        mark = m.group(1)
+        if mark in zone_cut_marks:
+            continue
+        missing.append({
+            'missing_mark': mark,
+            'view_label':   label,
+            'bbox':         bbox,
+        })
+    return missing
 
 
 # ── Cross-section bar counting ────────────────────────────────────────────────
@@ -2361,7 +2721,7 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
     # "SECTION A-A FOR PILECAP & PIER") name no component of their own — resolve via
     # cut-mark geometry before falling back to skipping the count. See docstring.
     view_labels = _extract_view_labels(all_text, profile)
-    regions = _detect_component_regions(msp, extents, u2mm, view_labels)
+    regions = _detect_component_regions(msp, extents, u2mm, view_labels, profile)
     cutmark_components = _infer_cutmark_components(all_text, view_labels, regions, profile)
 
     for t in all_text:
@@ -2537,11 +2897,12 @@ def _collect_dot_insert_points(msp) -> dict:
     return points
 
 
-def _largest_cluster(circles: list, max_gap: float) -> list:
-    """Return the largest group of circles where each is within max_gap of another."""
+def _all_clusters(circles: list, max_gap: float) -> list:
+    """Group circles into clusters where each member is within max_gap of another
+    member of its own cluster (gap-based flood fill). Returns all clusters found,
+    largest first."""
     if not circles:
         return []
-    # Simple greedy clustering: start from first circle, expand group
     groups = []
     remaining = list(circles)
 
@@ -2561,7 +2922,14 @@ def _largest_cluster(circles: list, max_gap: float) -> list:
             remaining = still_remaining
         groups.append(group)
 
-    return max(groups, key=len)
+    groups.sort(key=len, reverse=True)
+    return groups
+
+
+def _largest_cluster(circles: list, max_gap: float) -> list:
+    """Return the largest group of circles where each is within max_gap of another."""
+    clusters = _all_clusters(circles, max_gap)
+    return clusters[0] if clusters else []
 
 
 def _compute_spacing_issues(cluster: list) -> list:

@@ -4,6 +4,7 @@ Returns a structured dict with geometry + BBS per component.
 """
 import io
 import logging
+import re
 import openpyxl
 
 log = logging.getLogger(__name__)
@@ -21,17 +22,19 @@ TOTAL_LEN_COL  = 11  # L
 UNIT_WT_COL    = 12  # M
 TOTAL_WT_COL   = 13  # N
 
-KNOWN_BAR_MARKS = set(list('abcdefghijklmnopqrstuvwxyz') + [
-    'a1','b1','c1','d1','e1','f1','g1','h1','i1','j1','k1',
-    'x1','x2','y1','y2','z1',
-])
+# Bar mark cell: a single letter + optional 1-2 digit zone suffix (a, y1, i2, z10, ...).
+# Regex-based rather than a hardcoded whitelist — CASAD drawings with 3+ confinement/
+# remaining-length zones use suffixes ('...2', '...3') beyond any fixed list (e.g. a
+# capsule pier's i/i1/i2, j/j1/j2, k/k1/k2). A hardcoded set silently drops rows for
+# any suffix combination not anticipated in advance.
+_BAR_MARK_RE = re.compile(r'^[a-z]\d{0,2}$')
 
 
 def _is_bar_row(row_vals):
     mark = row_vals[BAR_MARK_COL]
     if not isinstance(mark, str):
         return False
-    return mark.strip().lower() in KNOWN_BAR_MARKS
+    return bool(_BAR_MARK_RE.match(mark.strip().lower()))
 
 
 def _safe_float(v):
@@ -259,7 +262,11 @@ def _parse_bbs_sections(rows, formula_rows=None, geometry=None, ws=None):
     for row in rows:
         for ci, cell in enumerate(row):
             if isinstance(cell, str) and 'Pier Shape=' in cell:
-                if 'Rectangle' in cell:
+                # A capsule pier (straight sides + semicircular ends) needs both the
+                # rectangular link schedule (j/k) and a confinement ring (i) — CASAD
+                # models it under the combined 'PIER (Rectangular / Capsule)' section,
+                # so it must resolve to 'Rectangle' here, not fall through to None.
+                if 'Rectangle' in cell or 'Capsule' in cell:
                     pier_shape_from_geo = 'Rectangle'
                 elif 'Circular' in cell:
                     pier_shape_from_geo = 'Circular'

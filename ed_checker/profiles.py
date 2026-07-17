@@ -80,10 +80,15 @@ class DrawingTypeProfile:
         return sorted(self.components, key=len, reverse=True)
 
     def total_row_guard_re(self):
-        """Regex matching total-weight summary rows like 'PILE = 11460 KG' that must
-        not be mistaken for component sub-headers."""
+        """Regex matching total-weight / design-quantity summary rows like
+        'PILE = 11460 KG' or 'PILE DESIGN QTY.=119.8 KG/M^3' that must not be
+        mistaken for component sub-headers. CASAD schedules pair a total-weight
+        line with a "<COMP> DESIGN QTY.=<value>" density line directly above/below
+        it; both must be excluded or the DESIGN QTY line gets misread as a header,
+        silently dropping every bar mark above it (or worse, misassigning bar marks
+        between two such lines to the wrong component)."""
         comps = '|'.join(sorted((c.upper() for c in self.components), key=len, reverse=True))
-        return re.compile(r'\b(' + comps + r')\s*=\s*\d', re.IGNORECASE)
+        return re.compile(r'\b(' + comps + r')\b(?:\s+DESIGN\s*QTY\.?)?\s*=\s*[\d.]', re.IGNORECASE)
 
 
 PPP_PROFILE = DrawingTypeProfile(
@@ -130,13 +135,16 @@ PPP_PROFILE = DrawingTypeProfile(
     },
     concrete_grade_keywords=('M30', 'M35', 'M40', 'M45', 'M50'),
     bar_mark_comp_fallback={
-        'x': 'pile', 'y': 'pile', 'y1': 'pile', 'z': 'pile',
+        # x1/y2 cover piles with a bundled longitudinal bar (x/x1 pair) and a
+        # third confinement zone (y/y1/y2) — seen on long piles needing more than
+        # two "remaining length" zones (e.g. capsule-pier / 4-pile groups).
+        'x': 'pile', 'x1': 'pile', 'y': 'pile', 'y1': 'pile', 'y2': 'pile', 'z': 'pile',
         'a': 'pilecap', 'b': 'pilecap', 'c': 'pilecap', 'd': 'pilecap',
         'e': 'pilecap', 'f': 'pilecap', 'f1': 'pilecap',
         'g': 'pier', 'h': 'pier', 'h1': 'pier', 'h2': 'pier',
-        'i': 'pier', 'i1': 'pier',
-        'j': 'pier', 'j1': 'pier',
-        'k': 'pier', 'k1': 'pier',
+        'i': 'pier', 'i1': 'pier', 'i2': 'pier',
+        'j': 'pier', 'j1': 'pier', 'j2': 'pier',
+        'k': 'pier', 'k1': 'pier', 'k2': 'pier',
     },
     title_patterns=('DETAILS OF PILE',),
     dot_layer_patterns=(r'REBAR', r'REINF', r'\bBAR\b'),

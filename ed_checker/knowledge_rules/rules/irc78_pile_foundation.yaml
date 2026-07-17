@@ -1,0 +1,38 @@
+# IRC:78 (Part-1)-2024 — "Foundations and Substructure, Part-1: General
+# Features and Working Stress Design". Source notes:
+# ED checker/dwg_checker_contents/03_Data for Claude Model/Knowledge
+# documents/extracted_notes/irc_78_foundation_notes.md
+#
+# Most reinforcement/structural-design clauses in this document have been
+# explicitly deleted in the 2024 revision and redirected to IRC:112 (see
+# irc112_detailing.yaml) — this file only carries the handful of geometry/
+# material/tolerance rules that remain IRC:78's own.
+
+- rule_id: IRC78-709.1.4-LINER-MIN-THICKNESS
+  title: Pile liner minimum thickness
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile]
+  required_entities: [notes.liner_thickness_mm]
+  rule_type: deterministic
+  formula: {type: min_threshold, field: notes.liner_thickness_mm, min_value: 6}
+  unit: mm
+  severity: error
+  category: "Dimension Errors"
+  message_template: >
+    Liner thickness callout reads "{value} MM THK." — below the minimum
+    permissible per IRC:78 (Part-1)-2024 Cl. 709.1.4, which requires steel
+    pile liners to be at least {min_value} mm thick.
+  engineering_rationale: >
+    A steel casing liner protects the pile shaft in aggressive/soft soil or
+    scour-prone strata; IRC:78 mandates a 6mm floor regardless of site
+    condition, since a liner is only specified when the strata already
+    demands one — a thinner liner would defeat its own purpose.
+  source_reference: "IRC:78 (Part-1)-2024, Cl. 709.1.4, book p.24"
+  validation_status: implemented
+  # Migrated from a hand-written check in dxf_extractor.py's
+  # _check_liner_thickness_units — that function now only detects the units
+  # typo ("6 M THK." vs "6 MM THK.") and exposes the parsed correctly-
+  # formatted value as notes['liner_thickness_mm'] for this rule to check.
+  # Verified this session against a rendered page image of the source PDF
+  # (IRC:78 (Part-1)-2024.pdf has no text layer) and against the seeded-error
+  # training pair + a ~22-fixture sweep of real production DXFs.

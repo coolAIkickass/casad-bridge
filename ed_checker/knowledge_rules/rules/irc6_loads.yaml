@@ -1,0 +1,22 @@
+# IRC:6-2017 — "Standard Specifications and Code of Practice for Road
+# Bridges, Section II: Loads and Load Combinations". Source notes:
+# ED checker/dwg_checker_contents/03_Data for Claude Model/Knowledge
+# documents/extracted_notes/irc_6_loads_notes.md
+#
+# No Phase-1 rule extracted from this document. Confirmed this session (see
+# the notes file's own "Summary Assessment"): this code is overwhelmingly
+# load-calculation content (magnitudes, distributions, combination factors)
+# that feeds a structural analysis step upstream of anything a CASAD pile/
+# pilecap/pier drawing actually shows. The few detailing-adjacent items
+# found (crash barrier reinforcement %, approach slab minimum reinforcement)
+# apply to abutment/deck-edge elements outside the current Pile-Pilecap-Pier
+# profile's scope (profiles.py has no 'abutment' DrawingTypeProfile yet) —
+# worth revisiting once that profile exists (see the runtime rule engine's
+# scaling design in this session's plan: a new profile + new
+# applicable_drawing_types: [abutment] rules here is all that would be
+# needed, no engine changes).
+#
+# Left as an empty rule file (not omitted) so a future session can see this
+# document was processed and deliberately yielded no standalone rule, rather
+# than looking unprocessed.
+[]

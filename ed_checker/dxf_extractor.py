@@ -240,7 +240,7 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     # Programmatic unlabeled-view and missing-detail detection (runs before del msp).
     unlabeled_circles   = _detect_unlabeled_section_circles(msp, all_text, extents, sv_pos, profile, u2mm)
     missing_detail_refs = _detect_missing_detail_refs(all_text, sv_pos)
-    liner_thk_issues    = _check_liner_thickness_units(msp, extents)
+    liner_thk_issues, liner_thickness_mm = _check_liner_thickness_units(msp, extents)
     table1_hdr_issues   = _check_table1_duplicate_headers(all_text, extents, profile.layout)
     unreferenced_views  = _detect_unreferenced_section_views(sv_pos, zone_cut_marks)
 
@@ -257,6 +257,8 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     if dim_data.get('pile_dia_mm') and notes.get('pile_dia_m') is None:
         notes['pile_dia_m'] = round(dim_data['pile_dia_mm'] / 1000.0, 3)
         log.info('Notes: pile_dia_m set from DIMENSION entity: %.3fm', notes['pile_dia_m'])
+    if liner_thickness_mm is not None:
+        notes['liner_thickness_mm'] = liner_thickness_mm
 
     dimension_issues = (
         (dim_data.get('text_override_mismatches') or [])
@@ -2228,34 +2230,32 @@ def _check_table1_duplicate_headers(all_text: list, extents: tuple,
 _LINER_THK_RE = re.compile(r'(\d+(?:\.\d+)?)\s*\bM\b\s*THK')
 _LINER_THK_MM_RE = re.compile(r'(\d+(?:\.\d+)?)\s*MM\s*THK', re.IGNORECASE)
 
-# IRC:78 (Part-1)-2024 Cl. 709.1.4: "The minimum thickness of liner should be 6 mm"
-# — applies to both marine/aggressive-soil piles (full strata depth) and land-bridge
-# piles in soft clay/loose sand/bouldery/artesian/aggressive-soil conditions. Verified
-# against a rendered page image of the source PDF (this document has no text layer).
-_LINER_MIN_THK_MM = 6.0
 
-
-def _check_liner_thickness_units(msp, extents: tuple) -> list:
+def _check_liner_thickness_units(msp, extents: tuple) -> tuple:
     """
-    Two checks on a pile-liner thickness callout, both scoped to MULTILEADER
-    callouts that mention "LINER" so a legitimate "M"/"MM" used elsewhere in
-    dimension text is never touched:
+    Scoped to MULTILEADER callouts that mention "LINER" so a legitimate "M"/
+    "MM" used elsewhere in dimension text is never touched. Does exactly one
+    thing: detect a units typo — thickness written in metres ("6 M THK.")
+    instead of millimetres ("6 MM THK."). A steel casing liner is physically
+    a few millimetres thick — a bare "M" here is a dropped letter, not a
+    genuine multi-metre design. `\\bM\\b` requires "M" as its own token —
+    "MM THK." (the correct form) has no word boundary between the two M's
+    and is never matched by this pattern.
 
-    1. Units typo — thickness written in metres ("6 M THK.") instead of
-       millimetres ("6 MM THK."). A steel casing liner is physically a few
-       millimetres thick — a bare "M" here is a dropped letter, not a genuine
-       multi-metre design. `\\bM\\b` requires "M" as its own token — "MM THK."
-       (the correct form) has no word boundary between the two M's and is
-       never matched by this pattern.
-    2. Below-code-minimum thickness — a correctly-formatted "N MM THK." value
-       below IRC:78 Cl. 709.1.4's 6mm floor. Only runs when pattern 1 did NOT
-       match (i.e. the callout is already in the correct MM form), so the two
-       checks are mutually exclusive per callout — a units typo isn't also
-       reported as a below-minimum thickness.
+    The below-code-minimum-thickness check (IRC:78 Cl. 709.1.4, 6mm floor)
+    used to live here too but has moved to the knowledge_rules rule engine
+    (rules/irc78_pile_foundation.yaml, rule IRC78-709.1.4-LINER-MIN-THICKNESS)
+    — this function's second return value exposes the parsed correctly-
+    formatted MM value so the caller can populate notes['liner_thickness_mm']
+    for that rule to evaluate generically, instead of this function deciding
+    pass/fail itself.
 
-    Returns [{description, bbox}] suitable for drawing_data['dimension_issues'].
+    Returns ([{description, bbox}] suitable for drawing_data['dimension_issues'],
+    liner_thickness_mm: float | None — the last correctly-formatted "N MM THK."
+    value found, or None if no LINER callout used correct MM units).
     """
     issues = []
+    liner_thickness_mm = None
     for e in msp.query('MULTILEADER'):
         try:
             ctx = e.context
@@ -2289,17 +2289,9 @@ def _check_liner_thickness_units(msp, extents: tuple) -> list:
             continue
 
         m_mm = _LINER_THK_MM_RE.search(text)
-        if m_mm and float(m_mm.group(1)) < _LINER_MIN_THK_MM:
-            issues.append({
-                'description': (
-                    f'The liner thickness callout reads "{m_mm.group(1)} MM THK." — '
-                    f'below the minimum permissible per IRC:78 (Part-1)-2024 Cl. 709.1.4, '
-                    f'which requires steel pile liners to be at least {_LINER_MIN_THK_MM:g} mm '
-                    f'thick.'
-                ),
-                'bbox': bbox,
-            })
-    return issues
+        if m_mm:
+            liner_thickness_mm = float(m_mm.group(1))
+    return issues, liner_thickness_mm
 
 
 # ── DIMENSION entity extraction ───────────────────────────────────────────────

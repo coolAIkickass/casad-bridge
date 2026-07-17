@@ -259,6 +259,15 @@ Step C — Check ALL confirmed labels above for consistency:
   • A view labeled "SECTION C-C FOR PILE" must show a pile cross-section, not a pilecap or pier.
   • If the label clearly describes the WRONG component for what is drawn, flag it in label_issues.
 
+CHECK 7 — Engineering knowledge-base rules
+The following rules come from CASAD's own design methodology and the IRC/IS codes it's built
+on. Each one requires visual judgment to evaluate (unlike the deterministic checks already run
+separately from the DXF/schedule data) — a rule listed here could not be reduced to a simple
+formula/threshold, or has not yet been validated against enough real drawings to be enforced as
+a hard check. Only flag a finding if you are CONFIDENT the drawing shows the described issue —
+these are exploratory/lower-confidence checks by design; omit rather than guess.
+{KNOWLEDGE_RULES}
+
 Return ONLY valid JSON (no markdown):
 {{
   "label_issues": [
@@ -275,6 +284,9 @@ Return ONLY valid JSON (no markdown):
   ],
   "unlabeled_views": [
     {{"description": "Cross-section view for cut letter D is drawn but has no SECTION D-D title label", "bbox": {{"x":30,"y":10,"w":12,"h":15}}}}
+  ],
+  "knowledge_rule_findings": [
+    {{"rule_id": "IRC112-17.3.1-PILECAP-DUCTILE-EXEMPTION", "description": "Pilecap stirrup spacing tightens near the north pile cluster with no punching-shear justification visible", "bbox": {{"x":15,"y":30,"w":20,"h":15}}}}
   ]
 }}
 """
@@ -448,14 +460,23 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
 def run_review_vision(pdf_bytes: bytes, section_labels: list,
                       missing_referenced_sections: list,
                       images_b64: list = None,
-                      scale: float = 2.0) -> dict | None:
+                      scale: float = 2.0,
+                      judgment_rules: list = None) -> dict | None:
     """
-    Run the visual review pass (CHECK 3–6) against the PDF image.
+    Run the visual review pass (CHECK 3–7) against the PDF image.
     Returns raw review_data dict from Claude, or None if API key absent / call fails.
     section_labels: list of label strings (e.g. keys of section_view_positions).
     missing_referenced_sections: list of dicts from _text_missing_sections().
     images_b64: pre-rendered images to avoid double-rendering (PDF path passes these).
     scale: render scale when images_b64 is not provided (DXF path uses 1.5× to save memory).
+    judgment_rules: pre-filtered list of knowledge_rules.Rule (rule_type='judgment') for
+        CHECK 7 — already narrowed by knowledge_rules.get_judgment_rules() to what's
+        applicable to this specific drawing (type + entities present). None/empty means
+        CHECK 7 renders as "no additional rules to check" rather than an error — the
+        pure-PDF-vision path (extract_from_drawing) doesn't have structured drawing_data
+        available yet at the point it calls this function, so it doesn't pass any; only
+        the DXF path (ed_checker/__init__.py's _run_dxf_extraction, where drawing_data is
+        already assembled) currently supplies them.
     """
     label_block = '\n'.join(f'  • {l}' for l in section_labels) or '  (none extracted)'
     unresolved_block = (
@@ -464,9 +485,18 @@ def run_review_vision(pdf_bytes: bytes, section_labels: list,
             for m in (missing_referenced_sections or [])
         ) or '  (none — all cut letters resolved)'
     )
+    if judgment_rules:
+        knowledge_block = '\n'.join(
+            f'  • [{r.rule_id}] {r.reasoning_prompt.strip()} '
+            f'(Source: {r.source_reference})'
+            for r in judgment_rules
+        )
+    else:
+        knowledge_block = '  (no additional knowledge-base rules apply to this drawing)'
     review_prompt = REVIEW_PROMPT_TEMPLATE.format(
         SECTION_LABELS=label_block,
         UNRESOLVED_CUTS=unresolved_block,
+        KNOWLEDGE_RULES=knowledge_block,
     )
     imgs = images_b64 if images_b64 is not None else _pdf_to_image_b64(pdf_bytes, scale=scale)
     return _call_vision(imgs, review_prompt, REVIEW_MODEL, 8192)

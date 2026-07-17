@@ -1,0 +1,141 @@
+# IS 2911 (Part 1, Sections 1-4) : 2010 — "Design and Construction of Pile
+# Foundations". Source notes: ED checker/dwg_checker_contents/03_Data for
+# Claude Model/Knowledge documents/extracted_notes/is_2911_pile_notes.md
+#
+# Section 2 (Bored Cast In-situ Concrete Piles) is the section directly
+# applicable to CASAD's own pile drawings (bored cast-in-situ). Confirmed
+# this session: IS 2911 has NO seismic/multi-zone confinement provision of
+# its own (that's IRC:112/IRC:SP:114 territory) and NO liner thickness/
+# length spec (that's IRC:78) — this file only carries what IS 2911 itself
+# actually mandates: a flat, universal lateral-tie floor and pile-cap
+# geometry minimums.
+
+- rule_id: IS2911-6.11.4-PILE-INNER-TIE-MIN-DIAMETER
+  title: Pile lateral tie/spiral minimum diameter
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile]
+  required_entities: [schedule.pile.z.bar_dia_mm]
+  rule_type: deterministic
+  formula: {type: min_threshold, field: schedule.pile.z.bar_dia_mm, min_value: 8}
+  unit: mm
+  severity: error
+  category: "Reinforcement"
+  message_template: >
+    Pile lateral tie diameter {value}mm is below the minimum permissible per
+    IS 2911 (Part 1/Sec 2):2010 Cl. 6.11.4, which requires links or spirals
+    in a pile reinforcement cage to be at least {min_value}mm diameter.
+  engineering_rationale: >
+    IS 2911's lateral-tie floor exists for cage handling/installation
+    rigidity (not seismic confinement — that's a separate, additional
+    requirement from IRC:112/IRC:SP:114) — a tie thinner than this risks the
+    cage deforming during lowering/concreting, before the pile has any
+    load-bearing role at all.
+  source_reference: "IS 2911 (Part 1/Sec 2):2010, Cl. 6.11.4"
+  validation_status: implemented
+  # Scoped to bar mark 'z' (CASAD's "inner ring" confinement tie — see
+  # casad_design_philosophy.yaml/casad_design_philosophy_notes.md) rather
+  # than 'y' (the outer/primary tie): surveyed across every real production
+  # fixture this session, schedule.pile.z is reliably a flat dict
+  # (bar_dia_mm always populated), whereas schedule.pile.y is frequently a
+  # list (CASAD's multi-zone-row convention splits one bar mark's schedule
+  # data across physical rows) that this rule's single dotted-path field
+  # can't resolve — a real, if narrower, coverage rather than a rule that
+  # silently never fires. Verified: 8mm-diameter floor never violated on
+  # any of ~9 real production pile schedules surveyed (all use 16mm).
+
+- rule_id: IS2911-6.11.4-PILE-TIE-MIN-SPACING
+  title: Pile lateral tie/spiral minimum spacing
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile]
+  required_entities: [schedule.pile.z.spacing_mm]
+  rule_type: deterministic
+  formula: {type: min_threshold, field: schedule.pile.z.spacing_mm, min_value: 150}
+  unit: mm
+  severity: error
+  category: "Reinforcement"
+  message_template: >
+    Pile lateral tie spacing {value}mm is below the minimum permissible per
+    IS 2911 (Part 1/Sec 2):2010 Cl. 6.11.4, which requires links or spirals
+    to be spaced not less than {min_value}mm c/c.
+  engineering_rationale: >
+    This is a MINIMUM spacing floor (ties must not be packed closer than
+    150mm), not a maximum — unlike a seismic confinement rule (which caps
+    spacing to force ties closer together), this one exists purely for cage
+    handling/installation rigidity, per the same clause as the diameter
+    rule above.
+  source_reference: "IS 2911 (Part 1/Sec 2):2010, Cl. 6.11.4"
+  validation_status: pending_pilot_validation
+  # NOT currently evaluable on any real drawing: surveyed every fixture this
+  # session and dxf_extractor.py's schedule extraction never populates
+  # spacing_mm for pile bar marks (always None) — the raw c/c spacing text
+  # is captured elsewhere (reinforcement_text/raw_spacing-style fields) but
+  # not normalised into this field for pile marks specifically. Registered
+  # so the gap is tracked and the rule activates automatically once that
+  # parser gap is closed — no rule-content change needed then, only the
+  # extractor fix.
+
+- rule_id: IS2911-6.11.1-PILE-MIN-LONGITUDINAL-STEEL-PCT
+  title: Pile minimum longitudinal reinforcement percentage
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile]
+  required_entities: [geometry_from_drawing.pile_longitudinal_steel_pct]
+  rule_type: deterministic
+  formula: {type: min_threshold, field: geometry_from_drawing.pile_longitudinal_steel_pct, min_value: 0.4}
+  unit: "%"
+  severity: error
+  category: "Reinforcement"
+  message_template: >
+    Pile longitudinal reinforcement is {value}% of shaft cross-sectional
+    area — below the minimum permissible per IS 2911 (Part 1/Sec 1 & Sec
+    2):2010 Cl. 6.11.1, which requires at least {min_value}% throughout the
+    full length of a cast-in-situ pile shaft.
+  engineering_rationale: >
+    A floor on longitudinal steel independent of the pile's actual computed
+    design demand — cast-in-situ concrete piling has inherent construction-
+    quality uncertainty (concrete placement below ground, no visual
+    verification of the finished shaft) that a pure elastic-design steel
+    quantity doesn't account for; the 0.4% floor is a robustness margin
+    against that uncertainty, applicable "for any type/grade of bar" per the
+    clause, "throughout the entire length of the shaft."
+  source_reference: "IS 2911 (Part 1/Sec 1):2010 Cl. 6.11.1; (Part 1/Sec 2):2010 Cl. 6.11.1"
+  validation_status: pending_pilot_validation
+  # NOT currently evaluable: this is a computed ratio (total longitudinal
+  # bar area / gross pile shaft area), not a single field the parser
+  # produces directly — no formula type in the Phase 1 evaluator computes a
+  # ratio from two schedule/geometry fields (only formula_ratio exists as a
+  # reserved, unimplemented type, and even that assumes a single named
+  # expression against one entity, not a cross-schedule computation like
+  # this). Needs either a new evaluator formula type or dxf_extractor.py
+  # pre-computing and exposing this percentage directly — flagged, not
+  # silently dropped.
+
+- rule_id: IS2911-6.12.5-PILECAP-MIN-OVERHANG
+  title: Pile cap minimum overhang beyond outermost pile
+  applicable_drawing_types: [ppp]
+  applicable_components: [pilecap]
+  required_entities: [geometry_from_drawing.pilecap_overhang_mm]
+  rule_type: deterministic
+  formula: {type: min_threshold, field: geometry_from_drawing.pilecap_overhang_mm, min_value: 150}
+  unit: mm
+  severity: error
+  category: "Geometric Dimensions"
+  message_template: >
+    Pile cap overhang beyond the outermost pile is {value}mm — below the
+    minimum permissible per IS 2911 (Part 1):2010 Cl. 6.12.5, which requires
+    at least {min_value}mm clear overhang.
+  engineering_rationale: >
+    The overhang provides edge cover and anchorage length for the pile
+    cap's own reinforcement beyond the outermost pile's punching-shear
+    perimeter — too little overhang risks a shear/anchorage failure plane
+    passing through inadequately confined concrete at the cap's edge.
+  source_reference: "IS 2911 (Part 1):2010, Cl. 6.12.5"
+  validation_status: pending_pilot_validation
+  # NOT currently evaluable: no "pilecap overhang" entity exists in
+  # geometry_from_drawing today (Tier-2 spatial dimension routing in
+  # dxf_extractor.py classifies pilecap_depth/pilecap_length_overall/
+  # pile_spacing/pile_overhang but not a pile-to-edge overhang distance
+  # specifically — note pile_overhang IS a param name that exists per
+  # profiles.py's geometry_checks, but it was found unreliable this session
+  # (excluded from the "missing dimension" check for that reason) and isn't
+  # the same measurement as this clause's pile-cap-edge overhang anyway).
+  # Registered so this stays visible as a known gap rather than forgotten.

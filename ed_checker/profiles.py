@@ -172,3 +172,14 @@ PPP_PROFILE = DrawingTypeProfile(
         ('pile_dia',               'pile_dia',               2.0, 'Pile diameter',              'm'),
     ),
 )
+
+# detect_drawing_type() (ed_checker/__init__.py) returns a human-readable display
+# name (e.g. "Pile Pilecap Pier"), but knowledge_rules' applicable_drawing_types
+# tags use the short profile.name ("ppp") — the same identifier DrawingTypeProfile
+# already carries. This map bridges the two so the rule engine needs no display-name
+# parsing of its own. Adding a new DrawingTypeProfile (Abutment, Superstructure,
+# Bearing) means adding one entry here alongside it — no other rule-engine code
+# changes needed.
+DISPLAY_NAME_TO_PROFILE_NAME = {
+    PPP_PROFILE.display_name: PPP_PROFILE.name,
+}

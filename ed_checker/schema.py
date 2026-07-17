@@ -47,6 +47,13 @@ def new_drawing_data(**overrides) -> dict:
         'erroneous_boxes':              [],
         'missing_referenced_sections':  [],
         'unreferenced_section_views':   [],
+        # Already _issue()-shaped (category/title/description/suggestion/severity/
+        # x/y/width/height) — unlike every other key above, which holds raw
+        # extraction data a comparator check still has to interpret. Populated by
+        # ed_checker/__init__.py from knowledge_rules.build_judgment_issues() after
+        # the vision review pass returns CHECK 7 findings; run_check() appends this
+        # list directly onto the final issues list, no further translation needed.
+        'knowledge_rule_issues':        [],
         'sections_from_text':           [],
         'notes_completeness_from_text': [],
         # Position data (PDF coordinates, for review-UI marker placement)

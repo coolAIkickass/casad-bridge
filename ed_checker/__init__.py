@@ -13,6 +13,8 @@ from .excel_parser import parse_e2e_excel
 from .pdf_extractor import extract_from_drawing, _extract_text as _pdf_extract_text
 from .pdf_extractor import _text_missing_sections, run_review_vision
 from .comparator import compare
+from .profiles import DISPLAY_NAME_TO_PROFILE_NAME
+from . import knowledge_rules
 
 log = logging.getLogger(__name__)
 
@@ -154,6 +156,25 @@ def run_check(drawing_pdf_bytes: bytes, design_data: dict,
         issues = compare(design_data or None, drawing_data)
 
     detected_type = detect_drawing_type(drawing_data)
+
+    # Knowledge-rule engine (IRC/IS code-compliance checks) — a sibling checker
+    # to comparator.compare() above, not a replacement. Needs only drawing_data,
+    # never design_data, so it runs in every branch above including when no
+    # design Excel was uploaded at all. profile_name maps the human-readable
+    # detected_type ("Pile Pilecap Pier") to the short profile identifier
+    # ("ppp") that knowledge_rules' applicable_drawing_types tags use.
+    profile_name = DISPLAY_NAME_TO_PROFILE_NAME.get(detected_type)
+    if profile_name:
+        try:
+            issues += knowledge_rules.evaluate_all_deterministic(drawing_data, profile_name)
+        except Exception:
+            log.exception('Knowledge-rule engine failed — continuing without its issues')
+
+    # CHECK 7 judgment-rule findings (DXF path only — see _run_dxf_extraction) were
+    # already translated to _issue()-shape by build_judgment_issues() and stashed
+    # here; nothing further to interpret, just append.
+    issues += drawing_data.get('knowledge_rule_issues') or []
+
     return issues, detected_type
 
 
@@ -320,15 +341,30 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
     try:
         _section_labels = sorted(drawing_data.get('section_view_positions', {}).keys())
         _missing_secs   = drawing_data.get('missing_referenced_sections', [])
-        review_data = run_review_vision(pdf_bytes, _section_labels, _missing_secs, scale=2.0)
+        # CHECK 7 judgment-rule retrieval — drawing_data is fully assembled by this
+        # point, so detect_drawing_type() + the rule engine's applicable_drawing_types/
+        # required_entities filtering can run here. (The pure-PDF-vision path in
+        # pdf_extractor.py's extract_from_drawing() can't do this — drawing_data isn't
+        # built yet at its equivalent call site — so it passes no judgment_rules.)
+        _profile_name = DISPLAY_NAME_TO_PROFILE_NAME.get(detect_drawing_type(drawing_data))
+        _judgment_rules = (
+            knowledge_rules.get_judgment_rules(_profile_name, drawing_data)
+            if _profile_name else []
+        )
+        review_data = run_review_vision(pdf_bytes, _section_labels, _missing_secs, scale=2.0,
+                                        judgment_rules=_judgment_rules)
         if review_data:
             log.info('DXF review vision OK — label_issues=%d unlabeled_views=%d '
-                     'erroneous_boxes=%d cross_section_checks=%d',
+                     'erroneous_boxes=%d cross_section_checks=%d knowledge_rule_findings=%d',
                      len(review_data.get('label_issues') or []),
                      len(review_data.get('unlabeled_views') or []),
                      len(review_data.get('erroneous_boxes') or []),
-                     len(review_data.get('cross_section_checks') or []))
+                     len(review_data.get('cross_section_checks') or []),
+                     len(review_data.get('knowledge_rule_findings') or []))
             drawing_data['label_issues']         = review_data.get('label_issues')         or []
+            drawing_data['knowledge_rule_issues'] = knowledge_rules.build_judgment_issues(
+                review_data.get('knowledge_rule_findings'), _judgment_rules
+            )
             # Merge DXF-detected dimension issues (text-override mismatches, liner
             # thickness units, TABLE-1 duplicate headers — all exact, no vision needed)
             # with vision-detected ones (CHECK 4's absent-only rule) — do not overwrite.

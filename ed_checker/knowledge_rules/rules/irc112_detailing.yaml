@@ -1,0 +1,121 @@
+# IRC:112-2020 — "Code of Practice for Concrete Road Bridges". Source notes:
+# ED checker/dwg_checker_contents/03_Data for Claude Model/Knowledge
+# documents/extracted_notes/irc_112_detailing_notes.md
+
+- rule_id: IRC112-T14.2-N7-FOUNDATION-COVER-MIN
+  title: Minimum clear cover for foundation elements
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile, pilecap, pier]
+  required_entities: [notes.clear_cover_mm]
+  rule_type: deterministic
+  formula: {type: min_threshold, field: notes.clear_cover_mm, min_value: 75}
+  unit: mm
+  severity: error
+  category: "Notes"
+  message_template: >
+    Clear cover {value}mm is below the code minimum. IRC:112-2020 Table
+    14.2, Note (7) requires a minimum of {min_value}mm cover for all
+    foundations and elements below ground level (pile, pilecap).
+  engineering_rationale: >
+    Table 14.2's exposure-based cover table (40-75mm depending on exposure
+    class) is overridden for below-ground elements specifically — Note (7)
+    sets a flat 75mm floor regardless of exposure class, since foundation
+    elements are always in contact with soil/groundwater.
+  source_reference: "IRC:112-2020, Table 14.2, Note (7), p.120"
+  validation_status: implemented
+  # Migrated from a hand-written check in comparator.py's _check_notes.
+  # notes.clear_cover_mm already existed as a parsed field (added the same
+  # session this rule engine was built, via profiles.py's
+  # note_float_patterns) — this is a pure migration, no parser change needed.
+  # Verified against the seeded-error training pair + a ~22-fixture sweep.
+
+- rule_id: IRC112-17.3.2-PILE-HEAD-CONFINEMENT-ZONE
+  title: Pile-head confinement zone length
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile]
+  required_entities: [geometry_from_drawing.pile_diameter_mm]
+  rule_type: deterministic
+  formula:
+    type: formula_ratio
+    field: geometry_from_drawing.pile_diameter_mm
+    expression: "3 * pile_diameter_mm"
+    tolerance_pct: 15
+  unit: mm
+  severity: error
+  category: "Dimension Errors"
+  message_template: >
+    Pile-head confinement zone length does not match 3x pile diameter
+    ({expected_value}mm) per IRC:112-2020 Cl. 17.3.2(3).
+  engineering_rationale: >
+    A pile may be permitted a plastic hinge only at its head, just below the
+    pile cap (IRC:SP:114-2018 Cl. 8.4.6.2(vii)) — Cl. 17.3.2(3) sets the
+    confinement zone protecting that hinge at exactly 3x the pile diameter.
+    NOT YET EVALUATED (formula_ratio is unimplemented in the Phase 1
+    evaluator — see evaluator.py). Also: neither `geometry_from_drawing.
+    pile_diameter_mm` nor a clean "confinement zone length" entity exists in
+    dxf_extractor.py yet, and this session's own investigation of a real
+    training pile found its actual zone breakdown (4 zones: 3000/3000/4000/
+    REMAINING mm) doesn't cleanly match this clause's literal 2-zone model
+    (head zone + moment-peak zone) — that reconciliation gap needs a
+    follow-up session before this rule can be safely evaluated, even once
+    formula_ratio support and the entity extraction exist. Registered now so
+    the schema/registry mechanism is exercised end-to-end and the gap is
+    tracked, not silently forgotten.
+  source_reference: "IRC:112-2020, Cl. 17.3.2(3), p.167"
+  validation_status: pending_pilot_validation
+
+- rule_id: IRC112-17.2.3-NO-LAP-IN-PLASTIC-HINGE
+  title: No lap/weld splices within a plastic hinge region
+  applicable_drawing_types: [ppp]
+  applicable_components: [pier, pile]
+  required_entities: [schedule.pier]
+  rule_type: judgment
+  category: "Dimension Errors"
+  reasoning_prompt: >
+    Look at the pier base (or pile head) region where confinement/ductile
+    detailing is shown (tighter tie spacing, a labelled hinge/confinement
+    zone). Does any longitudinal bar's lap splice or weld splice symbol fall
+    within that zone? If so, flag it — lap/weld splices are not permitted
+    inside a plastic hinge region.
+  engineering_rationale: >
+    A splice is a weaker point than continuous bar; if it falls where the
+    section is expected to yield cyclically during an earthquake, splice
+    failure could occur before the intended ductile flexural failure mode
+    — defeating the entire capacity-design premise. Stated identically in
+    two companion codes: IRC:112 Cl. 17.2.3 ("Lap or weld splicing of
+    longitudinal reinforcement is NOT allowed within the plastic hinge
+    region") and IRC:SP:114-2018 Cl. 9.1.4.1.
+  source_reference: "IRC:112-2020, Cl. 17.2.3, p.166; IRC:SP:114-2018, Cl. 9.1.4.1, p.76"
+  validation_status: needs_real_example
+
+- rule_id: IRC112-17.3.1-PILECAP-DUCTILE-EXEMPTION
+  title: Pilecap should not show unwarranted seismic ductile detailing
+  applicable_drawing_types: [ppp]
+  applicable_components: [pilecap]
+  required_entities: [schedule.pilecap]
+  rule_type: judgment
+  category: "Dimension Errors"
+  reasoning_prompt: >
+    Does this pilecap's stirrup/tie reinforcement show varying spacing
+    zones similar to a pier or pile confinement pattern? If so, and there's
+    no punching-shear justification (piles not concentrated near the zoned
+    region), flag as possibly-unwarranted ductile detailing — pilecaps are
+    exempt from seismic ductile detailing per IRC:112.
+  engineering_rationale: >
+    IRC:112 Cl. 17.3.1 exempts pilecaps/spread foundations from ductile
+    detailing entirely — they're designed to remain elastic under capacity
+    design (piers are the intended energy-dissipating element). A pilecap
+    showing multi-zone confinement-style tie spacing suggests either
+    drafting error (pier/pile convention applied by mistake) or a genuine
+    punching-shear zoning pattern being misread as seismic detailing — the
+    two are visually similar but serve unrelated purposes.
+  source_reference: "IRC:112-2020, Cl. 17.3.1, p.166"
+  validation_status: needs_real_example
+  # This is check #3 from earlier this session, declined as a hard
+  # deterministic check for lack of any real fixture showing the pattern
+  # (every real pilecap schedule surveyed uses a flat, unzoned mark set —
+  # a, b, c, d, e, f, f1 — never e1/e2). Reopened here as a judgment rule:
+  # the vision review pass already operates in "flag only if certain, omit
+  # otherwise" mode, which is the right confidence regime for an inexact,
+  # unvalidated rule like this one — it doesn't need the same "proven
+  # against a real case or don't ship" bar a hard deterministic check does.

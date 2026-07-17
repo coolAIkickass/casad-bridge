@@ -1,0 +1,20 @@
+# IRC:SP:114-2018 — "Guidelines for Seismic Design of Road Bridges". Source
+# notes: ED checker/dwg_checker_contents/03_Data for Claude Model/Knowledge
+# documents/extracted_notes/irc_sp114_seismic_detailing_notes.md
+#
+# No Phase-1 rule extracted from this document specifically. Confirmed this
+# session (see the notes file's own "HEADLINE FINDING"): SP:114 establishes
+# *why* ductile detailing is mandated and *when* (capacity design, hinge
+# locations, seismic-zone triggers) but defers every actual numeric
+# confinement-zone-length/spacing formula to IRC:112 Section 17 — see
+# irc112_detailing.yaml for the rules built from those numbers. The one
+# clause SP:114 states directly and IRC:112 doesn't restate as precisely —
+# "no lap splices within the plastic hinge region" (Cl. 9.1.4.1) — is
+# already captured as a dual citation on
+# IRC112-17.2.3-NO-LAP-IN-PLASTIC-HINGE in irc112_detailing.yaml rather than
+# duplicated here.
+#
+# Left as an empty rule file (not omitted) so a future session can see this
+# document was processed and deliberately yielded no standalone rule, rather
+# than looking unprocessed.
+[]

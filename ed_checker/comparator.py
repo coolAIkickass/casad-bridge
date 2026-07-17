@@ -431,22 +431,11 @@ def _check_notes(notes: dict, design: dict, section_view_positions: dict = None)
                     'error', zone, notes_bbox
                 ))
 
-    # Clear cover vs IRC:112-2020 Table 14.2, Note (7): "For all foundations and
-    # elements below ground level minimum cover shall be 75 mm." Pile/pilecap
-    # elements are foundations by definition, so this floor applies unconditionally
-    # — no design input needed, a pure code-compliance check.
-    _MIN_FOUNDATION_COVER_MM = 75.0
-    cover_mm = notes.get('clear_cover_mm')
-    if cover_mm is not None and cover_mm < _MIN_FOUNDATION_COVER_MM:
-        issues.append(_issue(
-            'Notes', f'Clear cover {cover_mm:g}mm is below the 75mm code minimum',
-            f'Drawing note states clear cover to reinforcement = {cover_mm:g}mm. '
-            f'IRC:112-2020 Table 14.2, Note (7) requires a minimum of '
-            f'{_MIN_FOUNDATION_COVER_MM:g}mm cover for all foundations and elements '
-            f'below ground level (pile, pilecap).',
-            f'Increase clear cover to at least {_MIN_FOUNDATION_COVER_MM:g}mm.',
-            'error', zone, notes_bbox
-        ))
+    # Clear cover vs IRC:112-2020 Table 14.2, Note (7) — moved to the
+    # knowledge_rules rule engine (rules/irc112_detailing.yaml, rule
+    # IRC112-T14.2-N7-FOUNDATION-COVER-MIN). See ed_checker/__init__.py's
+    # run_check() for where knowledge_rules.evaluate_all_deterministic()
+    # is called, parallel to this comparator.
 
     return issues
 

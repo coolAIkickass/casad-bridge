@@ -1,0 +1,16 @@
+# CASAD's own internal "Pile, Pile cap & Pier Design Methodology" document.
+# Source notes: ED checker/dwg_checker_contents/03_Data for Claude Model/
+# Knowledge documents/extracted_notes/casad_design_philosophy_notes.md
+#
+# No Phase-1 rule extracted from this document specifically. Its highest
+# value this session was as the source of CASAD's own bar-mark notation
+# (the "generative pattern" — x/x1/.../y/y1/y2/.../z per pile, confirmed
+# against real training drawings) and worked-example context, not codified
+# numeric floors of its own beyond what the regulatory codes it cites
+# (IRC:78/IRC:112/IRC:SP:114/IS 2911) already require — those are captured
+# in the respective code-specific rule files instead of duplicated here.
+#
+# Left as an empty rule file (not omitted) so a future session can see this
+# document was processed and deliberately yielded no standalone rule, rather
+# than looking unprocessed.
+[]

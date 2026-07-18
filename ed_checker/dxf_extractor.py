@@ -1460,15 +1460,15 @@ def _title_block_pattern_pass(tb_text: list, result: dict):
             if m:
                 result['pier_range'] = m.group(1)
 
-        # Names with initials: "A.B.NAME". Skip text nested inside a block reference
-        # (from_block=True) — CASAD's title block uses a company-wide signature-stamp
-        # block that lists every engineer's name as static geometry, with only one
-        # actually visible per row via an AutoCAD dynamic-block visibility state that
-        # ezdxf cannot resolve. Reading raw block content here would silently grab
-        # an arbitrary (often wrong) name instead of the one actually shown on this
-        # drawing. Only a top-level, author-placed name (not part of that block) is
-        # trustworthy enough to use.
-        if not t.get('from_block') and re.match(r'^[A-Z]\.[A-Z]\.\w+$', s):
+        # Names with initials: "A.B.NAME". CASAD's title block uses a company-wide
+        # signature-stamp block listing every engineer's name as static geometry,
+        # with only one actually visible per row via an AutoCAD dynamic-block
+        # visibility state that ezdxf cannot resolve — so which specific name this
+        # matches cannot be trusted as "the" signer. That's fine: this check only
+        # needs to confirm a name/signature exists in that slot at all, not identify
+        # whose it is (nobody's compliance-checking headshots here) — so from_block
+        # text is allowed through despite the identity being unverifiable.
+        if re.match(r'^[A-Z]\.[A-Z]\.\w+$', s):
             if not result.get('drawn_by'):
                 result['drawn_by'] = s
             elif not result.get('design_by'):

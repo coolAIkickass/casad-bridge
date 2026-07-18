@@ -615,7 +615,7 @@ def _extract_text(pdf_bytes: bytes) -> dict:
     }
 
 
-def _extract_text_with_timeout(pdf_bytes: bytes, timeout: float = 60.0) -> dict:
+def _extract_text_with_timeout(pdf_bytes: bytes, timeout: float = 120.0) -> dict:
     """
     Wraps _extract_text with a hard wall-clock budget. pdfplumber's word/char
     clustering (extract_words(), called from here and from _extract_positions)

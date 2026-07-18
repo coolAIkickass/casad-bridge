@@ -1,5 +1,4 @@
 # ed_blueprint.py — ED Checker (Drawing Review) app mounted at /ed
-import gc
 import os
 import gzip
 import time
@@ -12,6 +11,7 @@ from datetime import datetime
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, Response
 import json
 from ed_checker import run_check, parse_design_inputs
+from ed_checker._memutil import trim_memory
 
 # Ensure Python logs reach Render's stdout
 logging.basicConfig(
@@ -278,7 +278,9 @@ def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, pars
     # ezdxf inflates a 25 MB DXF into hundreds of MB of cyclic entity objects —
     # reclaim them before the DB write allocates the compressed-DXF copies.
     # Back-to-back checks without this tipped the 512 MB instance into OOM.
-    gc.collect()
+    # trim_memory() also releases the freed glibc arenas back to the OS — gc.collect()
+    # alone leaves RSS at its high-water mark, see ed_checker/_memutil.py.
+    trim_memory()
 
     try:
         conn = _get_db()

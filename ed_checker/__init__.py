@@ -5,7 +5,6 @@ Public API:
   parse_design_inputs(design_files)                        -> (design_data dict, parse_errors list)
   run_check(drawing_pdf_bytes, design_data, dxf_bytes)     -> (issues list, detected_type str)
 """
-import gc
 import os
 import re
 import logging
@@ -15,6 +14,7 @@ from .pdf_extractor import _text_missing_sections, run_review_vision
 from .comparator import compare
 from .profiles import DISPLAY_NAME_TO_PROFILE_NAME
 from . import knowledge_rules
+from ._memutil import trim_memory
 
 log = logging.getLogger(__name__)
 
@@ -331,7 +331,7 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
 
     # Free DXF bytes — no longer needed after extraction; saves 25 MB before vision render.
     dxf_bytes = None
-    gc.collect()  # belt-and-suspenders: extract_from_dxf already gc'd, but catch any stragglers
+    trim_memory()  # belt-and-suspenders: extract_from_dxf already trimmed, but catch any stragglers
 
     # Run the visual review pass (CHECK 3–6) even in DXF path.
     # DXF text extraction cannot detect unlabeled views, stray boxes,

@@ -8,7 +8,6 @@ Called from __init__.run_check() when the engineer uploads a DXF alongside the P
 The PDF is still required for display in the review UI; the DXF is used only for data
 extraction.
 """
-import gc
 import io
 import os
 import re
@@ -18,6 +17,7 @@ import tempfile
 
 from .profiles import PPP_PROFILE, DrawingTypeProfile, TRIGGER_WORDS
 from .schema import new_drawing_data, diag
+from ._memutil import trim_memory
 
 log = logging.getLogger(__name__)
 
@@ -246,8 +246,10 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
 
     # ezdxf doc and modelspace are done — all data now lives in plain Python dicts.
     # Delete explicitly and gc to break cyclic entity refs (~100-200 MB) before returning.
+    # trim_memory() also releases the freed glibc arenas back to the OS — gc.collect()
+    # alone leaves RSS at its high-water mark, see _memutil.py.
     del doc, msp, ps_text
-    gc.collect()
+    trim_memory()
 
     # Supplement notes with DIMENSION-derived values when text extraction missed them.
     # DIMENSION entities give exact geometric measurements with no OCR error.

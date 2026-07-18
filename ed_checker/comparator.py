@@ -247,6 +247,10 @@ def compare(design_data: dict, drawing_data: dict) -> list:
     # What the extraction path can vouch for (see schema.DEFAULT_CAPABILITIES).
     # Missing key → assume capable, preserving behaviour for stored/legacy data.
     capabilities               = drawing_data.get('capabilities') or {}
+    # Which design components (pilecap/pile/pier) this sheet actually covers — see
+    # _components_on_sheet. Empty set = no scope signal, checks below fail open.
+    components_on_sheet        = _components_on_sheet(
+        drawing_data.get('sections_from_text') or [], PPP_PROFILE)
 
     issues += _check_extraction_diagnostics(drawing_data.get('extraction_diagnostics') or [])
     issues += _check_title_block(drawing_data.get('title_block') or {}, design_data)
@@ -256,6 +260,7 @@ def compare(design_data: dict, drawing_data: dict) -> list:
         section_bboxes, schedule_section_positions,
         capabilities,
         dxf_comp_anchors=drawing_data.get('dxf_comp_anchors') or {},
+        components_on_sheet=components_on_sheet,
     )
     # Section presence and notes completeness are now text-extracted (authoritative).
     # Supplement with inferences from extracted data: pdfplumber only scans the left 55%
@@ -275,7 +280,7 @@ def compare(design_data: dict, drawing_data: dict) -> list:
             if _n == 'SCHEDULE OF REINFORCEMENT' and _schedule:
                 _e2['present'] = True
         _sft.append(_e2)
-    issues += _check_sections(_sft)
+    issues += _check_sections(_sft, components_on_sheet, PPP_PROFILE)
     issues += _check_notes_completeness(
         drawing_data.get('notes_completeness_from_text') or [], section_view_positions)
     issues += _check_label_issues(
@@ -455,6 +460,42 @@ COMPONENT_ZONE = {
 RING_BAR_MARKS = {}  # deprecated — retained so imports don't break
 
 
+def _components_on_sheet(sections_from_text: list, profile) -> set:
+    """
+    Infer which design components (pilecap/pile/pier) this particular drawing sheet
+    actually covers, so design-vs-drawing checks don't flag a component that was
+    never meant to be on this sheet at all — CASAD sometimes splits one pier's
+    design across multiple physical sheets (e.g. "DETAILS OF PILE" vs "DETAILS OF
+    PILECAP-PIER" for the same pier), each checked against the same full design
+    Excel independently.
+
+    Only counts a component as "on this sheet" when a confirmed-present SECTION
+    view or a REINFORCEMENT PLAN view names it — a bare "PLAN OF PILECAP" (drawn
+    for layout context only, no rebar detail) does not imply the pilecap schedule
+    belongs on this sheet, so it's deliberately excluded.
+
+    Returns an empty set when there's no scope signal at all (e.g. sections_from_text
+    wasn't populated) — callers must treat empty as "no restriction", the same
+    fail-open convention as drawing_data['capabilities'].
+
+    Trade-off: a sheet that was meant to be a full multi-component drawing but is
+    completely missing one component's views (a genuine drafting omission, not a
+    deliberate split) will no longer be flagged by the required-sections check for
+    that component, since there's no content-only way to tell the two cases apart.
+    """
+    scope = set()
+    for entry in sections_from_text or []:
+        if not entry.get('present'):
+            continue
+        name_u = (entry.get('name') or '').upper()
+        if not (name_u.startswith('SECTION') or 'REINFORCEMENT PLAN' in name_u):
+            continue
+        for comp, pat in profile.comp_header_patterns:
+            if pat.search(name_u):
+                scope.add(comp)
+    return scope
+
+
 def _dxf_y_transform(dxf_anchors: dict, pdf_anchors: dict):
     """Compute (scale, offset) mapping DXF-extent-% y → PDF-page-% y.
 
@@ -483,7 +524,8 @@ def _dxf_y_transform(dxf_anchors: dict, pdf_anchors: dict):
 def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
                     schedule_section_positions: dict = None,
                     capabilities: dict = None,
-                    dxf_comp_anchors: dict = None) -> list:
+                    dxf_comp_anchors: dict = None,
+                    components_on_sheet: set = None) -> list:
     issues = []
     num_piles = int((design.get('geometry') or {}).get('pile_count') or 1)
     # Spacing can only be flagged as missing if the extraction path reads a c/c column
@@ -507,7 +549,12 @@ def _check_schedule(schedule: dict, design: dict, section_bboxes: dict = None,
         drawing_comp = schedule.get(comp, {})
 
         if not drawing_comp:
-            if design_bbs:
+            # Empty components_on_sheet means no scope signal was available (e.g.
+            # legacy/PDF-only data) — fail open, same as before. A non-empty scope
+            # that excludes this component means the sheet was never meant to show
+            # it (a deliberately split drawing) — not a missing-schedule error.
+            in_scope = not components_on_sheet or comp in components_on_sheet
+            if design_bbs and in_scope:
                 issues.append(_issue(
                     'Reinforcement', f'{comp.title()} schedule not found in drawing',
                     f'Could not extract the {comp} reinforcement schedule from the drawing.',
@@ -981,16 +1028,34 @@ REQUIRED_SECTIONS = [
     'SCHEDULE OF REINFORCEMENT',
 ]
 
-def _check_sections(sections_from_text: list) -> list:
-    """Check required section presence using pdfplumber-extracted text (authoritative)."""
+def _check_sections(sections_from_text: list, components_on_sheet: set = None,
+                    profile=None) -> list:
+    """Check required section presence using pdfplumber-extracted text (authoritative).
+
+    components_on_sheet (see _components_on_sheet) scopes this to the components
+    this particular sheet actually covers — a missing "SECTION A-A FOR PILECAP &
+    PIER" is only flagged when at least one of pilecap/pier is genuinely part of
+    this sheet. Sheet-wide entries (TABLE-1, LAP LENGTH TABLE, SCHEDULE OF
+    REINFORCEMENT, ...) name no component and are always checked regardless.
+    """
     issues = []
     if not sections_from_text:
         # No text extraction result — skip rather than flag as configuration error
         return issues
 
+    profile = profile or PPP_PROFILE
+
     for entry in sections_from_text:
         if not entry.get('present'):
             name = entry.get('name', 'Unknown view')
+            if components_on_sheet:
+                name_u = name.upper()
+                entry_comps = {
+                    comp for comp, pat in profile.comp_header_patterns
+                    if pat.search(name_u)
+                }
+                if entry_comps and entry_comps.isdisjoint(components_on_sheet):
+                    continue   # this view's component(s) aren't part of this sheet
             bbox = entry.get('bbox')
             issues.append(_issue(
                 'Missing Views', f'Missing view: {name}',

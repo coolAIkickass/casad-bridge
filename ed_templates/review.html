@@ -16,6 +16,18 @@
       {% endfor %}
     </select>
     {% endif %}
+    {% if batch_nav %}
+    <span class="toolbar-divider">/</span>
+    <div class="batch-nav" title="This drawing was uploaded together with {{ batch_nav.total - 1 }} other drawing(s) against the same design input">
+      <a class="batch-nav-btn {% if not batch_nav.prev_id %}batch-nav-btn-disabled{% endif %}"
+         href="{% if batch_nav.prev_id %}/ed/review/{{ batch_nav.prev_id }}{% endif %}"
+         title="Previous drawing in this batch">&#9664;</a>
+      <span class="batch-nav-label">Drawing {{ batch_nav.index }}/{{ batch_nav.total }}</span>
+      <a class="batch-nav-btn {% if not batch_nav.next_id %}batch-nav-btn-disabled{% endif %}"
+         href="{% if batch_nav.next_id %}/ed/review/{{ batch_nav.next_id }}{% endif %}"
+         title="Next drawing in this batch">&#9654;</a>
+    </div>
+    {% endif %}
   </div>
   <div class="toolbar-right">
     <a href="/ed/reupload/{{ review.drawing_id }}" class="btn btn-primary btn-sm" id="btn-reupload-top"

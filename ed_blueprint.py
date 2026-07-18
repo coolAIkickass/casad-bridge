@@ -65,6 +65,11 @@ def init_ed_db():
         ALTER TABLE reviews ADD COLUMN IF NOT EXISTS design_data TEXT;
         ALTER TABLE reviews ADD COLUMN IF NOT EXISTS dxf_content BYTEA;
         ALTER TABLE reviews ADD COLUMN IF NOT EXISTS recovery_attempts INTEGER NOT NULL DEFAULT 0;
+        -- Batch upload: multiple drawings submitted together against one shared
+        -- design file. NULL for a normal single-drawing upload/reupload — the
+        -- review page only shows the batch navigator when batch_id is set.
+        ALTER TABLE reviews ADD COLUMN IF NOT EXISTS batch_id TEXT;
+        ALTER TABLE reviews ADD COLUMN IF NOT EXISTS batch_index INTEGER;
         CREATE TABLE IF NOT EXISTS issues (
             id          TEXT PRIMARY KEY,
             review_id   TEXT NOT NULL REFERENCES reviews(id),
@@ -230,6 +235,22 @@ def _save_issues(review_id, issues, cur):
         )
 
 
+def _run_batch_bg(created, design_data, parse_errors):
+    """Run _run_check_bg for each drawing in a batch upload, one at a time.
+
+    Sequential by design — parallel ezdxf parses of multiple DXFs would recreate
+    the OOM risk _run_check_bg's trim_memory() call exists to prevent (see
+    ed_checker/_memutil.py). Each drawing still gets its own status='processing'
+    -> 'complete' transition and shows up in the review UI as soon as it's done,
+    the rest keep processing behind it in this same background thread.
+    """
+    log = logging.getLogger('ed.batch')
+    log.info('BATCH START — %d drawing(s)', len(created))
+    for review_id, drawing_id, pdf_bytes, dxf_bytes in created:
+        _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, parse_errors)
+    log.info('BATCH COMPLETE — %d drawing(s)', len(created))
+
+
 def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, parse_errors):
     """Run drawing check in a background thread; saves issues and marks review complete."""
     log = logging.getLogger('ed.bg')
@@ -363,68 +384,96 @@ def index():
                            page=page, total_pages=total_pages)
 
 
+def _read_drawing_rows(request) -> list:
+    """Collect drawing rows from a (possibly batch) upload form: file_0/dxf_file_0/
+    drawing_name_0, file_1/dxf_file_1/drawing_name_1, ... — upload.js always emits
+    this indexed shape, even for a single drawing (row 0), so there's one code path
+    for both. Returns [{'name', 'pdf_bytes', 'dxf_bytes'}, ...]; stops at the first
+    missing index so a gap can't silently truncate the batch.
+    """
+    rows = []
+    idx = 0
+    while True:
+        f = request.files.get(f'file_{idx}')
+        if not f or not f.filename:
+            break
+        name = request.form.get(f'drawing_name_{idx}', '').strip() or f.filename
+        dxf_bytes = _read_dxf_upload(request.files.get(f'dxf_file_{idx}'))
+        rows.append({'name': name, 'pdf_bytes': f.read(), 'dxf_bytes': dxf_bytes,
+                     'filename': f.filename})
+        idx += 1
+    return rows
+
+
 @ed_bp.route('/upload', methods=['POST'])
 def upload():
     _ulog = logging.getLogger('ed.upload')
     t0 = time.time()
     _ulog.info('UPLOAD START — receiving multipart body')
 
-    f = request.files.get('file')
-    if not f or not f.filename.lower().endswith('.pdf'):
+    rows = _read_drawing_rows(request)
+    if not rows:
         return "Only PDF files are accepted.", 400
-    pdf_bytes = f.read()
-    _ulog.info('STEP 1 PDF read — %.1fs, size=%d KB', time.time()-t0, len(pdf_bytes)//1024)
+    for i, row in enumerate(rows):
+        if not row['filename'].lower().endswith('.pdf'):
+            return f"Drawing {i + 1}: only PDF files are accepted.", 400
+    _ulog.info('STEP 1 %d drawing row(s) read — %.1fs, total_pdf=%dKB total_dxf=%dKB',
+               len(rows), time.time()-t0,
+               sum(len(r['pdf_bytes']) for r in rows)//1024,
+               sum(len(r['dxf_bytes'] or b'') for r in rows)//1024)
 
-    name  = request.form.get('drawing_name', '').strip() or f.filename
     dtype = request.form.get('drawing_type', 'General')
-
-    dxf_bytes = _read_dxf_upload(request.files.get('dxf_file'))
-    _ulog.info('STEP 2 DXF read — %.1fs, size=%d KB', time.time()-t0, len(dxf_bytes)//1024 if dxf_bytes else 0)
 
     design_files = [
         (u.filename, u.read())
         for u in request.files.getlist('design_inputs')
         if u and u.filename
     ]
-    _ulog.info('STEP 3 design files read — %.1fs, count=%d', time.time()-t0, len(design_files))
+    _ulog.info('STEP 2 design files read — %.1fs, count=%d', time.time()-t0, len(design_files))
 
     design_data, parse_errors = parse_design_inputs(design_files)
-    _ulog.info('STEP 4 design inputs parsed — %.1fs', time.time()-t0)
+    _ulog.info('STEP 3 design inputs parsed — %.1fs', time.time()-t0)
 
     design_data_json = json.dumps(design_data) if design_data else None
-    drawing_id = str(uuid.uuid4())
-    review_id  = str(uuid.uuid4())
+    # batch_id only when there's actually more than one drawing — keeps a normal
+    # single-drawing upload's DB rows identical to before this feature existed.
+    batch_id = str(uuid.uuid4()) if len(rows) > 1 else None
     now = datetime.now().isoformat()
 
     conn = _get_db()
-    _ulog.info('STEP 5 DB connected — %.1fs', time.time()-t0)
+    _ulog.info('STEP 4 DB connected — %.1fs', time.time()-t0)
+    cur = conn.cursor()
 
-    cur  = conn.cursor()
-    cur.execute('INSERT INTO drawings (id, name, drawing_type, created_at) VALUES (%s,%s,%s,%s)',
-                (drawing_id, name, dtype, now))
-    _ulog.info('STEP 6 drawings INSERT done — %.1fs', time.time()-t0)
-
-    # dxf_content stored by background thread — keep this INSERT small (PDF only)
-    cur.execute(
-        'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, design_data) '
-        'VALUES (%s,%s,1,%s,%s,%s,%s)',
-        (review_id, drawing_id, psycopg2.Binary(pdf_bytes), 'processing', now, design_data_json)
-    )
-    _ulog.info('STEP 7 reviews INSERT done — %.1fs', time.time()-t0)
+    created = []  # (review_id, drawing_id, pdf_bytes, dxf_bytes) — for the bg thread
+    for i, row in enumerate(rows):
+        drawing_id = str(uuid.uuid4())
+        review_id  = str(uuid.uuid4())
+        cur.execute('INSERT INTO drawings (id, name, drawing_type, created_at) VALUES (%s,%s,%s,%s)',
+                    (drawing_id, row['name'], dtype, now))
+        # dxf_content stored by the background thread — keep this INSERT small (PDF only)
+        cur.execute(
+            'INSERT INTO reviews (id, drawing_id, version, pdf_content, status, created_at, '
+            'design_data, batch_id, batch_index) VALUES (%s,%s,1,%s,%s,%s,%s,%s,%s)',
+            (review_id, drawing_id, psycopg2.Binary(row['pdf_bytes']), 'processing', now,
+             design_data_json, batch_id, i + 1)
+        )
+        created.append((review_id, drawing_id, row['pdf_bytes'], row['dxf_bytes']))
+    _ulog.info('STEP 5 drawings+reviews INSERT done for %d row(s) — %.1fs', len(rows), time.time()-t0)
 
     conn.commit()
     cur.close()
     conn.close()
-    _ulog.info('STEP 8 DB commit+close — %.1fs', time.time()-t0)
+    _ulog.info('STEP 6 DB commit+close — %.1fs', time.time()-t0)
 
+    # One thread, all rows processed sequentially — see _run_batch_bg docstring.
     threading.Thread(
-        target=_run_check_bg,
-        args=(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, parse_errors),
+        target=_run_batch_bg,
+        args=(created, design_data, parse_errors),
         daemon=True,
     ).start()
-    _ulog.info('STEP 9 background thread started — redirecting after %.1fs total', time.time()-t0)
+    _ulog.info('STEP 7 background thread started — redirecting after %.1fs total', time.time()-t0)
 
-    return redirect(url_for('ed.review', review_id=review_id))
+    return redirect(url_for('ed.review', review_id=created[0][0]))
 
 
 @ed_bp.route('/review/<review_id>')
@@ -432,7 +481,7 @@ def review(review_id):
     conn = _get_db()
     cur  = conn.cursor()
     cur.execute('''
-        SELECT r.id, r.version, r.status, r.created_at,
+        SELECT r.id, r.version, r.status, r.created_at, r.batch_id,
                d.name, d.drawing_type, d.id AS drawing_id
         FROM reviews r JOIN drawings d ON d.id = r.drawing_id
         WHERE r.id = %s
@@ -444,9 +493,31 @@ def review(review_id):
     cur.execute('SELECT id, version FROM reviews WHERE drawing_id=%s ORDER BY version',
                 (row['drawing_id'],))
     versions = cur.fetchall()
+
+    # Batch navigator: "Drawing 2/4" with prev/next — only when this review was
+    # created as part of a multi-drawing batch upload (see _read_drawing_rows).
+    batch_nav = None
+    if row['batch_id']:
+        cur.execute('''
+            SELECT r.id AS review_id
+            FROM reviews r
+            WHERE r.batch_id = %s
+            ORDER BY r.batch_index
+        ''', (row['batch_id'],))
+        siblings = [s['review_id'] for s in cur.fetchall()]
+        if len(siblings) > 1:
+            idx = siblings.index(review_id)
+            batch_nav = {
+                'index':   idx + 1,
+                'total':   len(siblings),
+                'prev_id': siblings[idx - 1] if idx > 0 else None,
+                'next_id': siblings[idx + 1] if idx < len(siblings) - 1 else None,
+            }
+
     cur.close()
     conn.close()
-    return render_template('review.html', review=dict(row), versions=[dict(v) for v in versions])
+    return render_template('review.html', review=dict(row), versions=[dict(v) for v in versions],
+                           batch_nav=batch_nav)
 
 
 @ed_bp.route('/pdf/<review_id>')

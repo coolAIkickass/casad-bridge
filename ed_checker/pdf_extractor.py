@@ -10,6 +10,7 @@ import json
 import base64
 import logging
 import pdfplumber
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 
 from .profiles import PPP_PROFILE, TRIGGER_WORDS
 from .schema import new_drawing_data
@@ -304,7 +305,7 @@ def extract_from_drawing(pdf_bytes: bytes) -> dict:
     """Main entry point. Returns structured drawing data dict."""
     from concurrent.futures import ThreadPoolExecutor
 
-    text_data        = _extract_text(pdf_bytes)
+    text_data        = _extract_text_with_timeout(pdf_bytes)
 
     section_labels   = text_data.get('all_label_text', [])
     cut_letters      = text_data.get('cut_letters', set())
@@ -614,6 +615,35 @@ def _extract_text(pdf_bytes: bytes) -> dict:
     }
 
 
+def _extract_text_with_timeout(pdf_bytes: bytes, timeout: float = 60.0) -> dict:
+    """
+    Wraps _extract_text with a hard wall-clock budget. pdfplumber's word/char
+    clustering (extract_words(), called from here and from _extract_positions)
+    can pathologically hang for minutes on some AutoCAD-exported PDFs with
+    unusually dense vector geometry — confirmed in production: DXF extraction
+    completed in seconds, but the subsequent pdfplumber pass never returned,
+    silently blocking the whole review forever (no exception, no further log
+    output, worker otherwise still responsive since it's one background
+    thread). pdfplumber's output here is supplementary (PDF-coordinate marker
+    positions, redundant text fields already covered by DXF) — never
+    load-bearing — so a timeout is treated exactly like the existing
+    try/except around this call: give up and continue with DXF-only results.
+    Python threads can't be forcibly killed, so the abandoned pdfplumber call
+    keeps running in the background after a timeout — accepted trade-off over
+    blocking the whole review indefinitely.
+    """
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(_extract_text, pdf_bytes)
+    try:
+        return future.result(timeout=timeout)
+    except _FutureTimeoutError:
+        log.warning('pdfplumber _extract_text exceeded %.0fs — giving up, continuing without it',
+                     timeout)
+        return {}
+    finally:
+        executor.shutdown(wait=False)
+
+
 # ── Text-analysis helpers ─────────────────────────────────────────────────────
 
 def _sections_from_text(section_view_positions: dict) -> list:
@@ -911,7 +941,10 @@ def _call_vision(images_b64: list, prompt: str, model: str = 'claude-sonnet-4-6'
     raw = ''
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        # Explicit bound instead of the SDK default (~10 min) — a stalled call here
+        # would otherwise silently block the whole background thread indefinitely,
+        # with no exception for _run_check_bg's except clause to catch.
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=180.0)
         images_to_send = images_b64[:max_images]
         log.info('Vision call: model=%s sending %d image(s), prompt length=%d chars',
                  model, len(images_to_send), len(prompt))

@@ -9,7 +9,7 @@ import os
 import re
 import logging
 from .excel_parser import parse_e2e_excel
-from .pdf_extractor import extract_from_drawing, _extract_text as _pdf_extract_text
+from .pdf_extractor import extract_from_drawing, _extract_text_with_timeout as _pdf_extract_text
 from .pdf_extractor import _text_missing_sections, run_review_vision
 from .comparator import compare
 from .profiles import DISPLAY_NAME_TO_PROFILE_NAME

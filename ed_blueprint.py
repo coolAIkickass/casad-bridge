@@ -64,6 +64,7 @@ def init_ed_db():
         );
         ALTER TABLE reviews ADD COLUMN IF NOT EXISTS design_data TEXT;
         ALTER TABLE reviews ADD COLUMN IF NOT EXISTS dxf_content BYTEA;
+        ALTER TABLE reviews ADD COLUMN IF NOT EXISTS recovery_attempts INTEGER NOT NULL DEFAULT 0;
         CREATE TABLE IF NOT EXISTS issues (
             id          TEXT PRIMARY KEY,
             review_id   TEXT NOT NULL REFERENCES reviews(id),
@@ -92,6 +93,20 @@ def init_ed_db():
 # main.py and calls init_ed_db) from recovering the same reviews twice.
 _RECOVERY_LOCK_KEY = 874512369
 
+# A review may be auto-recovered once. An OOM kill (SIGKILL from the OS) is
+# invisible to _run_check_bg's own try/except — that only catches normal
+# Python exceptions — so a review whose check gets OOM-killed never reaches
+# status='complete' and looks identical to a mid-deploy-restart orphan to
+# this sweep. Without a cap, every replacement worker's boot re-triggers the
+# sweep, which retries the SAME dxf_content, which OOMs again, forever — a
+# crash loop that eats server resources and blocks the review page forever
+# (observed in production: a stuck 'processing' review triggering a repeat
+# SIGKILL/DB-timeout cycle). If a review is still stuck after one recovery
+# attempt, the OOM is very likely deterministic for that specific file
+# (size/complexity), not transient concurrent load — give up and surface a
+# clear error instead of retrying indefinitely.
+_MAX_RECOVERY_ATTEMPTS = 1
+
 
 def _recover_stuck_reviews():
     """Re-run checks orphaned by a mid-check restart (deploy/OOM kills the
@@ -114,12 +129,41 @@ def _recover_stuck_reviews():
                 lock_conn.close()
                 return
             try:
-                lock_cur.execute("SELECT id FROM reviews WHERE status='processing'")
-                stuck_ids = [r['id'] for r in lock_cur.fetchall()]
-                if not stuck_ids:
+                lock_cur.execute("SELECT id, recovery_attempts FROM reviews WHERE status='processing'")
+                stuck = lock_cur.fetchall()
+                if not stuck:
                     return
-                log.info('Found %d stuck review(s): %s', len(stuck_ids), stuck_ids)
-                for rid in stuck_ids:
+                log.info('Found %d stuck review(s): %s', len(stuck), [r['id'] for r in stuck])
+                for stuck_row in stuck:
+                    rid = stuck_row['id']
+                    if stuck_row['recovery_attempts'] >= _MAX_RECOVERY_ATTEMPTS:
+                        log.warning(
+                            'Review %s still stuck after %d recovery attempt(s) — giving up '
+                            'rather than retrying again (see _MAX_RECOVERY_ATTEMPTS comment)',
+                            rid, stuck_row['recovery_attempts'])
+                        fail_conn = _get_db()
+                        fail_cur = fail_conn.cursor()
+                        _save_issues(rid, [{
+                            'category': 'System',
+                            'title': 'Checker error — ran out of server memory',
+                            'description': (
+                                'This drawing could not be processed — the server ran out of '
+                                'memory while parsing it, more than once. This usually means '
+                                'the DXF is unusually large or complex for the available '
+                                'server capacity, not a transient issue.'
+                            ),
+                            'suggestion': (
+                                'Try re-uploading a simplified/smaller DXF (purge unused '
+                                'blocks/layers in AutoCAD first), or contact support if the '
+                                'file size looks normal.'
+                            ),
+                            'severity': 'error', 'page_num': 1,
+                            'x': 5, 'y': 5, 'width': 30, 'height': 8,
+                        }], fail_cur)
+                        fail_cur.execute("UPDATE reviews SET status='complete' WHERE id=%s", (rid,))
+                        fail_conn.commit()
+                        fail_cur.close(); fail_conn.close()
+                        continue
                     # Fetch content per review so only one PDF+DXF is in memory at a time
                     conn = _get_db()
                     cur  = conn.cursor()
@@ -129,8 +173,12 @@ def _recover_stuck_reviews():
                     if not row:
                         cur.close(); conn.close()
                         continue
-                    # Drop any issues a partially-completed run managed to insert
+                    # Drop any issues a partially-completed run managed to insert, and
+                    # record this attempt BEFORE running the check — if the check itself
+                    # gets OOM-killed, the incremented counter (already committed) is what
+                    # lets the next sweep recognise this isn't a fresh orphan.
                     cur.execute('DELETE FROM issues WHERE review_id=%s', (rid,))
+                    cur.execute('UPDATE reviews SET recovery_attempts = recovery_attempts + 1 WHERE id=%s', (rid,))
                     conn.commit()
                     cur.close()
                     conn.close()

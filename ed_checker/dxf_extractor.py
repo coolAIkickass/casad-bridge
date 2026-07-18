@@ -238,7 +238,8 @@ def extract_from_dxf(dxf_bytes: bytes, profile: DrawingTypeProfile = PPP_PROFILE
     geometry_from_drawing = _classify_all_dims(msp, all_text, extents, profile, u2mm)
     multileader_callouts, merged_callouts = _extract_multileader_callouts(msp, extents)
     # Programmatic unlabeled-view and missing-detail detection (runs before del msp).
-    unlabeled_circles   = _detect_unlabeled_section_circles(msp, all_text, extents, sv_pos, profile, u2mm)
+    unlabeled_circles   = _detect_unlabeled_section_circles(
+        msp, all_text, extents, profile, u2mm, schedule_bbox=sched_info.get('schedule_bbox'))
     missing_detail_refs = _detect_missing_detail_refs(all_text, sv_pos)
     liner_thk_issues, liner_thickness_mm = _check_liner_thickness_units(msp, extents)
     table1_hdr_issues   = _check_table1_duplicate_headers(all_text, extents, profile.layout)
@@ -996,6 +997,16 @@ def _extract_schedule(msp, all_text: list, extents: tuple,
 
     log.info('Schedule area: %d text entities', len(sched_text))
 
+    # Bounding box of the schedule's own text cloud — used by
+    # _detect_unlabeled_section_circles to exclude bar-shape sketches (e.g. a
+    # circular confinement-tie shape in the "Shape of Bar" column) drawn inside the
+    # schedule itself. Anchored to the schedule's actual detected extent, not a
+    # sheet-wide fraction, so it can't misfire on unrelated geometry elsewhere.
+    info['schedule_bbox'] = (
+        min(t['x'] for t in sched_text), min(t['y'] for t in sched_text),
+        max(t['x'] for t in sched_text), max(t['y'] for t in sched_text),
+    )
+
     # CASAD schedule headers span multiple Y-lines. Collect all sub-rows
     # within the header band of the identified header row.
     header_y = rows[header_idx][0]['y']
@@ -1370,17 +1381,23 @@ def _extract_title_block(doc, msp, all_text: list, extents: tuple,
     tb_text = [t for t in all_text if t['x'] >= tb_x_min and t['y'] <= tb_y_max]
     _title_block_pattern_pass(tb_text, result)
 
-    # Pass 3: paperspace fallback — when modelspace yielded little, run the same
-    # patterns over paperspace text (quadrant-filtered against the paperspace's own
-    # text-cloud extents, since paperspace coordinates are unrelated to modelspace).
-    if ps_text and sum(1 for v in result.values() if v) < 3:
-        xs = [t['x'] for t in ps_text]
-        ys = [t['y'] for t in ps_text]
-        ps_x_min = min(xs) + (max(xs) - min(xs)) * layout.title_x_min_frac
-        ps_y_max = min(ys) + (max(ys) - min(ys)) * layout.title_y_max_frac
-        ps_tb = [t for t in ps_text if t['x'] >= ps_x_min and t['y'] <= ps_y_max] or ps_text
+    # Pass 3: paperspace fallback — CASAD title blocks live entirely in a paperspace
+    # layout, not modelspace, so this always runs when paperspace text exists (not
+    # gated on how many fields Pass 1/2 already filled — modelspace can coincidentally
+    # fill a few unrelated fields, e.g. a section's own SCALE attrib, which used to
+    # block this pass from ever running even though the drawing number/date/revision
+    # only exist in paperspace). `_title_block_pattern_pass` only fills still-unset
+    # fields, so re-running it here is safe/idempotent.
+    #
+    # No bottom-right-quadrant filter here (unlike Pass 2's modelspace scan): a
+    # paperspace layout in these DXFs contains only the plot border/title-block/
+    # revision-table content already — nothing else to filter out. The quadrant
+    # box previously applied here assumed title-block content clusters in the
+    # rightmost 40%, but CASAD's revision-date table sits at the *left* edge of an
+    # otherwise full-width title block, so that box silently dropped the date.
+    if ps_text:
         before = sum(1 for v in result.values() if v)
-        _title_block_pattern_pass(ps_tb, result)
+        _title_block_pattern_pass(ps_text, result)
         added = sum(1 for v in result.values() if v) - before
         if added:
             log.info('Title block: %d field(s) filled from paperspace text', added)
@@ -1396,6 +1413,16 @@ def _extract_title_block(doc, msp, all_text: list, extents: tuple,
     return result
 
 
+
+# Drawing-number formats seen in practice: slash-delimited (ABC/XYZ/...) and CASAD's
+# own hyphen-delimited convention (e.g. "PGII-MJB-96+814-002" — project-contract-
+# chainage-sheet). '+' allowed since chainage segments use it (96+814).
+_DRG_NO_PATTERNS = (
+    r'[A-Z]{2,}/[A-Z]{2,}/',
+    r'[A-Z]{2,}-[A-Z0-9]{2,}-[\dA-Z+]{2,}-\d{2,}',
+)
+
+
 def _title_block_pattern_pass(tb_text: list, result: dict):
     """Run the title-block field regexes over a text list, filling unset fields in place."""
     for t in tb_text:
@@ -1405,13 +1432,14 @@ def _title_block_pattern_pass(tb_text: list, result: dict):
         if not result.get('revision') and re.match(r'^R\d+$', s, re.IGNORECASE):
             result['revision'] = s.upper()
 
-        if not result.get('date') and re.match(r'\d{2}[/-]\d{2}[/-]\d{4}', s):
+        # Date: dd/mm/yyyy or dd/mm/yy — CASAD dates use a 2-digit year ("29/03/23").
+        if not result.get('date') and re.match(r'\d{2}[/-]\d{2}[/-]\d{2,4}', s):
             result['date'] = s
 
         if not result.get('scale') and re.search(r'AS SHOWN|NTS|\b1\s*:\s*\d+\b', su):
             result['scale'] = s
 
-        if not result.get('drawing_number') and re.search(r'[A-Z]{2,}/[A-Z]{2,}/', s):
+        if not result.get('drawing_number') and any(re.search(p, s) for p in _DRG_NO_PATTERNS):
             result['drawing_number'] = re.sub(r'\s+', '', s)
 
         # Spans: "30.0M - 30.0M" pattern
@@ -1432,8 +1460,15 @@ def _title_block_pattern_pass(tb_text: list, result: dict):
             if m:
                 result['pier_range'] = m.group(1)
 
-        # Names with initials: "A.B.NAME"
-        if re.match(r'^[A-Z]\.[A-Z]\.\w+$', s):
+        # Names with initials: "A.B.NAME". Skip text nested inside a block reference
+        # (from_block=True) — CASAD's title block uses a company-wide signature-stamp
+        # block that lists every engineer's name as static geometry, with only one
+        # actually visible per row via an AutoCAD dynamic-block visibility state that
+        # ezdxf cannot resolve. Reading raw block content here would silently grab
+        # an arbitrary (often wrong) name instead of the one actually shown on this
+        # drawing. Only a top-level, author-placed name (not part of that block) is
+        # trustworthy enough to use.
+        if not t.get('from_block') and re.match(r'^[A-Z]\.[A-Z]\.\w+$', s):
             if not result.get('drawn_by'):
                 result['drawn_by'] = s
             elif not result.get('design_by'):
@@ -2840,6 +2875,29 @@ def _count_cross_section_bars(msp, all_text: list, schedule: dict, extents: tupl
                               f'Section "{label_text}": component could not be determined '
                               f'from the label text — bar count not verified.', severity='info'))
             continue
+
+        # A label naming more than one component (e.g. "SECTION A-A FOR PILECAP &
+        # PIER") draws bars from multiple bar marks in the same view — there is no
+        # way to attribute an individual dot to a specific bar mark from geometry
+        # alone, so counting them all under whichever mark _find_bar_mark_for_section
+        # happens to pick produces a meaningless total (e.g. pilecap 'a' bars plus
+        # the 'e' stirrup dots plus the pier cage, all reported as bar 'a').
+        # comps_longest_first + strip-as-matched avoids double-counting e.g. 'PILE'
+        # as a second component when it's really just a substring of 'PILECAP'.
+        _label_remaining = label_text
+        named_comps = []
+        for c in profile.comps_longest_first():
+            if c.upper() in _label_remaining:
+                named_comps.append(c)
+                _label_remaining = _label_remaining.replace(c.upper(), '')
+        if len(named_comps) > 1:
+            diags.append(diag('xsec_multi_component_label',
+                              f'Section "{label_text}": label names multiple components '
+                              f'({", ".join(named_comps)}) — bar dots from all of them '
+                              f'would be indistinguishable, so the count was not verified. '
+                              f'Check this view manually.', severity='info'))
+            continue
+
         bar_mark = _find_bar_mark_for_section(comp, schedule)
 
         # Search for bar dots in a region around the section label. Anchored to the
@@ -3272,29 +3330,78 @@ def _find_bar_mark_for_section(comp: str, schedule: dict) -> str | None:
 
 # ── Programmatic unlabeled-view and missing-detail detection ─────────────────
 
+# A ring within this gap (mm) of another ring belongs to the same physical view
+# (e.g. several piles in one plan, or concentric ties in one section) — clustered
+# before the label check runs so the check operates on the view's own footprint,
+# not on each ring in isolation. Set above typical CASAD pile-to-pile spacing
+# (3600mm confirmed on a real sheet) so a multi-pile plan clusters as one view
+# instead of fragmenting into one cluster per pile — a fragment near the view's
+# title would pass while a same-view fragment further from it would wrongly fail
+# on its own, even though both belong to the one same (correctly or incorrectly)
+# labeled view.
+_VIEW_CLUSTER_GAP_MM = 4200.0
+
+# A title counts as labelling a view only if it sits within this absolute distance
+# of the view's own bounding box (expanded by this margin on every side) — not a
+# fraction of the whole sheet. Calibrated against a real CASAD sheet with two
+# visually-similar pile-plan views sharing one sheet, only one of which is actually
+# captioned: the captioned one's nearest edge sits ~1300mm from its title, the
+# uncaptioned one's nearest edge to that same (not-its-own) title is ~3160mm —
+# confirmed by eye on the rendered drawing. Set between the two.
+_VIEW_LABEL_MARGIN_MM = 2000.0
+
+# Schedule "Shape of Bar" sketches for a circular bar mark (e.g. a confinement tie)
+# are literal small circles sitting inside the schedule's own text cloud — excluded
+# by bounding-box containment (schedule_bbox, from _extract_schedule) rather than by
+# layer name, since CASAD doesn't consistently draw these on a REINF/SHAPE_BAR-named
+# layer (confirmed on 02_DETAILS OF PILECAP-PIER_R1: identical shapes on plain
+# 'S_MAIN'). Layer-name exclusion (_layer_excluded) stays as a first-line filter for
+# the bent-bar (LWPOLYLINE) case it was built for; this is a second, independent net.
+_SCHEDULE_EXCLUSION_MARGIN_MM = 500.0
+
+# Title patterns strict enough to use as standalone labels (unlike a bare TRIGGER_WORDS
+# substring match, which would flag 'LAP'/'NOTES' text sitting near a view as if it
+# were that view's own title — the false positive the *_view_positions-based check
+# used to guard against). Matched against each text item on its own, since CASAD
+# titles are typically one atomic TEXT/MTEXT/attrib entity — no row-merging needed
+# here, which sidesteps the row-merge bug where two titles sharing a y-band collapse
+# into one anchor point and lose each other's true position.
+_VIEW_TITLE_RE = re.compile(
+    r'SECTION\s+[A-Z]\s*[\-\xad–]\s*[A-Z]|\bPLAN\s+OF\b|\bDETAIL[S]?\s+[A-Z]\b',
+)
+
+
+def _is_view_title_text(s: str) -> bool:
+    return bool(_VIEW_TITLE_RE.search(s.upper().replace('\xad', '-').replace('–', '-')))
+
+
 def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
-                                       section_view_positions: dict,
                                        profile: DrawingTypeProfile = PPP_PROFILE,
-                                       u2mm: float = 1.0) -> list:
+                                       u2mm: float = 1.0,
+                                       schedule_bbox: tuple | None = None) -> list:
     """
     Find large circular boundary shapes (pile / pilecap cross-section rings) in the views
-    area that have no confirmed section-view label nearby.
+    area that have no title label nearby, treating each physical view (a cluster of nearby
+    rings, e.g. several piles in one plan) as one unit rather than judging each ring alone.
     Returns [{description, bbox}] for unlabeled_views.
 
     Looks for both CIRCLE primitives AND closed LWPOLYLINEs with roughly circular aspect
     ratio — CASAD engineers most often draw pile sections as closed LWPOLYLINEs, not CIRCLE.
 
-    Labelling is checked against `section_view_positions` (already-confirmed section labels)
-    rather than raw TRIGGER_WORD text proximity.  TRIGGER_WORDS like 'LAP' and 'NOTES' appear
-    near sections and caused false "already labeled" judgements in the previous approach.
-
     Candidates on REINF/SHAPE_BAR-style layers are excluded (`_layer_excluded`, shared with
-    `_detect_component_regions`) — bent-bar shape sketches drawn in the schedule's "Shape of
-    Bar" column are closed polylines with a roughly square bounding box and can coincidentally
-    pass the radius+aspect-ratio circular heuristic below, even though they're zigzag/jogged
-    outlines, not circles. Confirmed on a real production sheet (`01A_PPP before checking
-    (2026-06-24).dxf`): two `S_REINF` and one `S_SHAPE_BAR` polyline inside the schedule's
-    bar-shape column were misflagged as unlabeled cross-section rings.
+    `_detect_component_regions`), and candidates falling inside the schedule's own text
+    bounding box (`schedule_bbox`) are excluded independently of layer name — bent-bar and
+    circular-tie shape sketches in the schedule's "Shape of Bar" column are closed shapes
+    that can coincidentally pass the radius+aspect-ratio heuristic below.
+
+    Labelling: rings are first clustered into views (`_VIEW_CLUSTER_GAP_MM`), then each
+    view's own bounding box (not a single anchor point) is checked against nearby title
+    text (`_is_view_title_text`) within `_VIEW_LABEL_MARGIN_MM` — an absolute distance from
+    the view's real footprint, not a percentage of the whole sheet. This replaced an earlier
+    single-point/fixed-sheet-fraction check that (a) relied on titles pre-merged into rows,
+    which collapsed two separate titles sharing a y-band into one anchor and lost the other's
+    true position, and (b) used one anchor point for a multi-ring view, so rings far from
+    that one point could wrongly fail even when genuinely under the same title.
     """
     x_min, y_min, x_max, y_max = extents
     dw = x_max - x_min
@@ -3314,8 +3421,8 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
     # is actively dangerous for this function specifically, since its whole purpose is
     # catching genuinely-unlabeled rings; a candidate dropped before the label check
     # can never be flagged, a false negative in the system's core job. The downstream
-    # `_has_confirmed_label` proximity check (and radius/aspect filters above) already
-    # do the real false-positive guarding, same as the other two fixes.
+    # label-proximity check (and radius/aspect filters above) already do the real
+    # false-positive guarding, same as the other two fixes.
     try:
         for e in msp.query('CIRCLE'):
             if _layer_excluded(str(e.dxf.get('layer', ''))):
@@ -3357,25 +3464,23 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
     except Exception:
         pass
 
+    # Exclude candidates sitting inside the schedule's own text cloud (see
+    # _SCHEDULE_EXCLUSION_MARGIN_MM docstring above).
+    if schedule_bbox:
+        sx0, sy0, sx1, sy1 = schedule_bbox
+        sched_margin = _SCHEDULE_EXCLUSION_MARGIN_MM / u2mm
+        before = len(rings)
+        rings = [r for r in rings
+                 if not (sx0 - sched_margin <= r['x'] <= sx1 + sched_margin
+                         and sy0 - sched_margin <= r['y'] <= sy1 + sched_margin)]
+        if len(rings) != before:
+            log.info('Unlabeled-view scan: excluded %d ring candidate(s) inside the schedule '
+                      'bounding box', before - len(rings))
+
     log.info('Unlabeled-view scan: %d candidate rings (CIRCLE+LWPOLY, r≥%.0f) in views area',
              len(rings), min_sec_r)
     if not rings:
         return []
-
-    # Check labelling by proximity to confirmed section-view labels in section_view_positions.
-    # These were already extracted and confirmed by _extract_section_info — using them
-    # avoids the false-positive problem where 'LAP', 'NOTES' TRIGGER_WORDS near the
-    # sections counted as "labels" when they are not actually section titles.
-    label_r = dh * 0.12   # 12% of sheet height — generous enough for labels above/below
-
-    def _has_confirmed_label(c):
-        for label, bbox in section_view_positions.items():
-            # bbox is pct {x, y, width, height} from top-left — convert to DXF coords
-            lx = x_min + bbox['x'] / 100 * dw
-            ly = y_max - bbox['y'] / 100 * dh   # flip Y: PDF top-down → DXF bottom-up
-            if abs(lx - c['x']) < label_r and abs(ly - c['y']) < label_r:
-                return label
-        return None
 
     # Deduplicate rings — a pile drawn as both a CIRCLE and a LWPOLYLINE approximation
     # would produce two entries at nearly the same position.  Keep the first one found.
@@ -3388,29 +3493,66 @@ def _detect_unlabeled_section_circles(msp, all_text: list, extents: tuple,
             unique_rings.append(c)
             seen_positions.append(c)
 
+    # Cluster rings into physical views before checking labels, so a multi-ring view
+    # (several piles in one plan, or concentric ties in one section) is judged as a
+    # whole rather than ring-by-ring against a single anchor point.
+    cluster_gap = _VIEW_CLUSTER_GAP_MM / u2mm
+    view_clusters = _all_clusters(unique_rings, cluster_gap)
+
+    # Individual, unmerged title candidates — each kept at its own true (x, y) rather
+    # than folded into a shared row, so two titles sharing a y-band (e.g. "SECTION X-X"
+    # and "SECTION Y-Y" drawn side by side) don't erase each other's position.
+    title_items = [t for t in all_text if _is_view_title_text(t['text'])]
+
+    label_margin = _VIEW_LABEL_MARGIN_MM / u2mm
+
+    def _nearest_title(bbox):
+        bx0, by0, bx1, by1 = bbox
+        best = None
+        best_d = None
+        for t in title_items:
+            if not (bx0 - label_margin <= t['x'] <= bx1 + label_margin
+                    and by0 - label_margin <= t['y'] <= by1 + label_margin):
+                continue
+            # distance from the title to the nearest edge of the view's own bbox
+            dx = max(bx0 - t['x'], 0, t['x'] - bx1)
+            dy = max(by0 - t['y'], 0, t['y'] - by1)
+            d = math.hypot(dx, dy)
+            if best_d is None or d < best_d:
+                best_d, best = d, t
+        return best
+
     unlabeled = []
-    for c in unique_rings:
-        x_pct = round((c['x'] - x_min) / dw * 100, 1)
-        y_pct = round((y_max - c['y']) / dh * 100, 1)
-        label = _has_confirmed_label(c)
-        if label:
-            log.info('Ring at %.1f%%,%.1f%% (r≈%.0f, %s) — confirmed label: %r',
-                     x_pct, y_pct, c['r'], c['kind'], label[:60])
-        else:
-            bbox = _to_bbox(c['x'] - c['r'], c['y'] + c['r'],
-                            c['x'] + c['r'], c['y'] - c['r'], extents)
-            log.info('Unlabeled ring at %.1f%%,%.1f%% (r≈%.0f, %s) — no section label within %.0f units',
-                     x_pct, y_pct, c['r'], c['kind'], label_r)
-            unlabeled.append({
-                'description': (
-                    f'A structural cross-section ring is drawn at approximately '
-                    f'{x_pct}% across, {y_pct}% down the drawing but has no '
-                    f'"SECTION X-X" or similar title label nearby. '
-                    f'Add a section title (e.g. "SECTION Z-Z FOR PILE") directly '
-                    f'below or above this view.'
-                ),
-                'bbox': bbox,
-            })
+    for cluster in view_clusters:
+        bx0 = min(c['x'] - c['r'] for c in cluster)
+        bx1 = max(c['x'] + c['r'] for c in cluster)
+        by0 = min(c['y'] - c['r'] for c in cluster)
+        by1 = max(c['y'] + c['r'] for c in cluster)
+        cx = (bx0 + bx1) / 2
+        cy = (by0 + by1) / 2
+        x_pct = round((cx - x_min) / dw * 100, 1)
+        y_pct = round((y_max - cy) / dh * 100, 1)
+
+        title = _nearest_title((bx0, by0, bx1, by1))
+        if title:
+            log.info('View cluster at %.1f%%,%.1f%% (%d ring(s)) — confirmed label: %r',
+                     x_pct, y_pct, len(cluster), title['text'][:60])
+            continue
+
+        log.info('Unlabeled view cluster at %.1f%%,%.1f%% (%d ring(s)) — no title within %.0f units',
+                 x_pct, y_pct, len(cluster), label_margin)
+        bbox = _to_bbox(bx0, by1, bx1, by0, extents)
+        ring_note = '' if len(cluster) == 1 else f' ({len(cluster)} shapes in this view)'
+        unlabeled.append({
+            'description': (
+                f'A structural cross-section ring is drawn at approximately '
+                f'{x_pct}% across, {y_pct}% down the drawing but has no '
+                f'"SECTION X-X" or similar title label nearby{ring_note}. '
+                f'Add a section title (e.g. "SECTION Z-Z FOR PILE") directly '
+                f'below or above this view.'
+            ),
+            'bbox': bbox,
+        })
     return unlabeled
 
 

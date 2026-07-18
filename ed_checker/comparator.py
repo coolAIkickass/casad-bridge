@@ -341,7 +341,10 @@ def _check_title_block(tb: dict, design: dict) -> list:
     zone = 'title_block'
     tb_bbox = tb.get('bbox')  # Claude's estimated bbox for the title block area
 
-    required = ['drawing_number', 'revision', 'title', 'spans', 'drawn_by', 'approved_by', 'date', 'scale']
+    # 'spans' intentionally excluded: it's only present on general-arrangement
+    # drawings, not on a component detail sheet (e.g. pilecap/pier details) — its
+    # absence there isn't a drafting defect, so it can't be a universal requirement.
+    required = ['drawing_number', 'revision', 'title', 'drawn_by', 'approved_by', 'date', 'scale']
     for field in required:
         if not tb.get(field):
             issues.append(_issue(
@@ -361,9 +364,15 @@ def _check_title_block(tb: dict, design: dict) -> list:
             'error', zone, tb_bbox
         ))
 
-    # Drawing number format
+    # Drawing number format — accepts CASAD's slash convention (ABC/XYZ/123) and its
+    # hyphen/chainage convention. The hyphen segment count varies (e.g.
+    # "PGII-MJB-96+814-002" with a trailing sheet number vs "PGII-MJB-GAD-96+814"
+    # without one) so this only checks the general shape — a leading letter group
+    # followed by 2+ more hyphen-separated alphanumeric groups — not an exact count.
     drg = tb.get('drawing_number', '')
-    if drg and not re.match(r'^[A-Z]+/[A-Z]+/[A-Z]+[-/]\d+[A-Z]?$', drg.replace(' ', '')):
+    _drg_ok = re.match(r'^[A-Z]+/[A-Z]+/[A-Z]+[-/]\d+[A-Z]?$', drg.replace(' ', '')) or \
+              re.match(r'^[A-Z]{2,}(-[A-Z0-9+]{2,}){2,}$', drg.replace(' ', ''))
+    if drg and not _drg_ok:
         issues.append(_issue(
             'Title Block', f'Drawing number format check: "{drg}"',
             f'Drawing number "{drg}" — verify it follows the project numbering convention.',

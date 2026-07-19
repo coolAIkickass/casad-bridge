@@ -933,6 +933,29 @@ def _extract_schedule(msp, all_text: list, extents: tuple,
     # in bar row ranges and corrupt column assignment — exclude it.
     all_noblk = [t for t in all_text if not t.get('from_block')]
 
+    def _locate_via_full_sheet():
+        """Scan the full sheet (ignoring schedule_x_min_frac) to find the header row
+        and re-derive the schedule's true left edge from it. Returns (sched_text, rows,
+        header_idx, actual_x_min) or None if no header row exists anywhere on the sheet.
+        """
+        full_rows = _group_rows(all_noblk, tol_frac=layout.sched_row_tol_frac, extents=extents)
+        hdr_idx_full = _schedule_header_idx(full_rows)
+        if hdr_idx_full is None:
+            return None
+        # Collect all sub-rows within the multi-line header band to find the true
+        # leftmost column (MK., SHAPE OF BAR etc. sit a few units above DIA/NOS).
+        hdr_y = full_rows[hdr_idx_full][0]['y']
+        hdr_band = dh * layout.header_band_frac
+        hdr_cells = [c for row in full_rows if abs(row[0]['y'] - hdr_y) <= hdr_band
+                     for c in row]
+        actual_x_min = min(c['x'] for c in hdr_cells) - 500.0 / u2mm  # 500 mm safety margin
+        full_sched_text = [t for t in all_noblk if t['x'] >= actual_x_min]
+        full_rows2 = _group_rows(full_sched_text, tol_frac=layout.sched_row_tol_frac, extents=extents)
+        full_header_idx = _schedule_header_idx(full_rows2)
+        if full_header_idx is None:
+            return None  # should not happen since we seeded from the header position
+        return full_sched_text, full_rows2, full_header_idx, actual_x_min
+
     # Fast path: assume schedule occupies the right portion of the sheet (common layout).
     sched_x_min = x_min + dw * layout.schedule_x_min_frac
     sched_text = [t for t in all_noblk if t['x'] >= sched_x_min]
@@ -941,44 +964,57 @@ def _extract_schedule(msp, all_text: list, extents: tuple,
     header_idx = _schedule_header_idx(rows)
 
     if header_idx is None:
-        # Fallback: scan the full sheet to locate the header wherever it actually is,
-        # then derive the schedule x-region from the header's own position.
-        # This handles drawings where the schedule is placed left of the normal threshold
+        # Handles drawings where the schedule is placed left of the normal threshold
         # (e.g. a pier-only schedule starting at ~15% width instead of the usual 30%).
-        full_rows = _group_rows(all_noblk, tol_frac=layout.sched_row_tol_frac, extents=extents)
-        hdr_idx_full = _schedule_header_idx(full_rows)
-        if hdr_idx_full is None:
+        result = _locate_via_full_sheet()
+        if result is None:
             log.warning('Schedule column header row not found')
             diags.append(diag('schedule_header_not_found',
                               'The schedule column header row (DIA / NOS / LENGTH) was not found '
                               'in the DXF. Schedule checks were skipped.'))
             return {}, info
-
-        # Collect all sub-rows within the multi-line header band to find the true
-        # leftmost column (MK., SHAPE OF BAR etc. sit a few units above DIA/NOS).
-        hdr_y = full_rows[hdr_idx_full][0]['y']
-        hdr_band = dh * layout.header_band_frac
-        hdr_cells = [c for row in full_rows if abs(row[0]['y'] - hdr_y) <= hdr_band
-                     for c in row]
-        actual_x_min = min(c['x'] for c in hdr_cells) - 500.0 / u2mm  # 500 mm safety margin
-        log.info('Schedule found via full-sheet fallback: header at y=%.0f, '
-                 'using x >= %.0f (%.0f%% from left)',
-                 hdr_y, actual_x_min, (actual_x_min - x_min) / dw * 100)
-        sched_text = [t for t in all_noblk if t['x'] >= actual_x_min]
-        rows = _group_rows(sched_text, tol_frac=layout.sched_row_tol_frac, extents=extents)
-        header_idx = _schedule_header_idx(rows)
-        if header_idx is None:
-            # Should not happen since we seeded from the header position, but guard anyway.
-            diags.append(diag('schedule_header_not_found',
-                              'The schedule column header row (DIA / NOS / LENGTH) was not found '
-                              'in the DXF. Schedule checks were skipped.'))
-            return {}, info
+        sched_text, rows, header_idx, actual_x_min = result
+        log.info('Schedule found via full-sheet fallback: using x >= %.0f (%.0f%% from left)',
+                 actual_x_min, (actual_x_min - x_min) / dw * 100)
         diags.append(diag('schedule_x_min_adjusted',
                           f'The schedule was found outside the expected position (x >= '
                           f'{sched_x_min:.0f}, {layout.schedule_x_min_frac*100:.0f}% from left). '
                           f'Extraction re-anchored on the actual header position at '
                           f'{actual_x_min:.0f} ({(actual_x_min-x_min)/dw*100:.0f}% from left).',
                           severity='info'))
+    else:
+        # The header row was found within the fast-path window (≥2 of DIA/NOS/LENGTH
+        # matched), but that doesn't guarantee the window also captured the header's
+        # own leftmost column. Confirmed on a production sheet where the MK. (bar
+        # mark) column sat at 29.4% from left — just under the 30% schedule_x_min_frac
+        # cutoff — while the rest of the header (REINFORCEMENT/LENGTH/NOS/DIA/WEIGHT)
+        # cleared it: the fast path found *a* header and built a column map, just
+        # silently missing bar_mark, which then made every bar-mark cell in the data
+        # rows invisible too ("No bar marks found in schedule"). Retry with a
+        # full-sheet scan whenever bar_mark didn't make it into this pass's column map.
+        header_y = rows[header_idx][0]['y']
+        header_sub_rows = [row for row in rows if abs(row[0]['y'] - header_y) < dh * layout.header_band_frac]
+        if 'bar_mark' not in _build_col_map(header_sub_rows):
+            result = _locate_via_full_sheet()
+            if result is not None:
+                retry_sched_text, retry_rows, retry_header_idx, actual_x_min = result
+                retry_header_y = retry_rows[retry_header_idx][0]['y']
+                retry_header_sub_rows = [
+                    row for row in retry_rows
+                    if abs(row[0]['y'] - retry_header_y) < dh * layout.header_band_frac
+                ]
+                if 'bar_mark' in _build_col_map(retry_header_sub_rows):
+                    log.info('Bar-mark column recovered via full-sheet re-scan — using x >= '
+                             '%.0f (%.0f%% from left, vs this sheet\'s %.0f%% fast-path window)',
+                             actual_x_min, (actual_x_min - x_min) / dw * 100,
+                             layout.schedule_x_min_frac * 100)
+                    diags.append(diag('schedule_x_min_adjusted',
+                                      'The schedule\'s bar-mark (MK.) column sat just outside the '
+                                      'expected schedule region and was initially missed. Extraction '
+                                      f're-anchored on the actual header position at {actual_x_min:.0f} '
+                                      f'({(actual_x_min-x_min)/dw*100:.0f}% from left) to recover it.',
+                                      severity='info'))
+                    sched_text, rows, header_idx = retry_sched_text, retry_rows, retry_header_idx
 
     n_block_in_region = sum(1 for t in all_text
                             if t['x'] >= sched_text[0]['x'] and t.get('from_block'))

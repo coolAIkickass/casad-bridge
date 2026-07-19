@@ -1,0 +1,34 @@
+# Reinforcement-vs-schedule consistency and common consultant/drafting
+# mistakes observed across this project's own real fixture sweeps and
+# CASAD's own design-philosophy documentation.
+
+- concept_id: SCHEDULE-CONSISTENCY-COMMON-MISTAKES
+  title: Reinforcement-vs-schedule consistency and common drafting mistakes
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile, pilecap, pier]
+  topic_tags: [schedule, consistency, drafting, bar-mark, callout, mistake]
+  body: >
+    A drawing's schedule table and its section/elevation views describe the
+    same physical reinforcement two different ways, and they should always
+    reconcile. Useful cross-checks when reviewing: does every bar mark
+    listed in the schedule have at least one corresponding callout or
+    visible ring/dot in some section view (a schedule row with nothing
+    drawn anywhere is either an error or reinforcement drawn on a sheet not
+    being reviewed)? Do a bar's own schedule numbers reconcile internally —
+    length times count should be close to total length, and total length
+    times unit weight should be close to total weight; a mismatch usually
+    means one cell was hand-edited without updating the others. Where two
+    bar marks are shown bundled together (e.g. a pile's outer longitudinal
+    bar bundled with a secondary bar in the upper zone only), their
+    diameters should be reasonably close — code limits how different
+    bundled bar diameters may be, since a bundle is designed as one
+    equivalent-diameter bar and a large mismatch breaks that assumption.
+    Also worth remembering: bar-mark letters (x, y, z, a, b, c...) are NOT
+    a fixed universal convention — CASAD's own worked examples use
+    different letter schemes for the same physical role across different
+    jobs (e.g. a second longitudinal pile bar has appeared as both "x1" and
+    under other naming in different drawings), so a mark's MEANING should
+    always be confirmed against this specific drawing's own Detail
+    callouts and cross-section labels, never assumed from a memorized
+    convention.
+  source_reference: "IRC:112-2020 Cl.15.2.7; CASAD Design Philosophy Ch.11, Table 7/8 worked example"

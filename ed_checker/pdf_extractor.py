@@ -34,6 +34,12 @@ def _norm_float(v):
 _model_alias = os.environ.get('ED_MODEL', 'haiku').lower()
 EXTRACT_MODEL = 'claude-haiku-4-5-20251001' if _model_alias == 'haiku' else 'claude-sonnet-4-6'
 REVIEW_MODEL  = 'claude-haiku-4-5-20251001'  # always Haiku — review call doesn't need Sonnet
+# Engineering Reasoning Reviewer uses the same tier as extraction, not Haiku like
+# REVIEW_MODEL above — open-ended holistic reasoning (does this layout make sense,
+# does this look like a construction joint) benefits from a stronger model far more
+# than the mechanical pattern-matching CHECK 1-7 checks do. Real, explicit cost
+# increase per review — one more paid API call, at the extraction-tier model.
+ENGINEERING_REVIEW_MODEL = EXTRACT_MODEL
 
 SCHEDULE_PROMPT_TEMPLATE = """You are analyzing reinforcement schedule tables from a CASAD bridge engineering drawing.
 
@@ -508,6 +514,61 @@ def run_review_vision(pdf_bytes: bytes, section_labels: list,
     )
     imgs = images_b64 if images_b64 is not None else _pdf_to_image_b64(pdf_bytes, scale=scale)
     return _call_vision(imgs, review_prompt, REVIEW_MODEL, 8192)
+
+
+ENGINEERING_REVIEW_PROMPT_TEMPLATE = """Act as an experienced structural design reviewer. Use engineering principles, IS/IRC code intent, detailing best practices, and construction knowledge to evaluate not only explicit rule violations but also questionable engineering decisions, inconsistencies, unusual detailing, missing information, constructability concerns, and potential design risks in this bridge foundation drawing (Pile-Pilecap-Pier).
+
+You are reviewing AFTER deterministic code-compliance checks and mechanical drawing-quality checks have already run — do not repeat their job. Your job is holistic engineering judgement: does this design decision make sense, is this detailing pattern typical or unusual, does the visible arrangement match what the schedule/summary below says, would an experienced reviewing engineer raise an eyebrow at anything here even if nothing is numerically wrong.
+
+STRUCTURED SUMMARY (facts already extracted from this drawing — geometry, schedule, notes, and issues other checks already found):
+{STRUCTURED_SUMMARY}
+
+ENGINEERING KNOWLEDGE (background context for your reasoning — not a checklist to apply mechanically):
+{ENGINEERING_CONCEPTS}
+
+For each observation, explicitly distinguish your confidence:
+- "definite": a clear-cut technical problem you are certain about (e.g. a described relationship in the knowledge above is directly violated, not just numerically but in substance).
+- "probable": something that looks off or inconsistent and very likely needs correction, but you are not fully certain without more context.
+- "needs_verification": worth an experienced engineer's attention, but you are genuinely uncertain — could be a legitimate design choice or could be an error.
+
+Do not invent facts not shown in the summary or the image. Do not flag something already listed in "ALREADY-FLAGGED ISSUES". If you have no genuine observation, return an empty list — do not manufacture findings to have something to say.
+
+Return ONLY valid JSON (no markdown):
+{{
+  "reasoning_findings": [
+    {{"title": "Pile count appears low for pier size shown", "description": "...", "confidence": "needs_verification", "bbox": {{"x":15,"y":30,"w":20,"h":15}}}}
+  ]
+}}
+"""
+
+
+def run_engineering_review(images_b64: list, structured_summary: str,
+                            concepts: list, drawing_type: str) -> dict | None:
+    """
+    Run the holistic Engineering Reasoning Reviewer pass — feeds the drawing image
+    plus a structured summary (geometry/schedule/notes/already-found issues) and
+    retrieved engineering-reasoning concepts to Claude, asking it to reason like an
+    experienced reviewing engineer rather than check a specific rule. Must be called
+    AFTER comparator.compare() and knowledge_rules.evaluate_all_deterministic() have
+    both run (see ed_checker/__init__.py's run_check()) — this pass needs their
+    output as context, unlike CHECK 1-7 which runs earlier in the pipeline.
+    Returns raw review_data dict (`{"reasoning_findings": [...]}`), or None on
+    failure/no API key. images_b64 should be the SAME rendered page images already
+    produced for the CHECK 1-7 pass — no extra PDF render needed.
+    """
+    if concepts:
+        concepts_block = '\n\n'.join(
+            f'  [{c.concept_id}] {c.title}\n  {c.body.strip()}\n  (Source: {c.source_reference})'
+            for c in concepts
+        )
+    else:
+        concepts_block = '  (no engineering-reasoning concepts apply to this drawing type/components)'
+
+    prompt = ENGINEERING_REVIEW_PROMPT_TEMPLATE.format(
+        STRUCTURED_SUMMARY=structured_summary,
+        ENGINEERING_CONCEPTS=concepts_block,
+    )
+    return _call_vision(images_b64, prompt, ENGINEERING_REVIEW_MODEL, 8192)
 
 
 # ── pdfplumber text pass ──────────────────────────────────────────────────────

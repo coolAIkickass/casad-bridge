@@ -1,0 +1,36 @@
+# Pile layout/spacing plausibility relative to apparent load — pilot concept
+# for the Engineering Reasoning Reviewer. Source notes: IS 2911 Part1/Sec2
+# spacing/overhang/dispersal clauses (ED checker/dwg_checker_contents/03_Data
+# for Claude Model/Knowledge documents/extracted_notes/is_2911_pile_notes.md)
+# and CASAD's own worked-example context (casad_design_philosophy_notes.md).
+
+- concept_id: PILE-LAYOUT-LOAD-REASONABLENESS
+  title: Pile count/spacing plausibility relative to load
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile, pilecap]
+  topic_tags: [pile, spacing, layout, load, overhang]
+  body: >
+    Pile spacing and count exist to keep each pile's zone of soil influence
+    from overlapping its neighbours' enough to reduce group capacity, and to
+    give the pile cap enough piles, spread widely enough, to carry the
+    column/pier load without excessive cap thickness or reinforcement.
+    Code minimums are a floor, not a design target: minimum spacing is
+    2.5x pile diameter for end-bearing piles on a hard stratum, 2.0x on
+    rock, and 3.0x for friction piles (wider, since friction piles rely on
+    overlapping shaft-soil bond zones not overlapping each other); pile cap
+    overhang beyond the outermost pile must be at least 150mm clear, and
+    load disperses at 45 degrees from the column/pedestal base and from
+    each pile edge to the cap's mid-depth. A layout that numerically
+    satisfies these floors can still look engineeringly unusual: very few,
+    widely-spaced large-diameter piles under what looks like a modest
+    single-column pier may indicate the piles are doing far more work than
+    a typical arrangement would need (worth asking why), while a dense
+    cluster of many piles under a small pier may indicate the opposite, or
+    a soil-capacity constraint driving pile count up rather than diameter.
+    Neither is inherently wrong — pile diameter/spacing trade-offs depend on
+    geotechnical capacity per pile, which isn't shown on the drawing — but
+    an arrangement that looks disproportionate to the visible pier/column
+    size is worth flagging for the engineer to confirm against the design
+    basis, not silently assumed correct just because it clears the spacing
+    floor.
+  source_reference: "IS 2911 Part1/Sec2-2010 Cl.6.6, 6.12.5; CASAD Design Philosophy Ch.8, 13"

@@ -1,0 +1,33 @@
+# Why cover exists and how to judge it beyond a bare numeric floor. Source
+# notes: IRC:112-2020 Table 14.2 and IS 2911 cover clauses
+# (irc_112_detailing_notes.md, is_2911_pile_notes.md).
+
+- concept_id: COVER-DURABILITY-RELATIONSHIP
+  title: Why cover requirements exist, and when a bare-minimum value deserves a closer look
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile, pilecap, pier]
+  topic_tags: [cover, durability, corrosion, exposure, marine]
+  body: >
+    Clear cover protects reinforcement from moisture and chloride ingress
+    (the alkaline concrete cover layer is what keeps steel passivated
+    against corrosion), and the lap-length/anchorage-length tables a
+    drawing references assume a cover consistent with the bond-stress
+    values those tables were built on. Foundation elements (pile, pile cap)
+    sit permanently in or near soil and groundwater, which is why IRC:112
+    overrides its normal exposure-based cover table (40-75mm depending on
+    exposure class) with a flat 75mm floor for any element below ground
+    level, regardless of stated exposure class. IS 2911 separately sets a
+    50mm floor for the pile shaft's own reinforcement and 60mm for the pile
+    cap, rising to 75mm for marine piles. A drawing showing cover
+    comfortably above these floors isn't automatically suspicious — it may
+    reflect a conservative designer choice, a specific geotechnical
+    aggressiveness finding, or simply rounding to a cleaner number. What
+    deserves closer attention is cover sitting exactly AT the bare code
+    minimum in a context the notes themselves describe as aggressive —
+    marine, chloride-exposed, sulphate-bearing ground, or tidal/splash
+    zones — since those conditions are precisely when the code's own
+    durability margin has the least room for construction tolerance or
+    future degradation. Conversely, a note explicitly citing a mild/dry
+    exposure with cover far above minimum is not a defect, just
+    conservative.
+  source_reference: "IRC:112-2020 Table 14.2 Note(7); IS 2911 Part1/Sec2-2010 Cl.6.11.4, 6.12.6, Annex E-3.1"

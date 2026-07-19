@@ -1,0 +1,34 @@
+# Confinement-zone changes and what a sudden spacing change along a pile or
+# pier shaft usually means. Source notes: IRC:112-2020 Section 17 and CASAD's
+# own two-zone pile ductile-detailing philosophy
+# (irc_112_detailing_notes.md, casad_design_philosophy_notes.md).
+
+- concept_id: CONFINEMENT-ZONE-CHANGE-MEANING
+  title: What a sudden tie/confinement spacing change usually indicates
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile, pier]
+  topic_tags: [confinement, ductile, tie, spacing, construction, joint, hinge]
+  body: >
+    Confinement reinforcement (tight tie/spiral spacing) exists to confine
+    core concrete and restrain longitudinal bars against buckling wherever a
+    plastic hinge can form under seismic action — for a pier, typically the
+    base (and top, for a portal/multi-column pier); for a pile, the head
+    just below the pile cap, and sometimes the point of maximum moment or a
+    soil-strata interface further down. Outside these zones, tie spacing can
+    legitimately relax to the more generous general-detailing floor (e.g.
+    IS 2911's 150mm minimum spacing / 8mm minimum diameter for handling
+    rigidity, which is a different, less demanding requirement than seismic
+    confinement). CASAD's own stated philosophy treats a pile as having TWO
+    potential hinge zones — near the head, and near the fixity depth further
+    down — so a schedule showing two separate tight-spacing zones on one
+    pile is expected, not a defect. When reviewing a spacing change on a
+    drawing, the useful questions are: does the change happen near the pile
+    head/cap soffit or pier base (consistent with a hinge zone starting or
+    ending)? Is there a labelled construction/pour joint or a strata-change
+    note nearby that would independently justify a change here? Or does the
+    change fall at an arbitrary mid-shaft point with no such marker — which
+    is more likely a drafting inconsistency (e.g. a copy-paste schedule
+    error) than an intentional zone boundary. A single tight-spacing zone
+    with no relaxation anywhere isn't necessarily wrong either — it may
+    simply mean confinement is required along the full detailed length.
+  source_reference: "IRC:112-2020 Cl.17.2.1, 17.3.2; CASAD Design Philosophy Ch.6, S11.1"

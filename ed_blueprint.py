@@ -85,6 +85,12 @@ def init_ed_db():
             height      REAL DEFAULT 10,
             status      TEXT NOT NULL DEFAULT 'open'
         );
+        -- Engineering Reasoning Reviewer ("AI Reasoning" tab) only — NULL for
+        -- every other category. severity stays 'error' uniformly (see
+        -- CLAUDE.md's no-warning-tier rule); confidence is the field that
+        -- actually distinguishes these lower-certainty, open-ended findings
+        -- for the engineer, kept out of the severity-driven Issues list.
+        ALTER TABLE issues ADD COLUMN IF NOT EXISTS confidence TEXT;
     ''')
     conn.commit()
     cur.close()
@@ -221,8 +227,8 @@ def _save_issues(review_id, issues, cur):
         cur.execute(
             '''INSERT INTO issues
                (id, review_id, category, title, description, suggestion,
-                severity, page_num, x, y, width, height, status)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'open')''',
+                severity, page_num, x, y, width, height, status, confidence)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'open',%s)''',
             (str(uuid.uuid4()), review_id,
              issue.get('category', 'General'),
              issue.get('title', 'Issue'),
@@ -231,7 +237,8 @@ def _save_issues(review_id, issues, cur):
              issue.get('severity', 'error'),
              issue.get('page_num', 1),
              issue.get('x', 5), issue.get('y', 5),
-             issue.get('width', 20), issue.get('height', 10))
+             issue.get('width', 20), issue.get('height', 10),
+             issue.get('confidence'))
         )
 
 

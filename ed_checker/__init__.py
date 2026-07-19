@@ -11,8 +11,10 @@ import logging
 from .excel_parser import parse_e2e_excel
 from .pdf_extractor import extract_from_drawing, _extract_text_with_timeout as _pdf_extract_text
 from .pdf_extractor import _text_missing_sections, run_review_vision
+from .pdf_extractor import _pdf_to_image_b64, run_engineering_review
 from .comparator import compare
 from .profiles import DISPLAY_NAME_TO_PROFILE_NAME
+from . import engineering_review
 from . import knowledge_rules
 from ._memutil import trim_memory
 
@@ -174,6 +176,27 @@ def run_check(drawing_pdf_bytes: bytes, design_data: dict,
     # already translated to _issue()-shape by build_judgment_issues() and stashed
     # here; nothing further to interpret, just append.
     issues += drawing_data.get('knowledge_rule_issues') or []
+
+    # Engineering Reasoning Reviewer — holistic "does this design decision make
+    # sense" judgement, distinct from CHECK 7's narrow per-clause judgment calls.
+    # Must run here, AFTER issues is fully assembled (comparator + deterministic
+    # knowledge_rules + CHECK 7 all merged above) — it needs their output as
+    # context, unlike CHECK 7 which runs earlier inside _run_dxf_extraction and
+    # has no visibility into comparator/deterministic-rule results. Findings land
+    # in category='AI Reasoning', rendered in their own tab, not mixed into the
+    # severity-driven Issues list — see engineering_review/__init__.py docstring.
+    # DXF path only for now (needs the page image _run_dxf_extraction already
+    # rendered for CHECK 1-7 — no image available at this point in the PDF-only
+    # path); mirrors CHECK 7's own DXF-path-only precedent.
+    _page_images = drawing_data.get('_rendered_page_images_b64')
+    if profile_name and _page_images and os.environ.get('ANTHROPIC_API_KEY', '').strip():
+        try:
+            concepts = engineering_review.get_relevant_concepts(profile_name, drawing_data)
+            summary  = engineering_review.build_structured_summary(drawing_data, issues)
+            review   = run_engineering_review(_page_images, summary, concepts, detected_type)
+            issues  += engineering_review.build_reasoning_issues(review)
+        except Exception:
+            log.exception('Engineering reviewer failed — continuing without it')
 
     return issues, detected_type
 
@@ -351,7 +374,13 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
             knowledge_rules.get_judgment_rules(_profile_name, drawing_data)
             if _profile_name else []
         )
-        review_data = run_review_vision(pdf_bytes, _section_labels, _missing_secs, scale=2.0,
+        # Render once, reuse for both this call and the later Engineering Reasoning
+        # Reviewer pass (run_check() reuses drawing_data['_rendered_page_images_b64'])
+        # instead of each rendering the PDF independently.
+        _page_images = _pdf_to_image_b64(pdf_bytes, scale=2.0)
+        drawing_data['_rendered_page_images_b64'] = _page_images
+        review_data = run_review_vision(pdf_bytes, _section_labels, _missing_secs,
+                                        images_b64=_page_images,
                                         judgment_rules=_judgment_rules)
         if review_data:
             log.info('DXF review vision OK — label_issues=%d unlabeled_views=%d '

@@ -1475,7 +1475,13 @@ def _title_block_pattern_pass(tb_text: list, result: dict):
         if not result.get('scale') and re.search(r'AS SHOWN|NTS|\b1\s*:\s*\d+\b', su):
             result['scale'] = s
 
-        if not result.get('drawing_number') and any(re.search(p, s) for p in _DRG_NO_PATTERNS):
+        # Match case-insensitively: CAD title-block fonts often render uppercase I
+        # and lowercase l identically, so a drafter's "PGII-..." can land in the DXF
+        # as literal lowercase 'PGll-...' — [A-Z]{2,} would silently reject it and
+        # drop the whole field as "missing" despite it being clearly visible on the
+        # drawing. Store the original text (s), not the uppercased match — this only
+        # fixes detection, it doesn't guess-correct the l/I ambiguity in the stored value.
+        if not result.get('drawing_number') and any(re.search(p, su) for p in _DRG_NO_PATTERNS):
             result['drawing_number'] = re.sub(r'\s+', '', s)
 
         # Spans: "30.0M - 30.0M" pattern

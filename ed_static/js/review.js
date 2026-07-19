@@ -10,6 +10,10 @@ let allIssues      = [];
 let selectedId     = null;
 let renderTask     = null;
 let activeFilter   = 'open';   // 'open' | 'resolved'
+let activeTab      = 'issues'; // 'issues' | 'reasoning' — see engineering_review/__init__.py:
+                                // category='AI Reasoning' findings are deliberately kept out
+                                // of the severity-driven Issues list/counts and shown in their
+                                // own tab instead, badged by confidence not severity.
 
 const canvas      = document.getElementById('pdf-canvas');
 const ctx         = canvas.getContext('2d');
@@ -106,7 +110,9 @@ function renderHighlights(pageNum) {
     const el = document.createElement('div');
     const isSelected = issue.id === selectedId;
     const isResolved = issue.status === 'resolved';
-    el.className = `highlight sev-${issue.severity}${isResolved ? ' resolved' : ''}${isSelected ? ' selected' : ''}`;
+    const isReasoning = issue.category === 'AI Reasoning';
+    const styleClass = isReasoning ? `conf-${issue.confidence || 'needs_verification'}` : `sev-${issue.severity}`;
+    el.className = `highlight ${styleClass}${isResolved ? ' resolved' : ''}${isSelected ? ' selected' : ''}`;
     el.dataset.id  = String(issue.id);
     el.dataset.num = globalNum;
 
@@ -128,9 +134,15 @@ function pct(val, dim) { return val / 100 * dim; }
 
 // ── Issue panel ──────────────────────────────────────
 
+// Splits allIssues by tab: 'reasoning' = category 'AI Reasoning', 'issues' = everything else.
+function tabIssues(tab) {
+  return allIssues.filter(i => (i.category === 'AI Reasoning') === (tab === 'reasoning'));
+}
+
 function visibleIssues() {
-  if (activeFilter === 'resolved') return allIssues.filter(i => i.status === 'resolved');
-  return allIssues.filter(i => i.status !== 'resolved');  // 'open' = all non-resolved
+  const scoped = tabIssues(activeTab);
+  if (activeFilter === 'resolved') return scoped.filter(i => i.status === 'resolved');
+  return scoped.filter(i => i.status !== 'resolved');  // 'open' = all non-resolved
 }
 
 // Tracks which category groups the user has manually expanded.
@@ -139,32 +151,59 @@ function visibleIssues() {
 // Once a group has been seen, its state is remembered.
 const expandedCategories = new Set();
 
+// Copy for the two "nothing to show" empty states differs per tab — reasoning
+// findings are observations, not pass/fail checks, so "no errors found" phrasing
+// would misrepresent what an empty AI Reasoning tab means.
+const EMPTY_COPY = {
+  issues: {
+    none:        { icon: '✓', title: 'No issues found', body: 'The drawing passed all checks. No errors were found.' },
+    noneOpen:    { icon: '✓', title: 'All issues resolved', body: 'Every flagged item has been marked as resolved. Ready to upload the corrected version.', cls: 'all-resolved' },
+    noneResolved:{ icon: '○', title: 'Nothing resolved yet', body: 'Mark issues as resolved as you correct them.' },
+  },
+  reasoning: {
+    none:        { icon: '✓', title: 'No engineering observations', body: 'The AI reasoning pass found nothing further to flag beyond the deterministic checks.' },
+    noneOpen:    { icon: '✓', title: 'All observations resolved', body: 'Every flagged observation has been marked as resolved.', cls: 'all-resolved' },
+    noneResolved:{ icon: '○', title: 'Nothing resolved yet', body: 'Mark observations as resolved as you address them.' },
+  },
+};
+
+function emptyStateHtml(kind) {
+  const c = EMPTY_COPY[activeTab][kind];
+  return `<div class="no-issues-msg ${c.cls || ''}"><span class="no-issues-icon">${c.icon}</span><strong>${c.title}</strong><p>${c.body}</p></div>`;
+}
+
 function renderIssuePanel() {
   const panel = document.getElementById('issue-list');
+  const scopedAll = tabIssues(activeTab);
   const filtered = visibleIssues();
 
   panel.innerHTML = '';
 
-  if (allIssues.length === 0) {
-    panel.innerHTML = '<div class="no-issues-msg"><span class="no-issues-icon">✓</span><strong>No issues found</strong><p>The drawing passed all checks. No errors were found.</p></div>';
+  if (scopedAll.length === 0) {
+    panel.innerHTML = emptyStateHtml('none');
     return;
   }
 
   if (filtered.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'no-issues-msg';
-    if (activeFilter === 'resolved') {
-      empty.innerHTML = '<span class="no-issues-icon">○</span><strong>Nothing resolved yet</strong><p>Mark issues as resolved as you correct them.</p>';
-    } else {
-      empty.innerHTML = '<div class="no-issues-msg all-resolved"><span class="no-issues-icon">✓</span><strong>All issues resolved</strong><p>Every flagged item has been marked as resolved. Ready to upload the corrected version.</p></div>';
-    }
-    panel.appendChild(empty);
+    panel.innerHTML = emptyStateHtml(activeFilter === 'resolved' ? 'noneResolved' : 'noneOpen');
     return;
   }
 
-  const openCount = allIssues.filter(i => i.status === 'open').length;
-  if (activeFilter === 'open' && openCount === 0 && allIssues.length > 0) {
-    panel.innerHTML = '<div class="no-issues-msg all-resolved"><span class="no-issues-icon">✓</span><strong>All issues resolved</strong><p>Every flagged item has been marked as resolved. Ready to upload the corrected version.</p></div>';
+  const openCount = scopedAll.filter(i => i.status === 'open').length;
+  if (activeFilter === 'open' && openCount === 0 && scopedAll.length > 0) {
+    panel.innerHTML = emptyStateHtml('noneOpen');
+    return;
+  }
+
+  if (activeTab === 'reasoning') {
+    // Single category by construction — no per-category grouping/collapsing needed.
+    const sec = document.createElement('div');
+    sec.className = 'issue-category';
+    const body = document.createElement('div');
+    body.className = 'category-body';
+    filtered.forEach((issue, i) => body.appendChild(buildReasoningCard(issue, i + 1)));
+    sec.appendChild(body);
+    panel.appendChild(sec);
     return;
   }
 
@@ -289,11 +328,57 @@ function buildCard(issue, num) {
   return card;
 }
 
+const CONFIDENCE_LABEL = {
+  definite: 'Definite', probable: 'Probable', needs_verification: 'Needs verification',
+};
+
+// Reasoning findings are open-ended engineering observations, not a design-vs-drawing
+// mismatch — no comparison widget, and confidence (not severity) drives styling since
+// severity is a fixed 'error' placeholder for these (see engineering_review docstring).
+function buildReasoningCard(issue, num) {
+  const resolved = issue.status === 'resolved';
+  const conf = issue.confidence || 'needs_verification';
+  const card = document.createElement('div');
+  card.className = `issue-card reasoning-card conf-${conf}${resolved ? ' resolved' : ''}`;
+  card.dataset.id = issue.id;
+
+  card.innerHTML = `
+    <div class="issue-title-row">
+      <span class="issue-num">#${num}</span>
+      <span class="issue-title">${issue.title}</span>
+      <button class="resolve-btn" data-id="${issue.id}" title="${resolved ? 'Mark as open' : 'Mark as resolved'}">
+        ${resolved ? '↺ Reopen' : '✓ Resolve'}
+      </button>
+    </div>
+    <span class="confidence-badge conf-badge-${conf}">${CONFIDENCE_LABEL[conf] || conf}</span>
+    ${issue.description ? `<div class="issue-desc">${issue.description}</div>` : ''}
+  `;
+
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('.resolve-btn')) return;
+    goToIssue(issue.id, issue.page_num || 1);
+  });
+  card.querySelector('.resolve-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleResolve(issue.id);
+  });
+
+  return card;
+}
+
 function updateSummary() {
-  const open     = allIssues.filter(i => i.status !== 'resolved').length;
-  const resolved = allIssues.filter(i => i.status === 'resolved').length;
+  const scoped   = tabIssues(activeTab);
+  const open     = scoped.filter(i => i.status !== 'resolved').length;
+  const resolved = scoped.filter(i => i.status === 'resolved').length;
   document.getElementById('summary-open').textContent     = open;
   document.getElementById('summary-resolved').textContent = resolved;
+  document.getElementById('summary-open-label').textContent = activeTab === 'reasoning' ? 'Observations' : 'Errors';
+  updateTabBadges();
+}
+
+function updateTabBadges() {
+  document.getElementById('tab-badge-issues').textContent    = tabIssues('issues').filter(i => i.status !== 'resolved').length;
+  document.getElementById('tab-badge-reasoning').textContent = tabIssues('reasoning').filter(i => i.status !== 'resolved').length;
 }
 
 // ── Interactions ──────────────────────────────────────
@@ -387,6 +472,23 @@ function setFilter(filter) {
 document.querySelector('.stat-open')    ?.addEventListener('click', () => setFilter('open'));
 document.querySelector('.stat-resolved')?.addEventListener('click', () => setFilter('resolved'));
 
+// ── Tabs (Issues / AI Reasoning) ──────────────────────
+
+function setTab(tab) {
+  if (activeTab === tab) return;
+  activeTab = tab;
+  activeFilter = 'open';  // reset so switching tabs never lands on a stale "resolved" view
+  document.querySelectorAll('.panel-tab').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+  document.querySelectorAll('.summary-stat').forEach(el => el.classList.remove('active'));
+  document.querySelector('.stat-open')?.classList.add('active');
+  renderIssuePanel();
+  updateSummary();
+  renderHighlights(currentPage);
+}
+
+document.getElementById('tab-issues')   ?.addEventListener('click', () => setTab('issues'));
+document.getElementById('tab-reasoning')?.addEventListener('click', () => setTab('reasoning'));
+
 // ── Controls ──────────────────────────────────────────
 
 document.getElementById('btn-prev').addEventListener('click', () => {
@@ -452,7 +554,10 @@ function clearAnalysingState() {
 // returning — "5 errors · <drawing> — CASAD ED Checker" / "✓ No errors · …"
 const baseTitle = document.title;
 function setResultTitle() {
-  const open = allIssues.filter(i => i.status !== 'resolved').length;
+  // AI Reasoning findings are cosmetically severity='error' (DB NOT NULL constraint)
+  // but aren't errors in the pass/fail sense — excluded here so the tab title
+  // reflects the severity-driven Issues list only.
+  const open = tabIssues('issues').filter(i => i.status !== 'resolved').length;
   document.title = (open ? `${open} error${open === 1 ? '' : 's'}` : '✓ No errors') + ' · ' + baseTitle;
 }
 

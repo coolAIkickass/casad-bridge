@@ -64,10 +64,19 @@
 
   <!-- Issue Panel -->
   <div class="issue-panel">
+    <div class="panel-tabs" id="panel-tabs">
+      <button class="panel-tab active" data-tab="issues" id="tab-issues">
+        Issues <span class="tab-badge" id="tab-badge-issues">—</span>
+      </button>
+      <button class="panel-tab" data-tab="reasoning" id="tab-reasoning">
+        AI Reasoning <span class="tab-badge" id="tab-badge-reasoning">—</span>
+      </button>
+    </div>
+
     <div class="summary-bar" id="summary-bar">
       <div class="summary-stat stat-open">
         <span class="stat-num" id="summary-open">—</span>
-        <span class="stat-label">Errors</span>
+        <span class="stat-label" id="summary-open-label">Errors</span>
       </div>
       <div class="summary-stat stat-resolved">
         <span class="stat-num" id="summary-resolved">—</span>

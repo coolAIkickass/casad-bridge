@@ -279,7 +279,9 @@ def _run_check_bg(review_id, drawing_id, pdf_bytes, design_data, dxf_bytes, pars
             _dxf_conn.close()
             log.info('BG DXF pre-store done — %.1fs', time.time()-t0)
         except Exception:
-            log.warning('BG DXF pre-store failed — continuing anyway')
+            log.exception('BG DXF pre-store failed for review %s — continuing anyway '
+                          '(run_check still uses the in-memory dxf_bytes; only the DB '
+                          'copy used by recovery/debug routes is affected)', review_id)
 
     try:
         issues, detected_type = run_check(pdf_bytes, design_data, dxf_bytes=dxf_bytes)
@@ -342,19 +344,38 @@ def _decompress_dxf(b) -> bytes:
 def _read_dxf_upload(file_storage) -> bytes:
     """Read an uploaded DXF file field. The browser gzips the DXF before upload
     (upload.js, CompressionStream) and sends it as <name>.dxf.gz — gunzip it here.
-    Raw .dxf is still accepted (old browsers without CompressionStream)."""
+    Raw .dxf is still accepted (old browsers without CompressionStream).
+
+    Every branch logs — including the "nothing received" case — so a batch-upload
+    row whose DXF silently goes missing between the browser and here (as opposed
+    to a genuine decompress failure) leaves a clear trace instead of just showing
+    up later as an empty dxf_content in the DB with no record of why.
+    """
+    _dlog = logging.getLogger('ed.upload')
     if not file_storage or not file_storage.filename:
+        _dlog.info('_read_dxf_upload: no file field present (file_storage=%r)', file_storage)
         return None
     name = file_storage.filename.lower()
     if name.endswith('.dxf.gz'):
+        raw = file_storage.read()
+        _dlog.info('_read_dxf_upload: received %r, %d compressed bytes', file_storage.filename, len(raw))
+        if not raw:
+            _dlog.warning('DXF upload %r: field present but 0 bytes received', file_storage.filename)
+            return None
         try:
-            return gzip.decompress(file_storage.read())
-        except OSError:
-            logging.getLogger('ed.upload').warning(
-                'DXF upload %s: gzip decompress failed — ignoring DXF', file_storage.filename)
+            out = gzip.decompress(raw)
+            _dlog.info('_read_dxf_upload: decompressed %r to %d bytes', file_storage.filename, len(out))
+            return out
+        except OSError as e:
+            _dlog.warning(
+                'DXF upload %r: gzip decompress failed on %d received bytes (%s) — ignoring DXF',
+                file_storage.filename, len(raw), e)
             return None
     if name.endswith('.dxf'):
-        return file_storage.read()
+        raw = file_storage.read()
+        _dlog.info('_read_dxf_upload: received uncompressed %r, %d bytes', file_storage.filename, len(raw))
+        return raw
+    _dlog.warning('_read_dxf_upload: unrecognized filename %r — ignoring', file_storage.filename)
     return None
 
 
@@ -398,6 +419,8 @@ def _read_drawing_rows(request) -> list:
     for both. Returns [{'name', 'pdf_bytes', 'dxf_bytes'}, ...]; stops at the first
     missing index so a gap can't silently truncate the batch.
     """
+    _rlog = logging.getLogger('ed.upload')
+    _rlog.info('_read_drawing_rows: request.files keys=%s', list(request.files.keys()))
     rows = []
     idx = 0
     while True:
@@ -405,7 +428,10 @@ def _read_drawing_rows(request) -> list:
         if not f or not f.filename:
             break
         name = request.form.get(f'drawing_name_{idx}', '').strip() or f.filename
-        dxf_bytes = _read_dxf_upload(request.files.get(f'dxf_file_{idx}'))
+        dxf_field = request.files.get(f'dxf_file_{idx}')
+        _rlog.info('_read_drawing_rows: row %d — dxf_file_%d present=%s filename=%r',
+                   idx, idx, dxf_field is not None, getattr(dxf_field, 'filename', None))
+        dxf_bytes = _read_dxf_upload(dxf_field)
         rows.append({'name': name, 'pdf_bytes': f.read(), 'dxf_bytes': dxf_bytes,
                      'filename': f.filename})
         idx += 1

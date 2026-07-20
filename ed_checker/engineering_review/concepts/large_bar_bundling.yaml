@@ -1,0 +1,37 @@
+# Large-diameter-bar and bundling detailing plausibility — complements the
+# existing deterministic IRC112-15.2.7-BUNDLED-BAR-DIAMETER-RATIO rule (which
+# checks the diameter ratio between two bundled bar marks) with the
+# surrounding qualitative context that rule doesn't cover: whether bundling
+# or a large single bar is plausible for the member size shown at all.
+# Source notes: irc_112_detailing_notes.md.
+
+- concept_id: LARGE-BAR-BUNDLING-DETAILING-PLAUSIBILITY
+  title: Whether large-diameter or bundled bar detailing is plausible for the member shown
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile, pilecap, pier]
+  topic_tags: [bundled-bar, large-diameter, lap, equivalent-diameter]
+  body: >
+    Bars over 32mm diameter cannot be lap-spliced at all except where the
+    member's minimum dimension is at least 1.0m, or the steel stress at the
+    splice stays below 80% of design ultimate strength — and even then the
+    member depth must be at least 15 times the bar diameter. A drawing
+    showing a 32mm+ bar's lap detail on a pile or pier whose own diameter or
+    width looks close to or below that 1.0m threshold is a real inconsistency
+    worth flagging, not just a code-minimum shortfall. Bundling (grouping 2-4
+    bars to act as one equivalent-diameter bar, φn = φ·√nb, capped at 55mm
+    equivalent) exists specifically to fit more steel area into a section
+    without violating individual-bar spacing rules — CASAD's own convention
+    marks this as "x+x1 (BUNDLED BAR)" with a second longitudinal mark
+    appearing only in the zone that needs it. When reviewing a bundled
+    callout: the bundle should sit in the zone where extra capacity is
+    actually needed (typically the upper/head zone of a pile, near maximum
+    moment), not uniformly along the whole length — a bundle that continues
+    unchanged all the way to the pile tip, with no corresponding curtailment
+    point noted, is worth asking about, since the entire reason to bundle
+    rather than simply specify a larger single bar is usually a
+    zone-specific demand. Anchorage-zone transverse reinforcement is also
+    required around large-diameter bar ends even without external transverse
+    compression present (Ash/Asv formulas keyed to the anchored bar's area) —
+    its absence near a large-bar termination point in a section view is a
+    detail worth confirming was simply not drawn versus genuinely omitted.
+  source_reference: "IRC:112-2020 Cl.15.2.6-15.2.7, Eq.15.6"

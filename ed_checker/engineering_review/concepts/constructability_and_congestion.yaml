@@ -1,0 +1,38 @@
+# Buildability judgement — directly validated by this reviewer's own first
+# production finding ("gives only 1200mm clear gap — constructability and
+# concreting access concern"), so this concept formalizes that reasoning
+# pattern rather than leaving it purely to the model's general knowledge.
+# Source notes: is_2911_pile_notes.md, casad_design_philosophy_notes.md.
+
+- concept_id: CONSTRUCTABILITY-REBAR-CONGESTION
+  title: Whether the reinforcement and geometry shown is actually buildable on site
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile, pilecap, pier]
+  topic_tags: [constructability, congestion, tremie, vibrator, cut-off, embedment]
+  body: >
+    Code minimums for spacing and cover are floors for structural
+    performance, not guarantees of buildability — a design can clear every
+    code minimum and still be difficult or impossible to construct as drawn.
+    Useful things to weigh: clear spacing between adjacent bars or bar layers
+    must accommodate vibrator needle access (generally 50mm minimum between
+    columns of bars) and, for cast-in-situ concrete via tremie, the tremie
+    pipe itself needs clearance to reach the bottom of the pour without
+    snagging the cage — a heavily congested cage at a pile head or pilecap
+    junction, especially where multiple bar marks converge (main
+    longitudinal, confinement ties, dowel bars into the cap, punching-shear
+    stirrups), deserves a second look even if each individual spacing
+    technically clears its own code floor. For piles specifically, the clear
+    gap between adjacent pile shafts (centre-to-centre spacing minus both
+    diameters) needs to be enough for boring/casing equipment and, where
+    piles are close, for concrete placement in one pile to not disturb a
+    freshly-poured neighbour — a clear gap only slightly above zero is a
+    constructability flag even when the centre-to-centre spacing itself
+    satisfies the 2.5-3.0×diameter code floor, since that floor was set for
+    structural (soil-capacity overlap) reasons, not construction access.
+    Reinforcement cages also need adequate protruding length above the pile
+    cut-off level for embedment into the pile cap (typically dowelled in with
+    proper anchorage, not just butted at the interface) — a schedule bar
+    length that looks exactly matched to the pile's nominal length with no
+    visible allowance for cut-off tolerance or cap embedment is worth
+    checking against the drawing's own cut-off/embedment notes.
+  source_reference: "IRC:112-2020 Cl.15.2.1; IS 2911 Part1/Sec2-2010 Cl.6.6, 6.12.7, 8.1.3, 8.4.4"

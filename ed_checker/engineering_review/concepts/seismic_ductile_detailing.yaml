@@ -1,0 +1,41 @@
+# Whether a drawing's confinement detailing is consistent with the seismic
+# design basis it states. This is the "seismic zone stated but no ductile
+# detailing shown" cross-check flagged in KNOWLEDGE_BASE_INDEX.md's candidate
+# checks (item 6) as needing an "if X then Y" schema the deterministic rule
+# engine doesn't have yet — well suited to holistic reasoning instead.
+# Source notes: irc_sp114_seismic_detailing_notes.md, irc_112_detailing_notes.md.
+
+- concept_id: SEISMIC-DUCTILE-DETAILING-CONSISTENCY
+  title: Whether confinement detailing matches the seismic design basis a drawing states
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile, pier]
+  topic_tags: [seismic, ductile, capacity-design, confinement, zone, hinge]
+  body: >
+    IRC:SP:114 mandates ductile detailing for piers in seismic zones III, IV
+    and V (optional but rewarded with a higher response reduction factor in
+    zone II); IRC:112 Section 17 then supplies the actual numbers. The
+    underlying design intent is capacity design: piers are the intended
+    energy-dissipating element (plastic hinge at the base, or at both top and
+    base for a portal/multi-column pier), while foundations — pile caps and
+    piles — are deliberately over-designed to stay elastic, with piles
+    permitted a plastic hinge at their head only "under special
+    circumstances," never pile caps or footings. If a drawing's notes state a
+    seismic zone of III/IV/V (or cite a response reduction factor consistent
+    with ductile detailing, e.g. R=3.0 for a single column pier), the pier's
+    reinforcement detail should show the hallmarks of that: tight confinement
+    tie spacing near the base (and top, for a portal pier), no lap/weld
+    splice of longitudinal bars shown within that hinge zone, and — if a
+    concrete grade is called out specifically for the hinge region — a grade
+    of at least M30. A drawing stating a high seismic zone but showing only
+    uniform, code-minimum tie spacing throughout the pier with no tightened
+    zone at the base is worth flagging, though not with certainty — the
+    hinge-zone length itself depends on pier depth and moment distribution
+    the drawing may not make explicit, so this is a "does the overall pattern
+    look right" judgement, not a formula check. Conversely, a pile cap
+    showing tight seismic-style confinement ties is not itself wrong, but is
+    unusual: pile caps are explicitly exempt from ductile detailing (they are
+    capacity-protected, not intended to hinge), so tight ties there most
+    likely serve punching-shear or a design decision unrelated to seismic
+    ductility — don't assume it's an error, but it's not explained by the
+    seismic basis either.
+  source_reference: "IRC:SP:114-2018 Cl.7.3.1, 7.5.2.2, 8.4.6.2(vii)-(viii), 9.1.1-9.1.4, Table 4.1 Note iv; IRC:112-2020 Cl.17.1, 17.3.1-17.3.2"

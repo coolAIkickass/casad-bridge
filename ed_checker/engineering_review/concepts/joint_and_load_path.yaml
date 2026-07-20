@@ -1,0 +1,36 @@
+# Load-path and joint-adequacy plausibility at the pier/pilecap interface —
+# distinct from PILE-LAYOUT-LOAD-REASONABLENESS (which covers pile-to-cap
+# dispersal and pile count/spacing), this concept covers the pier-to-cap
+# connection itself: joint confinement and punching/dispersal geometry.
+# Source notes: irc_sp114_seismic_detailing_notes.md, irc_112_detailing_notes.md.
+
+- concept_id: PIER-PILECAP-JOINT-LOAD-PATH-ADEQUACY
+  title: Whether the pier-to-pilecap joint geometry looks adequate for the load path shown
+  applicable_drawing_types: [ppp]
+  applicable_components: [pilecap, pier]
+  topic_tags: [joint, load-path, punching-shear, dispersal, confinement]
+  body: >
+    A pier-to-pilecap connection is a joint, not just an interface, and the
+    same capacity-design logic that governs pier-versus-foundation hinging
+    also governs whether that joint needs special confinement: if the
+    pilecap's plan width at the joint is less than three times the pier's own
+    diameter or width, the joint is considered inadequately confined by the
+    surrounding concrete mass alone and needs its own confinement
+    reinforcement in that zone, separate from and additional to the pier's
+    normal hinge-zone ties. A pilecap that looks only marginally wider than
+    the pier sitting on it — especially combined with a stated high seismic
+    zone — is worth checking against this threshold, even though the drawing
+    itself won't state the ratio explicitly. Separately, load is understood
+    to disperse at 45 degrees from the pier/pedestal base down to the cap's
+    mid-depth, and from each pile's edge up to the cap's mid-depth from
+    below — a cap that is comparatively thin relative to the horizontal
+    distance the load needs to spread (pier edge to nearest pile edge) may
+    not achieve full dispersal within its depth, which shows up as a punching
+    or one-way shear concern rather than a flexure one. Punching shear itself
+    is checked on a control perimeter offset 2×(effective depth) from the
+    loaded pier face — a cap depth that looks shallow relative to the gap
+    between pier face and nearest pile face is the kind of proportion worth
+    flagging for the engineer to confirm the punching check governs and was
+    actually satisfied, not something a drawing-only review can verify
+    numerically.
+  source_reference: "IRC:SP:114-2018 Cl.7.7; IS 2911 Part1/Sec2-2010 Cl.6.12/6.13 (dispersal); IRC:112-2020 Cl.10.4.2 (punching perimeter)"

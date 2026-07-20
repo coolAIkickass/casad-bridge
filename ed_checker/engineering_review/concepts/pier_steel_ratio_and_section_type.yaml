@@ -1,0 +1,37 @@
+# Pier steel-ratio and column-vs-wall detailing-family plausibility — fills
+# the gap while IRC112-16.2.2-PIER-MAX-LONGITUDINAL-STEEL-RATIO and the
+# related dormant ratio rules sit blocked on the rule engine's formula_ratio
+# evaluator not yet being implemented (per KNOWLEDGE_BASE_INDEX.md's status
+# note). Source notes: irc_112_detailing_notes.md.
+
+- concept_id: PIER-STEEL-RATIO-SECTION-TYPE-PLAUSIBILITY
+  title: Whether a pier's steel percentage and detailing family match its section shape
+  applicable_drawing_types: [ppp]
+  applicable_components: [pier]
+  topic_tags: [pier, steel-ratio, column, wall, hollow, detailing-family]
+  body: >
+    IRC:112 splits pier detailing into distinct rule families depending on
+    section shape, and applying the wrong family's rules to a given pier
+    shape is itself worth noticing even before checking any individual
+    number. A solid section (largest dimension no more than 4 times the
+    smallest) follows column rules: longitudinal steel between roughly
+    0.10·NEd/fyd or 0.002·Ac (whichever governs) as a floor and 4% of gross
+    area as a ceiling outside lap zones (8% at lap sections), minimum 6 bars
+    for a circular section, tie diameter at least a quarter of the largest
+    longitudinal bar. A section where the larger horizontal dimension exceeds
+    4 times the smaller is instead a wall-type pier, with different vertical
+    steel bounds (0.24-4% of gross area, at least 0.12% on each face
+    individually) and horizontal steel keyed to a fraction of the vertical
+    steel rather than an independent formula. A hollow pier needs wall
+    thickness of at least 300mm and, if wall-type in proportions, follows the
+    wall rules; if more compact, the column rules apply instead — with an
+    additional end-cap-stiffness requirement to justify the plane-sections
+    assumption the hollow section otherwise wouldn't satisfy. When a
+    schedule's total longitudinal steel weight and the pier's cross-section
+    area are both known, the implied percentage is a useful sanity check
+    against these bands even without an exact formula evaluation — a
+    percentage well below 1% on a section carrying meaningful axial load, or
+    one crowding the 4%/8% ceiling, is worth surfacing for the engineer to
+    confirm against the actual design axial force and eccentricity, which
+    the drawing itself doesn't show.
+  source_reference: "IRC:112-2020 Cl.16.2.2 (columns), 16.3.1-16.3.3 (walls), 16.4 (hollow piers)"

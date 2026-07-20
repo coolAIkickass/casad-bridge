@@ -1,0 +1,37 @@
+# Qualitative plausibility check for lap/anchorage lengths — the "highest
+# potential value" open item from KNOWLEDGE_BASE_INDEX.md's candidate checks
+# (item 4), explicitly shelved from the deterministic rule engine because the
+# full Table 15.3/15.4 lookup-table chain feeding Eq 15.1-15.3 doesn't fit the
+# current min_threshold/max_threshold/formula_ratio vocabulary. A concept
+# can't reproduce the exact number, but can reason about whether a stated
+# length is in a plausible range. Source: irc_112_detailing_notes.md.
+
+- concept_id: LAP-ANCHORAGE-LENGTH-PLAUSIBILITY
+  title: Whether a stated lap or anchorage length is plausible for its bar diameter and grade
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile, pilecap, pier]
+  topic_tags: [lap, anchorage, development-length, bond, splice]
+  body: >
+    Lap length is computed as ls = lb.net · α1, where lb.net is the basic
+    anchorage length (driven by bar diameter, steel grade via k, and concrete
+    grade via bond stress fbd) and α1 scales up with the percentage of bars
+    lapped at one section (1.0 at <25% lapped, rising to 1.5 above 50%). For
+    common CASAD combinations (Fe500/Fe500D bars, M30-M40 concrete), this
+    typically works out to roughly 40-50 times the bar diameter for a
+    favourable-bond, <50%-lapped case, and can run meaningfully higher for
+    unfavourable bond conditions (horizontal bars in a deep pour, upper-half
+    placement) or heavy lapping. A stated lap length far outside this rough
+    band relative to the bar diameter and grade shown — e.g. barely 25-30
+    times diameter for a heavily-lapped large bar, or implausibly long for a
+    lightly-lapped small bar — is worth flagging as needing verification,
+    though not as a certain violation, since the exact number depends on
+    bond-condition classification (favourable vs unfavourable) the drawing
+    may not state explicitly. Two related details worth checking alongside
+    the length itself: bars larger than 32mm diameter cannot be lap-spliced
+    at all except where the member's minimum dimension is at least 1.0m or
+    steel stress stays below 80% of design strength — a drawing showing a
+    large-diameter bar's lap detail on a slender member is inconsistent
+    regardless of the exact length; and epoxy-coated bars need lap/anchorage
+    lengths increased by 25% over the plain-bar value, so a coating note
+    without a corresponding length increase is a mismatch worth surfacing.
+  source_reference: "IRC:112-2020 Cl.15.2.3-15.2.7, Eq.15.1-15.3, Table 15.3-15.4"

@@ -1,0 +1,36 @@
+# Pile load-test note plausibility — CASAD drawings routinely carry a
+# load-test note; this concept lets the reviewer judge whether the note is
+# internally consistent and complete for the pile count shown, something no
+# existing deterministic rule covers (there's no schedule field for it).
+# Source notes: irc_78_foundation_notes.md.
+
+- concept_id: PILE-LOAD-TEST-NOTE-COMPLETENESS
+  title: Whether a pile load-test note is complete and consistent for the pile count shown
+  applicable_drawing_types: [ppp]
+  applicable_components: [pile]
+  topic_tags: [load-test, initial-test, routine-test, note, geotechnical]
+  body: >
+    IRC:78 distinguishes two load-test regimes with different purposes and
+    different governing factors: an initial (pre-construction) test on a
+    trial pile of the same diameter/length/design capacity, loaded to at
+    least 2.5 times the design load, used to confirm or set the design
+    capacity itself; and a routine (post-construction, on production piles)
+    test loaded to 1.5 times the design load, used only to confirm piles as
+    built meet capacity — routine test results can never be used to revise
+    the design capacity upward, only downward if deficient. A drawing note
+    that just says "load test as per IRC:78" without distinguishing which
+    regime, or that states a factor other than 2.5x/1.5x without clearly
+    being a project-specific deviation, is worth a closer look, since these
+    two numbers are specific and well-established, not a range to round to
+    something else. The minimum number of test piles also scales with total
+    pile count on the bridge (2 up to 50 piles, 3 up to 150, 2% beyond 150,
+    rounded up) — a drawing or accompanying note citing a fixed test-pile
+    count that looks low relative to a large pile count implied by the
+    schedule (e.g. a single test pile referenced where the drawing's own
+    pile numbering suggests dozens of piles across the structure) is worth
+    flagging as needing verification against the full bridge's pile count,
+    which a single drawing sheet may not fully represent. None of this is
+    something the drawing geometry itself can definitively confirm or deny —
+    it's a note-completeness and internal-consistency judgement, not a
+    measurable violation.
+  source_reference: "IRC:78 (Part-1)-2024 Cl.709.2, 709.2.1, 709.2.4"

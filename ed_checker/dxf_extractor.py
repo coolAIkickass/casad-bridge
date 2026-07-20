@@ -76,6 +76,31 @@ def _is_bar_mark_token(text: str) -> bool:
     return bool(re.match(r'^[a-z]\d{0,2}$', t)) and t not in _BAR_MARK_SKIP
 
 
+def _bar_mark_component(bm: str, fallback: dict) -> str | None:
+    """
+    Look up a bar mark's component in profile.bar_mark_comp_fallback, falling
+    back to its base letter (digits stripped) when the exact mark isn't listed.
+
+    The fallback dict enumerates known suffix pairs per component (e.g. h/h1/h2,
+    i/i1/i2) but can never be exhaustive — every zone-suffix convention CASAD uses
+    (a1, d1, g1, ...) would otherwise need its own explicit entry, and a mark
+    outside that enumerated set was silently dropped from the schedule entirely
+    (confirmed in production: 'g1' — an additional/curtailed longitudinal pier
+    bar, same pattern as x/x1 for piles — was missing from the fallback dict
+    despite 'g' being present, and got dropped with zero diagnostic). Since every
+    suffix variant in the dict already maps to the SAME component as its base
+    letter, stripping trailing digits and retrying is a safe, general fallback
+    rather than requiring the dict to enumerate every possible suffix.
+    """
+    comp = fallback.get(bm)
+    if comp is not None:
+        return comp
+    base = bm.rstrip('0123456789')
+    if base != bm:
+        return fallback.get(base)
+    return None
+
+
 def _build_comp_boundaries(data_rows: list, profile: DrawingTypeProfile) -> list:
     """
     Scan data rows for component section header rows (e.g. PILECAP / PILE / PIER).
@@ -1164,7 +1189,7 @@ def _extract_schedule(msp, all_text: list, extents: tuple,
                 dropped.append((bm, 'appears above the first component header'))
                 continue
         else:
-            comp = profile.bar_mark_comp_fallback.get(bm)
+            comp = _bar_mark_component(bm, profile.bar_mark_comp_fallback)
             if comp is None:
                 log.debug('Bar mark %r not in letter-convention fallback — skipping', bm)
                 dropped.append((bm, 'not in the bar-mark letter conventions for this drawing type'))
@@ -3646,9 +3671,18 @@ def _check_required_sections(section_view_positions: dict,
     """Return presence status for each profile-required section view.
 
     Uses longest-match priority: a label L only satisfies required section S if
-    no OTHER section's keyword (that is longer than S's keyword) also matches L.
-    This prevents "REINFORCEMENT PLAN OF PILECAP" from satisfying the shorter
-    "PLAN OF PILECAP" requirement via substring containment.
+    no OTHER section's keyword (that is longer than S's keyword) also matches L
+    AT THE SAME TEXT POSITION. This prevents "REINFORCEMENT PLAN OF PILECAP"
+    (a single view title) from satisfying the shorter "PLAN OF PILECAP"
+    requirement via substring containment. Position-aware, not a plain boolean
+    containment check: row-grouping can merge two adjacent-but-distinct view
+    titles into one combined label string (e.g. "REINFORCEMENT PLAN OF PILECAP
+    PLAN OF PILECAP" — two real, separate views drawn near each other). A plain
+    "is the longer keyword found anywhere in this label" check can't tell that
+    case apart from the single-view case, and would wrongly dominate the second,
+    genuinely independent "PLAN OF PILECAP" occurrence too — confirmed on a
+    production sheet where this silently produced a false "Missing view: PLAN
+    OF PILECAP" despite the view being clearly present.
     """
     entries = list(profile.required_sections)
     result = []
@@ -3660,13 +3694,21 @@ def _check_required_sections(section_view_positions: dict,
             matched_kw = next((kw for kw in keywords if kw.upper() in lu), None)
             if matched_kw is None:
                 continue
-            # Reject this label if another required section's keyword is longer and
-            # also matches — that other section owns this label more specifically.
-            longer_sibling = any(
-                ok.upper() in lu and len(ok) > len(matched_kw)
+            # Reject only if EVERY occurrence of the matched (shorter) keyword
+            # overlaps some occurrence of a longer sibling keyword — i.e. every
+            # place this keyword appears is explainable as part of that other,
+            # more specific section's own title. If any occurrence sits outside
+            # all longer-sibling spans, it's a genuinely independent match.
+            kw_spans = [m.span() for m in re.finditer(re.escape(matched_kw.upper()), lu)]
+            longer_spans = [
+                m.span()
                 for oname, okws in entries if oname != name
-                for ok in okws
-            )
+                for ok in okws if len(ok) > len(matched_kw)
+                for m in re.finditer(re.escape(ok.upper()), lu)
+            ]
+            def _covered(span, spans):
+                return any(s0 <= span[0] and span[1] <= s1 for s0, s1 in spans)
+            longer_sibling = bool(longer_spans) and all(_covered(s, longer_spans) for s in kw_spans)
             if not longer_sibling:
                 present = True
                 bbox = pos

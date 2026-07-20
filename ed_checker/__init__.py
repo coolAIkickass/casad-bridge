@@ -242,27 +242,35 @@ def _run_dxf_extraction(pdf_bytes: bytes, dxf_bytes: bytes) -> tuple:
         # that are text-underlined (%%U codes) or use non-standard PDF encoding.
         if text_data.get('sections_from_text'):
             sft = text_data['sections_from_text']
-            # First, recover anything the DXF-only pass already confirmed present —
-            # it was computed with profile.required_sections' own keyword tuples
-            # (_check_required_sections), which are short and robust (e.g. 'Z-Z',
-            # 'LAP LENGTH'). The proximity patch below re-derives matching from each
-            # entry's full display NAME instead (e.g. 'SECTION Z-Z (PILE)', 'LAP
-            # LENGTH TABLE') against raw DXF label text, which routinely fails on
-            # CASAD sheets — DXF labels carry extra inner spacing ('Z-Z ( PILE )')
-            # and the display name's trailing word ("TABLE") often isn't part of
-            # the matched label fragment at all. Re-deriving the same check twice
-            # with two different strings is what drifts out of sync; trusting the
-            # already-correct DXF result sidesteps it.
-            dxf_present = {e['name']: e for e in drawing_data.get('sections_from_text', [])
-                           if e.get('present')}
+            # Trust the DXF-only pass's own verdict — TRUE OR FALSE — for every entry
+            # it covers. It was computed with profile.required_sections' own keyword
+            # tuples (_check_required_sections), which are short, robust, AND
+            # position-aware about longer-sibling domination (e.g. distinguishes a
+            # single "REINFORCEMENT PLAN OF PILECAP" label from two separate,
+            # row-merged "REINFORCEMENT PLAN OF PILECAP" + "PLAN OF PILECAP" views).
+            # The proximity patch below re-derives matching from each entry's full
+            # display NAME instead (e.g. 'SECTION Z-Z (PILE)', 'LAP LENGTH TABLE')
+            # via plain substring containment with no position-awareness at all —
+            # confirmed on a production sheet to wrongly flip 'SECTION A-A FOR PILE'
+            # to present=True purely because "PILE" is a literal prefix of "PILECAP"
+            # inside an unrelated "SECTION A-A FOR PILECAP & ABUTMENT" label, even
+            # though the DXF-only pass had already (correctly) rejected it. Since
+            # profile.required_sections is a fixed list shared by both extractors,
+            # DXF's own pass always has an entry for every name in sft — the
+            # proximity-patch fallback below only ever runs for entries outside that
+            # shared list, which shouldn't happen in practice but is kept as a
+            # defensive fallback.
+            dxf_sft = {e['name']: e for e in drawing_data.get('sections_from_text', [])}
             sv_upper = {k.upper() for k in merged_sv}
             for entry in sft:
                 if not entry.get('present'):
-                    if entry['name'] in dxf_present:
-                        entry['present'] = True
-                        entry['bbox'] = dxf_present[entry['name']].get('bbox') or entry.get('bbox')
-                        log.info('sections_from_text: patched %r to present=True via DXF '
-                                 '(required_sections keyword match)', entry['name'])
+                    if entry['name'] in dxf_sft:
+                        dxf_entry = dxf_sft[entry['name']]
+                        if dxf_entry.get('present'):
+                            entry['present'] = True
+                            entry['bbox'] = dxf_entry.get('bbox') or entry.get('bbox')
+                            log.info('sections_from_text: patched %r to present=True via DXF '
+                                     '(required_sections keyword match)', entry['name'])
                         continue
                     name_u = entry['name'].upper()
                     # Check if any keyword from this section appears in merged sv keys.

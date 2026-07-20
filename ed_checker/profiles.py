@@ -143,7 +143,7 @@ PPP_PROFILE = DrawingTypeProfile(
         'x': 'pile', 'x1': 'pile', 'y': 'pile', 'y1': 'pile', 'y2': 'pile', 'z': 'pile',
         'a': 'pilecap', 'b': 'pilecap', 'c': 'pilecap', 'd': 'pilecap',
         'e': 'pilecap', 'f': 'pilecap', 'f1': 'pilecap',
-        'g': 'pier', 'h': 'pier', 'h1': 'pier', 'h2': 'pier',
+        'g': 'pier', 'g1': 'pier', 'h': 'pier', 'h1': 'pier', 'h2': 'pier',
         'i': 'pier', 'i1': 'pier', 'i2': 'pier',
         'j': 'pier', 'j1': 'pier', 'j2': 'pier',
         'k': 'pier', 'k1': 'pier', 'k2': 'pier',

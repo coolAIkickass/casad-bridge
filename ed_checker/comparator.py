@@ -364,21 +364,11 @@ def _check_title_block(tb: dict, design: dict) -> list:
             'error', zone, tb_bbox
         ))
 
-    # Drawing number format — accepts CASAD's slash convention (ABC/XYZ/123) and its
-    # hyphen/chainage convention. The hyphen segment count varies (e.g.
-    # "PGII-MJB-96+814-002" with a trailing sheet number vs "PGII-MJB-GAD-96+814"
-    # without one) so this only checks the general shape — a leading letter group
-    # followed by 2+ more hyphen-separated alphanumeric groups — not an exact count.
-    drg = tb.get('drawing_number', '')
-    _drg_ok = re.match(r'^[A-Z]+/[A-Z]+/[A-Z]+[-/]\d+[A-Z]?$', drg.replace(' ', '')) or \
-              re.match(r'^[A-Z]{2,}(-[A-Z0-9+]{2,}){2,}$', drg.replace(' ', ''))
-    if drg and not _drg_ok:
-        issues.append(_issue(
-            'Title Block', f'Drawing number format check: "{drg}"',
-            f'Drawing number "{drg}" — verify it follows the project numbering convention.',
-            'Confirm drawing number matches the project register.',
-            'error', zone, tb_bbox
-        ))
+    # Drawing number: presence-only (see `required` above) — CASAD's numbering
+    # convention varies enough across projects (slash-delimited, hyphen/chainage,
+    # varying segment counts, and font-driven l/I ambiguity in the DXF text
+    # itself) that a shape/format check produces more noise than signal. Just
+    # confirm the field is filled in, don't validate its structure.
 
     return issues
 
@@ -1079,13 +1069,22 @@ def _check_sections(sections_from_text: list, components_on_sheet: set = None,
 # ── Notes completeness ────────────────────────────────────────────────────────
 
 REQUIRED_NOTES = {
-    'pile_length':       'Pile length not specified in notes',
-    'pile_fixity':       'Pile fixity length not specified in notes',
-    'pile_diameter':     'Pile diameter not specified in notes',
     'concrete_pile':     'Concrete grade for pile not specified in notes',
     'concrete_pilecap':  'Concrete grade for pilecap not specified in notes',
     'concrete_pier':     'Concrete grade for pier not specified in notes',
     'steel_grade':       'Steel grade (Fe415/Fe500/Fe550) not specified in notes',
+}
+
+# Pile length/diameter/fixity are grouped into a single combined issue (not one
+# each) — CASAD projects often omit these from the drawing notes entirely (the
+# design Excel already carries them, and the pile section/schedule shows the
+# length graphically), so treating each as an independent required-note item
+# inflated the error count for something that isn't a strict CASAD convention.
+# {key: display label}, in the order the combined message lists missing items.
+_PILE_INFO_NOTE_KEYS = {
+    'pile_diameter': 'diameter',
+    'pile_length':   'length',
+    'pile_fixity':   'fixity length',
 }
 
 def _check_notes_completeness(notes_completeness_from_text: list,
@@ -1116,6 +1115,19 @@ def _check_notes_completeness(notes_completeness_from_text: list,
                 f'Add the required note for {item_key.replace("_", " ")}.',
                 'error', 'notes', notes_bbox
             ))
+
+    missing_pile_info = [
+        label for key, label in _PILE_INFO_NOTE_KEYS.items()
+        if not (found.get(key) and found[key].get('present'))
+    ]
+    if missing_pile_info:
+        listed = ', '.join(missing_pile_info)
+        issues.append(_issue(
+            'Notes', f'Pile related info missing: {listed}',
+            f'The following pile-related notes were not found in the drawing text: {listed}.',
+            f'Add the missing pile note(s) ({listed}), if applicable to this drawing.',
+            'error', 'notes', notes_bbox
+        ))
 
     return issues
 

@@ -33,6 +33,30 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     return _pool
 
 
+def _get_healthy_conn(pool, attempts: int = 2):
+    """Check a connection out of the pool and verify it's actually alive.
+
+    Connections can go stale while just sitting idle in the pool (Render's
+    Postgres proxy drops idle connections, network blips, etc.) — the
+    breakage only surfaces as OperationalError/InterfaceError on next use.
+    Pinging with a cheap SELECT 1 here catches that *before* handing the
+    connection to caller code, so a stale connection doesn't fail the
+    caller's actual request.  A bad connection is discarded (not returned
+    to the pool) and a replacement is fetched, up to `attempts` tries.
+    """
+    last_exc = None
+    for _ in range(attempts):
+        con = pool.getconn()
+        try:
+            with con.cursor() as probe:
+                probe.execute('SELECT 1')
+            return con
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+            last_exc = e
+            pool.putconn(con, close=True)
+    raise last_exc
+
+
 @contextmanager
 def _db(dict_rows: bool = False):
     """Yield a cursor from the pool.
@@ -47,7 +71,7 @@ def _db(dict_rows: bool = False):
     getting handed back out and every subsequent request fails the same way.
     """
     pool = _get_pool()
-    con  = pool.getconn()
+    con  = _get_healthy_conn(pool)
     broken = False
     try:
         if dict_rows:

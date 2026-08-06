@@ -39,9 +39,16 @@ def _db(dict_rows: bool = False):
 
     Commits on clean exit, rolls back on exception, always returns the
     connection to the pool.  Use dict_rows=True to get column-name dicts.
+
+    If the connection itself is broken (e.g. the Postgres proxy dropped it
+    and psycopg2 raises OperationalError — "SSL error: decryption failed or
+    bad record mac" — or InterfaceError), it's discarded instead of being
+    returned to the pool.  Otherwise that one poisoned connection keeps
+    getting handed back out and every subsequent request fails the same way.
     """
     pool = _get_pool()
     con  = pool.getconn()
+    broken = False
     try:
         if dict_rows:
             import psycopg2.extras
@@ -51,13 +58,19 @@ def _db(dict_rows: bool = False):
         try:
             yield cur
             con.commit()
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            broken = True
+            raise
         except Exception:
             con.rollback()
             raise
         finally:
-            cur.close()
+            try:
+                cur.close()
+            except Exception:
+                pass
     finally:
-        pool.putconn(con)
+        pool.putconn(con, close=broken)
 
 
 def _rows_as_dicts(cur) -> list:
